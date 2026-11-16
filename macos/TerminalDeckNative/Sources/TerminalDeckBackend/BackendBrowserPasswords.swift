@@ -106,10 +106,12 @@ public actor BackendBrowserPasswords {
     }
     public enum Fault: String, Sendable { case none, tampered, unreadable }
     public nonisolated let file: URL
-    private let cipher: BackendBrowserPasswordsCipher
+    private var cipher: BackendBrowserPasswordsCipher
     private let requireWriter: BackendBrowserProfiles.RequireWriter
     private let host: BackendBrowserPasswordsHost
     private let requireProfile: @Sendable (String) async throws -> Void
+    private var cloudFile: URL?
+    private var activeFile: URL { cloudFile ?? file }
     private var opened = false
     private var entries: [Login] = []
     private var fault: Fault = .none
@@ -125,7 +127,7 @@ public actor BackendBrowserPasswords {
     }
     public func open(upgradeLegacy: Bool = true) throws {
         guard !opened else { return }
-        guard let raw = try BackendBrowserProfilesFiles.read(file, maximum: 8 * 1024 * 1024) else { opened = true; return }
+        guard let raw = try BackendBrowserProfilesFiles.read(activeFile, maximum: 8 * 1024 * 1024) else { opened = true; return }
         var legacy = false
         do {
             let text = try decryptBlob(raw)
@@ -153,11 +155,23 @@ public actor BackendBrowserPasswords {
         // "upgraded" state. The next explicit save can carry them forward.
         if legacy && upgradeLegacy && !entries.isEmpty { _ = try? persist(entries) }
     }
+    func cloudNeedsRecovery() throws -> Bool { try open(upgradeLegacy: false); return fault != .none }
+    func cloudAdopt(file restored: URL, cipher replacement: BackendBrowserPasswordsCipher) throws {
+        try requireWriter()
+        let alreadyExists = FileManager.default.fileExists(atPath: restored.path)
+        try open(upgradeLegacy: false)
+        let previous = fault == .none ? entries : []
+        cloudFile = restored; cipher = replacement; opened = false; entries = []; fault = .none
+        pending = nil; forms = [:]; revision &+= 1
+        try open(upgradeLegacy: false)
+        guard fault == .none else { throw CloudFailure.secretsLocked }
+        if !alreadyExists, !previous.isEmpty { guard try persist(previous).ok else { throw CloudFailure.unavailable } }
+    }
     public func available() throws -> Bool { (try? cipher.available()) == true }
     public func storeState() throws -> NativeRPCValue {
         try requireOpen()
-        return .object([.init("available", .bool(try available())), .init("path", .string(file.path)),
-            .init("exists", .bool(FileManager.default.fileExists(atPath: file.path))), .init("fault", .string(fault.rawValue)),
+        return .object([.init("available", .bool(try available())), .init("path", .string(activeFile.path)),
+            .init("exists", .bool(FileManager.default.fileExists(atPath: activeFile.path))), .init("fault", .string(fault.rawValue)),
             .init("message", .string(fault == .tampered ? Self.tamperedMessage : fault == .unreadable ? Self.unreadableMessage : ""))])
     }
     public func summaries(profileID: String) async throws -> [BackendBrowserLoginSummary] {
@@ -172,14 +186,14 @@ public actor BackendBrowserPasswords {
     }
     public func forgetAll() throws -> BackendBrowserPasswordOutcome {
         try requireOpen(); try requireWriter()
-        if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+        if FileManager.default.fileExists(atPath: activeFile.path) { try FileManager.default.removeItem(at: activeFile) }
         entries = []; fault = .none; pending = nil; forms = [:]; revision &+= 1
         return .init(ok: true, message: "Cleared.")
     }
     public func reveal() async throws -> Bool {
         try requireOpen()
-        guard FileManager.default.fileExists(atPath: file.path) else { return false }
-        try await host.reveal(file); return true
+        guard FileManager.default.fileExists(atPath: activeFile.path) else { return false }
+        try await host.reveal(activeFile); return true
     }
     /// Native UI only. Channel registration below rejects remote/session/page
     /// callers. MCP deliberately has no copy action.
@@ -254,6 +268,30 @@ public actor BackendBrowserPasswords {
     }
     public func documentChanged(tabID: String) { forms[tabID] = nil }
     public func tabClosed(tabID: String) { forms[tabID] = nil; if pending?.offer.tabID == tabID { pending = nil } }
+    /// Internal logical Cloud projection. Never a tool or browser-script result.
+    func cloudExport(profileID: String) async throws -> [BackendCloudBrowserPassword] {
+        try open(upgradeLegacy: false)
+        try await requireProfile(profileID)
+        try requireOpen()
+        guard fault == .none else { throw CloudFailure.secretsLocked }
+        return entries.filter { $0.summary.profileID == profileID }.map {
+            .init(profileId: $0.summary.profileID, origin: $0.summary.origin, username: $0.summary.username,
+                  password: $0.password, updatedAt: $0.summary.updatedAt)
+        }
+    }
+    func cloudMerge(_ value: BackendCloudBrowserPassword) async throws -> CloudApplyStatus {
+        try value.validate()
+        try open(upgradeLegacy: false)
+        try await requireProfile(value.profileId)
+        try requireOpen()
+        guard fault == .none else { throw CloudFailure.secretsLocked }
+        if let old = entries.first(where: { $0.summary.profileID == value.profileId && $0.summary.origin == value.origin && $0.summary.username == value.username }) {
+            return old.password == value.password ? .alreadyPresent : .keptBoth
+        }
+        let login = Login(summary: .init(profileID: value.profileId, origin: value.origin, username: value.username, updatedAt: value.updatedAt), password: value.password)
+        guard try persist(entries + [login]).ok else { throw CloudFailure.unavailable }
+        return .applied
+    }
     public func close() { entries = []; pending = nil; forms = [:]; opened = false; fault = .none; revision &+= 1 }
     private func currentForm(_ tabID: String) async throws -> BackendBrowserPasswordTab? {
         guard let announced = forms[tabID], let live = try await host.tab(tabID), !live.isolated, live.hasSignInForm,
@@ -275,10 +313,10 @@ public actor BackendBrowserPasswords {
         let value = NativeRPCValue.object([.init("version", .number(2)), .init("entries", rows), .init("digest", .string(Self.digest(rows)))])
         // Encrypt before opening a temporary file, so a denied Keychain read
         // cannot replace existing ciphertext with an empty file.
-        let blob = try cipher.encrypt(value.compact, FileManager.default.fileExists(atPath: file.path))
+        let blob = try cipher.encrypt(value.compact, FileManager.default.fileExists(atPath: activeFile.path))
         let data = Data(blob.base64EncodedString().utf8)
         guard !blob.isEmpty, data.count <= 8 * 1024 * 1024 else { throw NativeRPCError(code: "password-store-size", message: "The encrypted saved-login store exceeds its size limit.") }
-        try BackendBrowserProfilesFiles.write(data, to: file, secret: true)
+        try BackendBrowserProfilesFiles.write(data, to: activeFile, secret: true)
         entries = next; fault = .none; revision &+= 1
         return .init(ok: true, message: "Saved.")
     }

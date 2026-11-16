@@ -45,7 +45,7 @@ public enum BackendMachineMCP {
             Definition(id: "machines.copilot", tier: .act, fields: ["machineId":"string", "do":"string", "text":"string", "messages":"integer", "waitSeconds":"integer"], required: ["machineId", "do"], verbs: ["read", "say", "start"]),
             Definition(id: "machines.ports", tier: .act, fields: ["machineId":"string", "do":"string", "port":"integer", "url":"string"], required: ["machineId", "do"], verbs: ["list", "refresh", "open-here", "close-here", "open-there"]),
             Definition(id: "machines.upload", tier: .act, fields: ["machineId":"string", "do":"string", "path":"string", "folder":"string"], required: ["machineId", "do"], verbs: ["send", "cancel"]),
-            Definition(id: "machines.manage", tier: .alter, fields: ["machineId":"string", "do":"string", "code":"string", "name":"string", "allowed":"boolean", "loginId":"string"], required: ["do"], verbs: ["pair", "show-code", "cancel-code", "connect", "disconnect", "rename", "forget", "allow-windows", "restart-host", "stop-host", "sign-in", "sign-out", "github-connect", "github-cancel", "github-disconnect"]),
+            Definition(id: "machines.manage", tier: .alter, fields: ["machineId":"string", "do":"string", "code":"string", "name":"string", "allowed":"boolean", "loginId":"string"], required: ["do"], verbs: ["connect", "disconnect", "rename", "forget", "allow-windows", "restart-host", "stop-host", "sign-in", "sign-out", "github-connect", "github-cancel", "github-disconnect"]),
         ]
         // Checked per call, not here: in the full graph the deck-tools catalogue owns these six ids
         // before the machine registration (shared mode) installs the channels they call.
@@ -126,7 +126,11 @@ public enum BackendMachineMCP {
         let sessions = link?["sessions"].elements ?? [], target = sessions.first { $0["id"].string == session }
         func result(_ fields: [NativeRPCValue.Field]) -> NativeRPCValue { .object([.init("machineId", .string(machine))] + fields) }
         if tool == "machines.look" {
-            if machine.isEmpty { return .object([.init("thisComputer", view["here"]), .init("machines", .array(try await rows(view, caller: caller, access: access))), .init("cannotPairNow", view["blocked"])]) }
+            if machine.isEmpty {
+                // His machines that are on are reached by sign-in first (15 Nov), so they are listed beside paired ones.
+                _ = try? await call("machines:reach:open")
+                let fresh = (try? await call("machines:list")) ?? view
+                return .object([.init("thisComputer", fresh["here"]), .init("machines", .array(try await rows(fresh, caller: caller, access: access))), .init("cannotPairNow", fresh["blocked"])]) }
             if session.isEmpty {
                 var row = try await rows(view, caller: caller, access: access).first { $0["id"].string == machine } ?? .object([])
                 if link?["state"].string == "online" { for (channel, key) in [("machines:host:read", "host"), ("machines:logins:read", "logins"), ("machines:github:read", "github")] { let answer = try await call(channel, [.string(machine)]); row = row.setting(key, answer == .null ? .string("did not answer") : answer) } }
@@ -156,6 +160,10 @@ public enum BackendMachineMCP {
             }
             _ = try text("sessionId"); guard let target else { throw NativeRPCError.invalidArguments("A visible remote session is required") }
             switch verb {
+            case "send" where target["chat"].bool == true:
+                // An app chat on that machine (15 Nov): the message goes to the chat as its phones send it.
+                guard try await call("machines:chats", [.string(machine), .string("say"), .string(session), .string(text("text"))]).bool == true else { throw NativeRPCError(code: "machine-refused", message: "That machine did not take the message.") }
+                return result([.init("sessionId", .string(session)), .init("sent", .bool(true))])
             case "send", "keys":
                 guard target["exitCode"] == .null else { throw NativeRPCError.invalidArguments("That session has exited; there is nothing to type into") }
                 let write: @Sendable (String) async throws -> Void = { data in try assertOK(await call("machines:send", [.string(machine), .string(session), .string(data)])) }
@@ -205,9 +213,7 @@ public enum BackendMachineMCP {
             var value = result([.init("state", current["state"]), .init("run", current["run"]), .init("messages", .array(Array((current["messages"].elements ?? []).suffix(limit))))])
             if let said { value = value.setting("said", .string(said)) }; if let answered { value = value.setting("answered", .bool(answered)) }; return value
         }
-        if verb == "show-code" { let answer = try await call("machines:code"); try assertOK(answer); return .object([.init("code", answer["code"]["token"]), .init("expiresAt", answer["code"]["expiresAt"]), .init("note", .string("Type this on the other computer's Machines list. It works once."))]) }
-        if verb == "cancel-code" { return try await call("machines:code:cancel") }
-        if verb == "pair" { let answer = try await call("machines:pair", [.string(text("code"))]); try assertOK(answer); return .object([.init("paired", .bool(true)), .init("machineId", answer["offer"]["hostId"]), .init("name", answer["offer"]["name"])]) }
+        if ["pair", "show-code", "cancel-code"].contains(verb) { throw NativeRPCError(code: "retired", message: DevicesPage.joinBySigningIn) }
         _ = try text("machineId")
         let channels = ["connect":"machines:connect", "disconnect":"machines:disconnect", "rename":"machines:rename", "forget":"machines:forget", "allow-windows":"machines:drive-windows", "restart-host":"machines:host:restart", "stop-host":"machines:host:stop", "sign-in":"machines:logins:signin", "sign-out":"machines:logins:signout", "github-connect":"machines:github:connect", "github-cancel":"machines:github:cancel", "github-disconnect":"machines:github:disconnect"]
         guard let channel = channels[verb] else { throw NativeRPCError.invalidArguments("Unknown machine management action") }
@@ -251,6 +257,6 @@ public enum BackendMachineMCP {
         if args["sessionId"] != .missing && args["machineId"] == .missing { throw NativeRPCError.invalidArguments("sessionId requires machineId") }
     }
     private static func description(_ id: String) -> String {
-        ["machines.look":"List the actual paired computers, or one machine/session's host, logins, GitHub, received screen, controls and usage.", "machines.session":"Start, send printable text or keys, stop, rename, set controls, switch login or watch a visible session on a paired machine.", "machines.copilot":"Read, start or talk to the assistant that the other machine actually granted to this connection.", "machines.ports":"List/refresh a remote computer's ports, open or close an approved local tunnel, or open a URL there.", "machines.upload":"Send an authorized local file to the paired computer with checksum verification, or cancel its active transfer.", "machines.manage":"Pair, show/withdraw codes, manage saved machines/window grants, host lifecycle, agent logins or GitHub on that machine."][id]!
+        ["machines.look":"List the other computers this app reaches, or one machine/session's host, logins, GitHub, received screen, controls and usage.", "machines.session":"Start, send printable text or keys, stop, rename, set controls, switch login or watch a visible session on another computer.", "machines.copilot":"Read, start or talk to the assistant that the other machine actually granted to this connection.", "machines.ports":"List/refresh a remote computer's ports, open or close an approved local tunnel, or open a URL there.", "machines.upload":"Send an authorized local file to the other computer with checksum verification, or cancel its active transfer.", "machines.manage":"Manage saved machines/window grants, host lifecycle, agent logins or GitHub on that machine."][id]!
     }
 }

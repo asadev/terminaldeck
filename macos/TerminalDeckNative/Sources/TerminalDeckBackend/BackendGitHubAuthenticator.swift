@@ -62,6 +62,39 @@ public actor BackendGitHubAuthenticator {
         if let data = try? BackendAccountFiles.boundedRead(file, maximum: Int.max), let value = try? NativeRPCValue.parseJSON(data, maximumBytes: Int.max), let token = value["token"].string, !token.isEmpty { stored = value }
         return stored
     }
+    /// Strict saved-file read for Cloud. A damaged file is not an empty account;
+    /// environment and CLI credentials never enter this path.
+    nonisolated static func cloudValidate(_ value: NativeRPCValue, host: String) throws {
+        guard value.fields != nil, value["host"].string == host,
+              value["version"] == .missing || value["version"].number == 1,
+              let token = value["token"].string, !token.isEmpty, token.utf8.count <= 65_536,
+              token.rangeOfCharacter(from: .controlCharacters) == nil else { throw CloudFailure.invalidRequest }
+        if let refresh = value["refreshToken"].string {
+            guard refresh.utf8.count <= 65_536, refresh.rangeOfCharacter(from: .controlCharacters) == nil else { throw CloudFailure.invalidRequest }
+        }
+    }
+    func cloudSavedCredential() throws -> NativeRPCValue? {
+        guard let bytes = try BackendAccountFiles.boundedRead(file, maximum: 256 * 1024) else { return nil }
+        let value = try NativeRPCValue.parseJSON(bytes, maximumBytes: 256 * 1024)
+        try Self.cloudValidate(value, host: host)
+        return value
+    }
+    func cloudHasLocalCredential() throws -> Bool { if envToken() != nil { return true }; return try cloudSavedCredential() != nil }
+    func cloudMergeCredential(_ incoming: NativeRPCValue, requireWriter: @Sendable () throws -> Void) async throws -> CloudApplyStatus {
+        try requireWriter()
+        try Self.cloudValidate(incoming, host: host)
+        // A live login/refresh owns its result; never race it with an import.
+        guard flow == nil, renewal == nil else { throw CloudFailure.unavailable }
+        if envToken() != nil { return .keptBoth }
+        if let local = try cloudSavedCredential() {
+            return try CloudSecretsCanonical.encode(CloudValue(local)) == CloudSecretsCanonical.encode(CloudValue(incoming)) ? .alreadyPresent : .keptBoth
+        }
+        try await writeStored(incoming, notify: false)
+        guard let saved = try cloudSavedCredential(),
+              try CloudSecretsCanonical.encode(CloudValue(saved)) == CloudSecretsCanonical.encode(CloudValue(incoming)) else { throw CloudFailure.checksumMismatch }
+        await changed()
+        return .applied
+    }
     public func secrets() -> [String] { [envToken(), readStored()?["token"].string, readStored()?["refreshToken"].string].compactMap { $0 } }
     public func scrubSecrets(_ text: String) -> String {
         var out = text

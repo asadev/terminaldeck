@@ -1,6 +1,7 @@
 import AppKit
 import QuickLookThumbnailing
 import SwiftUI
+import TerminalDeckBackend
 import TerminalDeckNativeCore
 
 struct NativeArtifactsCatalogCard: View {
@@ -24,6 +25,10 @@ struct NativeArtifactsCatalogCard: View {
                         Text(Date(timeIntervalSince1970: row.artifact.lastAt / 1000), format: .dateTime.hour().minute())
                             .monospacedDigit().lineLimit(1)
                     }.font(.system(size: 11)).foregroundStyle(.secondary)
+                    // Lane L3 slice 2: one quiet line for an artifact another of his Macs made.
+                    if let mac = row.fromMac {
+                        Text(CloudArtifactsFormat.fromLine(mac)).font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
+                    }
                 }.padding(.horizontal, 12).padding(.vertical, 10)
             }.frame(maxWidth: .infinity, alignment: .leading)
                 .background(hovered ? NativeCatalogTokens.hover : NativeCatalogTokens.card)
@@ -96,7 +101,8 @@ struct NativeArtifactsCatalogActions: View {
     let row: NativeArtifactsCatalogModel.Row
     let model: NativeArtifactsCatalogModel
     var body: some View {
-        Button("Open in chat") { model.openSource(row) }
+        // An artifact from another device has no chat on this Mac and no session to send it to.
+        Button("Open in chat") { model.openSource(row) }.disabled(row.cloudPath != nil)
         Button("Show in Finder") { model.reveal(row) }.disabled(row.artifact.onDisk == nil)
         Button("Copy") { model.copy(row) }.disabled(row.artifact.onDisk == nil)
         Menu("Send to…") {
@@ -104,9 +110,9 @@ struct NativeArtifactsCatalogActions: View {
             ForEach(model.sessions, id: \.id) { session in
                 Button(session.title) { model.send(row, to: session.id) }
             }
-        }.disabled(row.artifact.onDisk == nil || model.pendingAction != nil)
+        }.disabled(row.artifact.onDisk == nil || model.pendingAction != nil || row.cloudPath != nil)
         Divider()
-        Button("Delete from list", role: .destructive) { model.requestDelete(row) }.disabled(model.pendingAction != nil)
+        Button(row.cloudPath != nil ? "Remove from all Macs" : "Delete from list", role: .destructive) { model.requestDelete(row) }.disabled(model.pendingAction != nil)
     }
 }
 
@@ -145,7 +151,7 @@ struct NativeArtifactsCatalogPreview: View {
             }.frame(minHeight: 0, maxHeight: .infinity)
             Divider()
             HStack {
-                Button("Open in chat") { model.openSource(row) }.buttonStyle(.borderless)
+                Button("Open in chat") { model.openSource(row) }.buttonStyle(.borderless).disabled(row.cloudPath != nil)
                 Button("Show in Finder") { model.reveal(row) }.buttonStyle(.borderless).disabled(row.artifact.onDisk == nil)
                 Spacer()
                 Menu { NativeArtifactsCatalogActions(row: row, model: model) } label: { Label("More", systemImage: "ellipsis") }

@@ -63,14 +63,23 @@ public actor BackendRemotePanelRegistry {
         let name = message["panel"].string!
         guard let provider = panels[name] else { throw NativeRPCError(code: "panel-unavailable", message: "The \(name) panel has no native service registered on this host") }
         let path = message["path"].string ?? context.reach.folders.first ?? ""
-        if provider.scope == .project {
-            guard !path.isEmpty, context.reach.unrestricted || context.reach.folders.contains(where: { BackendRemoteTrustStore.within($0, path) }) else { throw NativeRPCError(code: "panel-denied", message: "This device was not granted that project folder") }
-        } else {
-            guard context.kind == .mine else { throw NativeRPCError(code: "panel-denied", message: "Machine management belongs to an owner-approved device.") }
-        }
         let request = BackendRemotePanelRequest(path: path, scope: message["scope"].string, query: message["query"].string, preview: message["preview"].string, offset: Int(message["at"].number ?? 0), maximum: Int(message["max"].number ?? 32_768))
-        let before = try await BackendINT2PhonePanelCaller.$current.withValue(context) {
-            try await provider.read(request, rpcContext)
+        let reading = message.type != "panel.act"
+        let before: NativeRPCValue
+        do {
+            if provider.scope == .project {
+                guard !path.isEmpty, context.reach.unrestricted || context.reach.folders.contains(where: { BackendRemoteTrustStore.within($0, path) }) else { throw NativeRPCError(code: "panel-denied", message: "This device was not granted that project folder") }
+            } else {
+                guard context.kind == .mine else { throw NativeRPCError(code: "panel-denied", message: "Machine management belongs to an owner-approved device.") }
+            }
+            before = try await BackendINT2PhonePanelCaller.$current.withValue(context) {
+                try await provider.read(request, rpcContext)
+            }
+        } catch let error where reading && Self.isRefusal(error) {
+            // 14 Nov (phones fault 1): a refusal is never a row's or a section's text on a device. A read the device may
+            // not make answers as a panel with nothing in it: the phones leave that section out (Tasks: no tasks for
+            // that place) and an empty panel says nothing. A failure that is not a refusal still says why.
+            before = Self.withheld(request)
         }
         try validatePayload(before, expectedPath: path)
         let result: NativeRPCValue
@@ -100,6 +109,21 @@ public actor BackendRemotePanelRegistry {
         let additions = paged.fields?.filter { $0.key != "panel" && $0.key != "rid" } ?? []
         let correlation: [NativeRPCValue.Field] = message["rid"].string.map { [.init("rid", .string($0))] } ?? []
         return try .init(.panelRows, fields: [.init("panel", .string(name))] + additions + correlation)
+    }
+    /// Access refusals (the device's grant, level, project or a tool's own "outside this caller's grant"), as against
+    /// a failure (a tool or service that is not there, a malformed answer), which keeps its sentence.
+    static let refusalCodes: Set<String> = ["access-denied", "panel-denied", "unauthorized",
+                                            "not-permitted", "not-granted", "not-permitted-unattended", "not-permitted-while-driving"]
+    static func isRefusal(_ error: any Error) -> Bool {
+        if error is BackendDeckCoreSecurityRefusal { return true }
+        return (error as? NativeRPCError).map { refusalCodes.contains($0.code) } ?? false
+    }
+    /// The answer to a read the device may not make: the panel, empty, with no note.
+    static func withheld(_ request: BackendRemotePanelRequest) -> NativeRPCValue {
+        var fields: [NativeRPCValue.Field] = [.init("path", .string(request.path)), .init("rows", .array([])), .init("actions", .array([])),
+                                              .init("scope", request.scope.map(NativeRPCValue.string) ?? .null)]
+        if let view = request.scope, !view.isEmpty { fields.append(.init("view", .string(view))) }
+        return .object(fields)
     }
     private func validatePayload(_ value: NativeRPCValue, expectedPath: String) throws {
         guard value.fields != nil, value["path"].string == expectedPath, let rows = value["rows"].elements, rows.count <= 200 else { throw NativeRPCError.malformed("The native panel service returned a malformed path or row list") }

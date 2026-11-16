@@ -24,6 +24,8 @@ public struct BackendServersFeatureInputs: Sendable {
     /// The person's home folder for their own SSH settings; nil turns SSH
     /// settings off. Only ssh itself reads key files named there.
     public let sshHome: URL?
+    /// The earlier (Electron) app's key, for saved sign-ins it sealed; nil for the dev copy and tests.
+    public let earlierKey: BackendServersEarlierAppKey?
     public init(dataRoot: URL, keyRoot: URL, scratchRoot: URL, storagePolicy: BackendServersStoragePolicy,
                 sshPolicy: BackendServersSSHPolicy, cipher: BackendBrowserPasswordsCipher,
                 registry: NativeChannelRegistry, ownPorts: BackendDevOwnPorts,
@@ -35,8 +37,8 @@ public struct BackendServersFeatureInputs: Sendable {
                 openInBrowser: (@Sendable (String) async throws -> Void)?, hostPackage: @escaping @Sendable () -> BackendServersHostPackage?,
                 machineLink: (@Sendable (String) async -> BackendServersHostLinkOutcome)?,
                 machineReaching: (@Sendable (String, Int) async -> Bool)?, controls: (any BackendServersAgentControls)?,
-                report: @escaping @Sendable (NativeRPCError) -> Void, sshHome: URL? = nil) {
-        self.sshHome = sshHome
+                report: @escaping @Sendable (NativeRPCError) -> Void, sshHome: URL? = nil, earlierKey: BackendServersEarlierAppKey? = nil) {
+        self.sshHome = sshHome; self.earlierKey = earlierKey
         self.dataRoot = dataRoot; self.keyRoot = keyRoot; self.scratchRoot = scratchRoot
         self.storagePolicy = storagePolicy; self.sshPolicy = sshPolicy; self.cipher = cipher
         self.registry = registry; self.ownPorts = ownPorts; self.authorize = authorize; self.ipc = ipc; self.resolveMCP = resolveMCP
@@ -57,6 +59,10 @@ public actor BackendServersFeature {
     public nonisolated let files: BackendServersFiles
     private let resolveIPC: @Sendable (NativeRPCContext) async throws -> BackendServersCaller
     private let credentials: BackendServersCredentials
+    /// Kept only for `cloudSecrets(sourceId:)` below.
+    private let store: BackendServersStore
+    /// Keys travel: his home, only for `cloudSSHKeys(folder:)` (nil = SSH settings off).
+    private let sshHome: URL?
     private let registry: NativeChannelRegistry, reachChannels: BackendServersReachChannels
     private let resolveMCP: BackendServersTools.Resolve
     private let stateEvents: BackendServersStateEvents
@@ -68,7 +74,8 @@ public actor BackendServersFeature {
         let ssh = BackendServersSSH(scratchRoot: input.scratchRoot, policy: input.sshPolicy, sshHome: input.sshHome,
                                     agentSocket: input.sshHome == nil ? nil : BackendServersSSH.personAgentSocket())
         let store = BackendServersStore(dataRoot: input.dataRoot, policy: input.storagePolicy)
-        let credentials = BackendServersCredentials(dataRoot: input.dataRoot, cipher: input.cipher, policy: input.storagePolicy, keyValidator: ssh.keyValidator())
+        let credentials = BackendServersCredentials(dataRoot: input.dataRoot, cipher: input.cipher, policy: input.storagePolicy, keyValidator: ssh.keyValidator(),
+                                                    earlierKey: input.earlierKey)
         let connections = BackendServersConnections(store: store, credentials: credentials, dialer: ssh)
         let grants = BackendServersGrants(assistantName: BackendSharedBrand.assistant, knows: { (try? store.get($0)) != nil })
         let journal = BackendServersFileJournal(storageDirectory: input.dataRoot, policy: input.storagePolicy)
@@ -107,8 +114,9 @@ public actor BackendServersFeature {
             uploadDirectory: hooks.uploadDirectory, appVersion: hooks.appVersion, linkStanding: hooks.linkStanding, redial: hooks.redial,
             revokeWindows: { await windowDrives.revoke($0); await hooks.revokeWindows($0) },
             forgetReach: { await reach.closeServer($0); await hooks.forgetReach($0) })
+        self.sshHome = input.sshHome
         self.room = room; self.connections = connections; self.shells = shells; self.reach = reach; self.windowDrives = windowDrives; self.windowReach = windowReach
-        self.credentials = credentials; self.registry = registry; self.resolveMCP = input.resolveMCP; self.stateEvents = stateEvents
+        self.credentials = credentials; self.store = store; self.registry = registry; self.resolveMCP = input.resolveMCP; self.stateEvents = stateEvents
         self.ipc = BackendServersIPC(room: room, shells: shells, store: store, credentials: credentials,
             keys: BackendServersKeyFileOffers(keyRoot: input.keyRoot), setups: setups, hosts: hosts, hooks: ipcHooks,
             sshHome: input.sshHome)
@@ -125,6 +133,31 @@ public actor BackendServersFeature {
                 catch { report(NativeRPCError(code: "servers-state-event", message: "A server setup or host state subscriber disconnected.")) }
             }
         }
+    }
+    /// Cloud saved passwords (lane V) read and add saved sign-ins through this feature's ONE live credentials
+    /// owner and server list: no file is copied and there is no second writer. The owner object stays private;
+    /// what is handed out is lane V's logical store over it. Nothing runs unless Cloud calls this.
+    public nonisolated func cloudSecrets(sourceId: String) -> BackendCloudSecretsServerPort {
+        BackendCloudSecretsServerPort(sourceId: sourceId, credentials: credentials, servers: store)
+    }
+    /// Keys travel (Security seat, 15 Nov): what each server that signs in through his SSH settings needs, for saved
+    /// passwords. His SSH folder is only read (`ssh -G` for that name, its key files, its known-host lines); copies from
+    /// his other devices live in `folder` (the app's own) and the one dialer uses them through the shared box.
+    public nonisolated func cloudSSHKeys(folder: BackendCloudKeysSSHFolder) -> BackendCloudKeysSSHStore? {
+        guard let home = sshHome else { return nil }
+        let store = self.store
+        BackendServersSSHTravelledBox.shared.set(folder)
+        let resolver = BackendDockerMCPServerSSHConfig()
+        return BackendCloudKeysSSHStore(servers: { try store.list().filter { $0.sshAlias != nil } },
+            resolve: { alias in try await resolver.resolve(alias: alias, home: home) },
+            trusted: { host, port in await BackendServersSSH.trustedHostKeys(home: home, host: host, port: port) },
+            addServer: { id, value in
+                let definition = value.server
+                try store.cloudAddIfAbsent(id: id, name: definition.name, address: value.hostname, port: value.port, username: value.user,
+                    projectId: definition.projectId, lookOnly: definition.lookOnly == true,
+                    hostKey: definition.hostKeyFingerprint.map { (algorithm: definition.hostKeyAlgorithm ?? "", fingerprint: $0) },
+                    sshAlias: value.alias)
+            }, folder: folder)
     }
     public func registerChannels(ownerID: String) async throws {
         guard !stopped, registrationOwner == nil else { throw NativeRPCError(code: "already-installed", message: "This server facade is stopped or already installed.") }

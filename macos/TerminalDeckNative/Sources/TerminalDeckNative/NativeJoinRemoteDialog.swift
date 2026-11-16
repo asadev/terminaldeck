@@ -1,19 +1,22 @@
 import SwiftUI
+import TerminalDeckNativeCore
 
-/// The command palette uses the same one-step device pairing sheet as Devices.
-/// Session-code/PIN fields are gone: the native machines:pair path really pairs a computer.
+/// The command palette's old "join" entry (owner, 13 Nov: no pairing anywhere). It says how devices join now and
+/// offers the Devices window; it never makes or asks for anything.
 struct NativeJoinRemoteDialog: View {
     let close: () -> Void
-    @State private var model = RemoteSectionModel()
-    @State private var machines = MachinesHalfModel()
 
     var body: some View {
-        MACHINESDevicesPairSheet(model: model, machines: machines, fixture: false, typeCodeOnOpen: true, close: close)
-            .task {
-                async let remote: Void = model.start()
-                async let reach: Void = machines.start()
-                _ = await (remote, reach)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(DevicesPage.title).font(.system(size: 20, weight: .semibold))
+            Text(DevicesPage.joinBySigningIn).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                NativeSessionButton("Close") { close() }.buttonStyle(.bordered)
+                NativeSessionButton("Open Devices") { AppModel.shared.openDevices(); close() }.buttonStyle(.borderedProminent)
             }
-            .onDisappear { model.stop(); machines.stop() }
+        }
+        .padding(24).frame(width: 460)
+        .sessionOnExitCommand { close() }
     }
 }

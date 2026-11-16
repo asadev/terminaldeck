@@ -181,7 +181,8 @@ final class MyWorkModel {
     // MARK: What is drawn
 
     struct Drawn {
-        let local: [TaskRow]
+        /// Every task the page lists (TaskList.listed): his own and the ones a connected system sent.
+        let listed: [TaskRow]
         let shown: [TaskRow]
         /// The list's sections: one per project on All projects (13 Oct), else one unnamed.
         let sections: [TaskListSection]
@@ -197,8 +198,9 @@ final class MyWorkModel {
     func drawn(_ state: TasksState, now: Double, projects: TKTasksProjectScope = .shared) -> Drawn {
         let today = TaskList.ymdOf(now)
         let nowHm = TaskList.hmOf(now)
-        let local = state.tasks.filter(\.local)
-        let shown = TaskList.filter(local, view.filters, today: today, nowHm: nowHm,
+        // 15 Nov: his own tasks and the ones a connected CRM sent, one list (TaskList.listed, the side panel's rule).
+        let listed = TaskList.listed(state.tasks)
+        let shown = TaskList.filter(listed, view.filters, today: today, nowHm: nowHm,
                                     favorites: Set(fixtureFavorites ?? TaskFavoritesStore.shared.ids))
         // Lane TK: "All projects" lists every task under its project's name; inside each project the
         // chosen grouping (13 Oct: a project's work still reads by status, like one page of all tasks).
@@ -215,7 +217,7 @@ final class MyWorkModel {
         if view.sort != .automatic {
             for id in Array(nesting.children.keys) { nesting.children[id] = view.sort.ordered(nesting.children[id] ?? []) }
         }
-        return Drawn(local: local, shown: shown, sections: sections, groups: sections.flatMap(\.groups),
+        return Drawn(listed: listed, shown: shown, sections: sections, groups: sections.flatMap(\.groups),
                      nesting: nesting, byProject: byProject,
                      today: today, nowHm: nowHm, week: TaskList.weekOf(week ?? today))
     }
@@ -385,7 +387,8 @@ struct StageBoard: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(over == status ? Color.accentColor : .clear, lineWidth: 2))
         .dropDestination(for: String.self) { items, _ in
             over = nil
-            guard let id = items.first, let task = tasks.first(where: { $0.id == id }), task.crmStatus != status else { return false }
+            guard let id = items.first, let task = tasks.first(where: { $0.id == id }), TaskList.editableInList(task),
+                  task.crmStatus != status else { return false }
             Task { await store.run { await store.update(task.id, ["status": status]) } }
             return true
         } isTargeted: { targeted in
@@ -408,6 +411,10 @@ struct StageBoard: View {
             Text(task.createdAt > 0 ? "Created " + TaskList.createdLabel(task.createdAt, today: today) : "Creation date unavailable")
                 .font(.caption).foregroundStyle(.secondary)
             NativeTAGTaskLinks(task: task, tasks: TasksStore.shared.state?.tasks ?? state.tasks, compact: true)
+            // 15 Nov: where a connected system's task comes from (a copy already says it in its links line).
+            if task.copyFrom == nil, let source = TaskList.source(task, connections: state.connections) {
+                Text(source).font(.caption).foregroundStyle(.secondary)
+            }
             if !task.labels.isEmpty {
                 HStack(spacing: 4) {
                     ForEach(Array(task.labels.prefix(3)), id: \.self) { TagPill(text: $0) }
@@ -432,7 +439,7 @@ struct StageBoard: View {
             ? Color(nsColor: .unemphasizedSelectedContentBackgroundColor) : Color(nsColor: .windowBackgroundColor)))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
         .draggable(task.id)
-        .contextMenu { TKMoveToProjectMenu(task: task) }
+        .contextMenu { if TaskList.editableInList(task) { TKMoveToProjectMenu(task: task) } }
         .disabled(busy)
     }
 }
@@ -477,7 +484,7 @@ struct WeekCalendar: View {
             Text(label(day)).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
             ForEach(tasks.filter { $0.dueDate == day }) { task in
                 HStack(spacing: 4) {
-                    TaskRing(task: task, busy: busy) {
+                    TaskRing(task: task, busy: busy || !TaskList.editableInList(task)) {
                         Task { await store.run { await store.update(task.id, ["status": task.crmStatus == "Done" ? "To-Do" : "Done"]) } }
                     }
                     Button { onOpen(task.id) } label: {

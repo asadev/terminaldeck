@@ -42,7 +42,8 @@ struct FIXESIslandDisplayTests {
             #expect(active.pill.width == width.resting); #expect(active.panel.width == width.grown)
             #expect(active.collapsedFrame.width == active.pill.outerWidth)
             let quiet = FIXESIslandDisplayPolicy.layout(for: screen, options: options, quiet: true)
-            #expect(quiet.pill.width == width.resting); #expect(quiet.pill.height == 26)
+            #expect(quiet.pill.width == width.resting); #expect(quiet.pill.height == 32); #expect(active.pill.height == 32)
+            #expect(quiet.pill.radius == 16)
         }
     }
     @Test func smallNotchedIslandKeepsContentOutOfTheNotch() {

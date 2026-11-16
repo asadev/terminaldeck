@@ -61,7 +61,7 @@ public final class BackendMacReachClient: @unchecked Sendable {
                 once.begin(continuation)
                 guard !Task.isCancelled else { once.finish(.failure(BackendMacSignInAttempt.failure)); return }
                 guard let proxy = connection.remoteObjectProxyWithErrorHandler({ _ in
-                    if once.finish(.failure(NativeRPCError(code: "helper-unreachable", message: "The Mac access helper is unavailable. Check Devices → Device access → General on your Mac."))) { self.cancel(id) }
+                    if once.finish(.failure(NativeRPCError(code: "helper-unreachable", message: "The Mac access helper is unavailable. Check Settings → Advanced → Access after lock or restart on your Mac."))) { self.cancel(id) }
                 }) as? BackendMacReachRPC else {
                     once.finish(.failure(NativeRPCError(code: "helper-unreachable", message: "The Mac access helper is unavailable.")))
                     return

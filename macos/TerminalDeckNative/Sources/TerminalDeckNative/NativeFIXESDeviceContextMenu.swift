@@ -23,12 +23,17 @@ final class NativeFIXESDeviceTabs {
         screenID.hasPrefix("simulator:") ? String(screenID.dropFirst("simulator:".count)) : nil
     }
     func has(_ screenID: String) -> Bool { entries.contains { Self.screenID($0.id) == screenID } }
+    /// The person's own "New Tab" / "Start and open": the tab is added and chosen.
     func open(_ entry: DeviceEntry) {
+        attach(entry)
+        AppModel.shared.selectTab(Self.screenID(entry.id)) // person-ok: the Simulators page's own menu (execute)
+    }
+    /// A tool's tab: added to the strip, live, never chosen for the person (Asad, 13 Nov: "it takes me to there").
+    func attach(_ entry: DeviceEntry) {
         if !entries.contains(where: { $0.id == entry.id }) { entries.append(entry) }
-        AppModel.shared.selectTab(Self.screenID(entry.id))
     }
     func openWindow(_ entry: DeviceEntry) {
-        AppModel.shared.openScreenWindow(ScreenRef(kind: .panel, id: Self.screenID(entry.id)), title: entry.name)
+        AppModel.shared.openScreenWindow(ScreenRef(kind: .panel, id: Self.screenID(entry.id)), title: entry.name) // person-ok: the Simulators page's own menu (execute)
     }
     func close(_ screenID: String) {
         entries.removeAll { Self.screenID($0.id) == screenID }
@@ -39,7 +44,10 @@ final class NativeFIXESDeviceTabs {
             symbol: $0.platform == "ios" ? "iphone" : "smartphone", kind: "panel",
             active: Self.screenID($0.id) == selectedID, closable: true) }
     }
-    /// The simulators_open tool's way into this window (tab, window, beside a session, Finder).
+    /// The tools' way into this window (simulators_open, devices_open_app): ONLY tools come here, so nothing here
+    /// moves the person (Asad, 31 Oct and 13 Nov: "use everything in the background"). A device is attached where the
+    /// tool asked, live, and he finds it there when he opens that session or tab himself; the session's row carries
+    /// a small phone mark meanwhile (SidebarView, NativeBackgroundToolsPolicy).
     static func installPresenter() {
         shellJoined = true
         BackendFIXESDevicePresenter.shared.install { row, destination, sessionID in
@@ -53,14 +61,15 @@ final class NativeFIXESDeviceTabs {
             throw NativeRPCError(code: "device-refused", message: "That device is no longer listed.")
         }
         switch destination {
-        case "tab": open(entry)
-        case "window": openWindow(entry)
+        // A new window would take the front: a tool's "window" is a tab in the strip too, which he can pop out.
+        case "tab", "window": attach(entry)
         case "beside":
             guard let sessionID, !sessionID.isEmpty else { throw NativeRPCError(code: "device-refused", message: "Choose the session to show it beside.") }
-            try await NativeFIXESDeviceMenuServices.beside(entry, sessionID: sessionID)
+            try await NativeFIXESDeviceMenuServices.beside(entry, sessionID: sessionID, choosingTheSession: false)
         case "finder":
+            // Finder would come in front of him: the folder is named instead.
             let path = try await NativeFIXESDeviceMenuServices.folder(entry.id)
-            NativeFront.onlyForPerson("show device in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+            throw NativeRPCError(code: "device-refused", message: "Terminal Deck leaves Finder to the person. The device's folder is " + path)
         default: throw NativeRPCError(code: "device-refused", message: "Choose a new tab, a new window or beside a session.")
         }
     }
@@ -78,8 +87,14 @@ final class NativeFIXESDeviceTabs {
         }
         return path
     }
-    static func beside(_ entry: DeviceEntry, sessionID: String) async throws {
-        let sessions = AgentSessions.read(try await EngineBridge.shared.invoke("session:list"))
+    /// Bringing a session up for the person's own "Show beside" (tests watch it here).
+    static var chooseSession: (String) -> Void = { AppModel.shared.selectTab($0) } // person-ok: only the Simulators page's "Show beside" passes choosingTheSession
+    /// Tests read the session list here (no engine).
+    static var liveSessions: () async throws -> [AgentSessionRow] = { AgentSessions.read(try await EngineBridge.shared.invoke("session:list")) }
+    /// The device in a session's phone panel. `choosingTheSession`: the person's own "Show beside" also brings that
+    /// session up; a tool's attach (false) leaves him wherever he is and the panel works on unseen.
+    static func beside(_ entry: DeviceEntry, sessionID: String, choosingTheSession: Bool) async throws {
+        let sessions = try await liveSessions()
         guard sessions.contains(where: { $0.id == sessionID && !$0.ended && $0.machineId.isEmpty && !$0.onServer }) else {
             throw NativeRPCError(code: "device-refused", message: "That session is no longer running on this Mac.")
         }
@@ -95,7 +110,7 @@ final class NativeFIXESDeviceTabs {
         else if reusable(second) { controller = second }
         else { throw NativeRPCError(code: "device-refused", message: "This session already shows two devices. Close one of its device panels first.") }
         controller.setOpen(true)
-        AppModel.shared.selectTab(sessionID)
+        if choosingTheSession { chooseSession(sessionID) }
         await controller.select(entry)
         if !controller.problem.isEmpty { throw NativeRPCError(code: "device-fault", message: controller.problem) }
         if !controller.model.problem.isEmpty { throw NativeRPCError(code: "device-fault", message: controller.model.problem) }
@@ -313,7 +328,7 @@ struct NativeFIXESDeviceContextMenu: ViewModifier {
         }
     }
     private func showBeside(_ row: AgentSessionRow) {
-        run { try await NativeFIXESDeviceMenuServices.beside(entry, sessionID: row.id) }
+        run { try await NativeFIXESDeviceMenuServices.beside(entry, sessionID: row.id, choosingTheSession: true) }
     }
     private func choose(_ action: FIXESDeviceContextAction) {
         if let command = interaction.choose(action, entry: entry) { execute(command.action, deviceID: command.deviceID, name: command.name) }
@@ -345,7 +360,7 @@ struct NativeFIXESDeviceContextMenu: ViewModifier {
         case .finder:
             run {
                 let path = try await NativeFIXESDeviceMenuServices.folder(entry.id)
-                NativeFront.onlyForPerson("show device in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+                NativeFront.onlyForPerson("show device in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) } // person-ok: his own menu choice
             }
         case .shutDown, .restart, .coldStart, .rename, .reset, .delete:
             run {

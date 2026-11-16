@@ -6,8 +6,8 @@ import TerminalDeckNativeCore
 /// on the tasks address may change. Reads (GET) are always allowed; a CRM-only key exists to send tasks, so it
 /// keeps sending them.
 public enum BackendTaskKeyAccess {
-    public static let lookOnlyRefusal = "This key may only look. To let it create, assign, cancel or change tasks, set it to Work or Full control in Settings › Outside AI apps."
-    public static let folderRefusal = "That project is outside the folders this key may use. Add the folder to the key in Settings › Outside AI apps."
+    public static let lookOnlyRefusal = "This key may only look. To let it create, assign, cancel or change tasks, set it to Work or Full control in Settings › AI apps."
+    public static let folderRefusal = "That project is outside the folders this key may use. Add the folder to the key in Settings › AI apps."
 
     /// nil when the request may go on; otherwise the plain refusal.
     public static func refusal(key: NativeRPCValue, method: String, body: Data) -> String? {

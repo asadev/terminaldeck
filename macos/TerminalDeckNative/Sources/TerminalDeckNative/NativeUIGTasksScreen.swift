@@ -44,7 +44,8 @@ struct NativeUIGTasksScreen: View {
             myWork.open = request.id
             if let task = store.state?.tasks.first(where: { $0.id == request.id }) {
                 // Keep an unfinished form mounted while linked work opens over it.
-                if !hasOpenForm { section = task.local ? .work : .crm }
+                // 15 Nov: My Work lists CRM tasks too, so one opened from My Work stays on My Work.
+                if !hasOpenForm && !(section == .work && !task.local) { section = task.local ? .work : .crm }
                 myWork.trashOpen = false
             }
             store.clearOpenRequest()

@@ -93,7 +93,7 @@ final class FakeBrowserHost: BrowserDriverHost {
         }
     }
 
-    func reveal(_ id: String) async -> Bool {
+    func readyForInput(_ id: String) async -> Bool {
         revealed.append(id)
         return tabs[id]?.onScreen ?? false
     }
@@ -217,7 +217,7 @@ struct BrowserDriverVerbTests {
         #expect(resultValue(clicked)["selector"] as? String == "e3", "the agent's own words come back")
         #expect(resultValue(clicked)["label"] as? String == "Save")
         #expect(resultValue(clicked)["url"] as? String == "https://example.com/next")
-        #expect(engine.host.revealed.contains("t1"), "a step brings the tab forward first")
+        #expect(engine.host.revealed.contains("t1"), "a step readies the page for real input, off screen: it never selects the tab")
 
         // browser_screenshot.
         engine.host.revealed = []

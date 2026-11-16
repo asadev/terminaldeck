@@ -2,47 +2,41 @@ import SwiftUI
 import TerminalDeckNativeCore
 import TerminalDeckBackend
 
-/// Content for Settings → Agent settings. Bind to a host-owned draft; saving is explicit.
+/// Settings › Agents, for ONE coding AI (owner, 15 Nov; DESIGN.md section 6): three groups, "Defaults" (Model,
+/// Thinking, Permission), "Budgets" (Monthly tokens, Monthly API money, When it runs out, Per task, Warn at) and
+/// "Behaviour" (Reuse conversation, When keep-open is off, Extra add-ons, One heavy job at a time). Every row: title,
+/// one control, (i). Unset fields say "Default". Bound to a host-owned draft; saving is explicit (the page's top bar).
 struct NativeAGSDefaultsEditor: View {
     @Binding var defaults: AGSDefaults
     var busy = false
-    /// Last successfully saved hooks. A draft must match its saved version before Test can run.
+    /// Last successfully saved hooks (the hooks page's Test needs them).
     var savedHooks: [AGSAppHook] = []
     let testHook: (String) async throws -> String
-    @State private var editingHook: AGSAppHook?
-    @State private var testingID: String?
-    @State private var testResults: [String: String] = [:]
-    @State private var failedTests = Set<String>()
+    var provider = "claude"
+
+    static let defaultWord = "Default"
 
     var body: some View {
+        let settings = providerBinding(provider)
         Group {
-            ForEach(["claude", "codex", "gemini"], id: \.self) { provider in
-                Section(NativeAGSWords.provider(provider)) {
-                    NativeAGSModelControls(settings: providerBinding(provider), defaultLabel: "Agent default",
-                                           effortDefaultLabel: Self.effortDefaultLabel(provider: provider))
-                    NativeAGOPTEfficiencyEditor(settings: providerBinding(provider), defaultLabel: "App default")
+            DeckSettingsGroup("Defaults") {
+                DeckSettingsRow("Model", info: "Use a model name supported by \(NativeAGSWords.provider(provider)). Empty: the AI's own default.") {
+                    NativeSessionTextField(Self.defaultWord, text: Binding(get: { settings.wrappedValue.model ?? "" }, set: { settings.wrappedValue.model = NativeAGSWords.optional($0) }))
+                        .textFieldStyle(.plain).modifier(DeckSettingsQuietField()).accessibilityLabel("Agent model")
+                }
+                DeckSettingsRow("Thinking", info: provider == "gemini"
+                                ? "How much thought the agent gives each answer. Thinking levels need an explicit compatible Gemini 3 model. Flash Lite does not support this setting."
+                                : "How much thought the agent gives each answer.") {
+                    NativeAGSOptionPicker(label: "Thinking", options: AGSCapabilities.efforts(provider: provider), value: settings.effort,
+                                          defaultLabel: Self.effortDefaultLabel(provider: provider)).fixedSize()
+                }
+                DeckSettingsRow("Permission", info: "When the agent asks before making changes.") {
+                    NativeAGSOptionPicker(label: "Permission", options: AGSCapabilities.permissionModes(provider: provider), value: settings.permissionMode,
+                                          defaultLabel: Self.defaultWord).fixedSize()
                 }
             }
-            Section("Terminal Deck hooks") {
-                Text("Run a command or send a web request when something happens in Terminal Deck. New hooks start off.")
-                    .font(.callout).foregroundStyle(.secondary)
-                if defaults.hooks.isEmpty, editingHook == nil {
-                    Text("No Terminal Deck hooks added.").foregroundStyle(.secondary)
-                }
-                ForEach(defaults.hooks) { hook in appHookRow(hook) }
-                if let hook = editingHook {
-                    NativeAGSAppHookEditor(hook: hook, save: { next in
-                        if let index = defaults.hooks.firstIndex(where: { $0.id == next.id }) { defaults.hooks[index] = next }
-                        else { defaults.hooks.append(next) }
-                        testResults.removeValue(forKey: next.id)
-                        failedTests.remove(next.id)
-                        editingHook = nil
-                    }, cancel: { editingHook = nil }).id(hook.id)
-                } else if let event = AGSCapabilities.appEvents.first {
-                    NativeSessionButton("Add hook") { editingHook = AGSAppHook(event: event) }.disabled(defaults.hooks.count >= 50)
-                    if defaults.hooks.count >= 50 { Text("Up to 50 Terminal Deck hooks.").font(.caption).foregroundStyle(.secondary) }
-                }
-            }
+            NativeAGSBudgetRows(settings: settings)
+            NativeAGSBehaviourRows(settings: settings)
         }
         .disabled(busy)
     }
@@ -56,48 +50,171 @@ struct NativeAGSDefaultsEditor: View {
     }
 
     /// What the form shows for one AI: exactly what is stored. 18 Oct (#516): an unset thinking level stays unset
-    /// (the launch applies the app default), so "App default" can be chosen and nothing is written by itself.
+    /// (the launch applies the app default), so "Default" can be chosen and nothing is written by itself.
     static func shown(_ defaults: AGSDefaults, provider: String) -> AGSAgentSettings {
         var value = defaults.providers[provider] ?? AGSAgentSettings()
         value.provider = provider
         return value
     }
 
-    /// "App default (Extra high)": the level a launch uses when none is chosen here.
+    /// "Default (Extra high)": the level a launch uses when none is chosen here.
     static func effortDefaultLabel(provider: String) -> String {
-        AGSCapabilities.defaultEffort(provider: provider).map { "App default (" + NativeAGSWords.option($0) + ")" } ?? "App default"
+        AGSCapabilities.defaultEffort(provider: provider).map { defaultWord + " (" + NativeAGSWords.option($0) + ")" } ?? defaultWord
+    }
+}
+
+/// The efficiency fields of one AI's defaults, split into the page's Budgets and Behaviour groups (the same fields
+/// `NativeAGOPTEfficiencyEditor` edits on an agent's own settings).
+private struct NativeAGSEfficiencyField {
+    @Binding var settings: AGSAgentSettings
+    func field<Value>(_ key: WritableKeyPath<AGOPTEfficiencySettings, Value?>) -> Binding<Value?> {
+        Binding(get: { settings.efficiency?[keyPath: key] }, set: {
+            var next = settings.efficiency ?? AGOPTEfficiencySettings()
+            next[keyPath: key] = $0
+            settings.efficiency = next
+        })
+    }
+}
+
+private struct NativeAGSBudgetRows: View {
+    @Binding var settings: AGSAgentSettings
+    private var fields: NativeAGSEfficiencyField { NativeAGSEfficiencyField(settings: $settings) }
+    var body: some View {
+        DeckSettingsGroup("Budgets") {
+            DeckSettingsRow("Monthly tokens", info: "Tokens across this AI's agent tasks this month. Empty: inherited. 0: no budget.") {
+                number("Monthly tokens", fields.field(\.agentTokenBudget))
+            }
+            DeckSettingsRow("Monthly API money", info: "Money in US dollars for API accounts. Plan accounts use tokens. Empty: inherited. 0: no budget.") {
+                HStack(spacing: DeckTokens.Spacing.s4) {
+                    NativeSessionNumberField(NativeAGSDefaultsEditor.defaultWord, value: fields.field(\.monthlyBudgetUSD), format: .number.grouping(.never))
+                        .quietField().modifier(DeckSettingsQuietField()).accessibilityLabel("Monthly API money in USD")
+                    Text("USD").foregroundStyle(.secondary)
+                }
+            }
+            DeckSettingsRow("When it runs out", info: "Pause keeps new tasks waiting until you resume the agent.") {
+                choice("When it runs out", fields.field(\.onExhaustion), [("warn", "Only warn"), ("pause", "Pause")])
+            }
+            DeckSettingsRow("Per task", info: "A warning budget in tokens for each task. Empty: inherited. 0: unlimited.") {
+                number("Per task", fields.field(\.taskTokenBudget))
+            }
+            DeckSettingsRow("Warn at", info: "Percentage of the token budget, from 1 to 100. The default is 80%.") {
+                HStack(spacing: DeckTokens.Spacing.s4) {
+                    NativeSessionNumberField(NativeAGSDefaultsEditor.defaultWord, value: fields.field(\.warningPercent), format: .number.grouping(.never))
+                        .quietField().modifier(DeckSettingsQuietField()).accessibilityLabel("Budget warning percentage")
+                    Text("%").foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+    private func number(_ label: String, _ value: Binding<Int?>) -> some View {
+        NativeSessionNumberField(NativeAGSDefaultsEditor.defaultWord, value: value, format: .number.grouping(.never))
+            .quietField().modifier(DeckSettingsQuietField()).accessibilityLabel(label)
+    }
+}
+
+private struct NativeAGSBehaviourRows: View {
+    @Binding var settings: AGSAgentSettings
+    private var fields: NativeAGSEfficiencyField { NativeAGSEfficiencyField(settings: $settings) }
+    var body: some View {
+        DeckSettingsGroup("Behaviour") {
+            DeckSettingsRow("Reuse conversation", info: "Use the agent's existing conversation when the task, project and saved settings match.") {
+                flag("Reuse conversation", fields.field(\.reuseContext), on: "Reuse", off: "Start fresh")
+            }
+            DeckSettingsRow("When keep-open is off", info: "Keep-open settings take priority. Otherwise, Park stops the agent and keeps its conversation for the next task. Stop ends its session. Waiting agents wake when an event arrives; they never check files or task status in a loop.") {
+                choice("When keep-open is off", fields.field(\.completion), [("park", "Park"), ("stop", "Stop")])
+            }
+            DeckSettingsRow("Extra add-ons", info: "Switch off extra add-ons and their MCP child processes. Terminal Deck's own tools stay available.") {
+                flag("Extra add-ons", fields.field(\.addonsOff), on: "Off", off: "On")
+            }
+            // SETTINGS-TRUTH row 63: the default is On, the value the engine uses when nothing is chosen.
+            DeckSettingsRow("One heavy job at a time", info: "Task runs are asked to take one shared lock for builds and tests, so they wait for each other across agents. Sessions you start yourself are not asked.") {
+                flag("One heavy job at a time", fields.field(\.serializeHeavyJobs), on: "On", off: "Off", defaultText: NativeAGSDefaultsEditor.defaultWord + " (On)")
+            }
+        }
+    }
+}
+
+private func choice(_ label: String, _ value: Binding<String?>, _ options: [(String, String)]) -> some View {
+    Picker(label, selection: Binding(get: { value.wrappedValue ?? "" }, set: { value.wrappedValue = $0.isEmpty ? nil : $0 })) {
+        Text(NativeAGSDefaultsEditor.defaultWord).tag("")
+        ForEach(options, id: \.0) { Text($0.1).tag($0.0) }
+    }
+    .labelsHidden().fixedSize()
+}
+
+private func flag(_ label: String, _ value: Binding<Bool?>, on: String, off: String, defaultText: String? = nil) -> some View {
+    Picker(label, selection: Binding(get: { value.wrappedValue.map { $0 ? "on" : "off" } ?? "" }, set: {
+        value.wrappedValue = $0.isEmpty ? nil : $0 == "on"
+    })) {
+        Text(defaultText ?? NativeAGSDefaultsEditor.defaultWord).tag("")
+        Text(on).tag("on")
+        Text(off).tag("off")
+    }
+    .labelsHidden().fixedSize()
+}
+
+/// Settings › Agents › Terminal Deck hooks: run a command or send a web request when something happens. Same rows,
+/// editor, Test and Remove as before (they were the foot of the Agents page).
+struct NativeAGSAppHooksEditor: View {
+    @Binding var defaults: AGSDefaults
+    var busy = false
+    var savedHooks: [AGSAppHook] = []
+    let testHook: (String) async throws -> String
+    @State private var editingHook: AGSAppHook?
+    @State private var testingID: String?
+    @State private var testResults: [String: String] = [:]
+    @State private var failedTests = Set<String>()
+
+    static let info = "Run a command or send a web request when something happens in Terminal Deck. New hooks start off. Up to 50 hooks."
+
+    var body: some View {
+        DeckSettingsGroup {
+            if defaults.hooks.isEmpty, editingHook == nil {
+                DeckSettingsRow("No hooks yet")
+            }
+            ForEach(defaults.hooks) { hook in appHookRow(hook) }
+            if let hook = editingHook {
+                NativeAGSAppHookEditor(hook: hook, save: { next in
+                    if let index = defaults.hooks.firstIndex(where: { $0.id == next.id }) { defaults.hooks[index] = next }
+                    else { defaults.hooks.append(next) }
+                    testResults.removeValue(forKey: next.id)
+                    failedTests.remove(next.id)
+                    editingHook = nil
+                }, cancel: { editingHook = nil }).id(hook.id)
+                    .padding(DeckSettingsLook.rowPadding)
+            } else if let event = AGSCapabilities.appEvents.first {
+                DeckSettingsButtonRow(title: "+ Add hook") { editingHook = AGSAppHook(event: event) }
+                    .disabled(defaults.hooks.count >= 50)
+            }
+        }
+        .disabled(busy)
     }
 
     private func appHookRow(_ hook: AGSAppHook) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Toggle(NativeAGSWords.event(hook.event), isOn: Binding(get: {
-                    defaults.hooks.first(where: { $0.id == hook.id })?.enabled ?? false
-                }, set: { enabled in
-                    if let index = defaults.hooks.firstIndex(where: { $0.id == hook.id }) { defaults.hooks[index].enabled = enabled }
-                })).toggleStyle(.checkbox).disabled(!AGSCapabilities.appEvents.contains(hook.event) || testingID != nil)
-                Text(hook.webhook != nil ? "Web address hidden" : "Command hidden")
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                NativeSessionButton(testingID == hook.id ? "Testing…" : "Test") { test(hook) }
-                    .disabled(testingID != nil || editingHook != nil || !canTest(hook))
-                    .help(canTest(hook) ? "Run this saved hook once through the app's approval path, even when the hook is off" : "Save this hook before testing")
-                NativeSessionButton("Change") { editingHook = hook }.disabled(testingID != nil)
-                NativeSessionButton("Remove", role: .destructive) {
-                    defaults.hooks.removeAll { $0.id == hook.id }
-                    testResults.removeValue(forKey: hook.id)
-                    failedTests.remove(hook.id)
-                    if editingHook?.id == hook.id { editingHook = nil }
-                }.disabled(testingID != nil)
-            }
-            if testingID == hook.id {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text("Waiting for approval or the hook result…").font(.caption).foregroundStyle(.secondary)
-                }.accessibilityAddTraits(.updatesFrequently)
+        let enabled = Binding(get: { defaults.hooks.first(where: { $0.id == hook.id })?.enabled ?? false }, set: { on in
+            if let index = defaults.hooks.firstIndex(where: { $0.id == hook.id }) { defaults.hooks[index].enabled = on }
+        })
+        return VStack(spacing: 0) {
+            DeckSettingsRow(NativeAGSWords.event(hook.event), info: hook.webhook != nil ? "Sends a web request (its address stays hidden)." : "Runs a command (it stays hidden).",
+                            state: testingID == hook.id ? "Testing…" : nil) {
+                HStack(spacing: DeckTokens.Spacing.s8) {
+                    NativeSettingsMoreMenu(label: NativeAGSWords.event(hook.event)) {
+                        Button("Test") { test(hook) }.disabled(testingID != nil || editingHook != nil || !canTest(hook))
+                        Button("Change") { editingHook = hook }.disabled(testingID != nil)
+                        Divider()
+                        Button("Remove", role: .destructive) {
+                            defaults.hooks.removeAll { $0.id == hook.id }
+                            testResults.removeValue(forKey: hook.id)
+                            failedTests.remove(hook.id)
+                            if editingHook?.id == hook.id { editingHook = nil }
+                        }.disabled(testingID != nil)
+                    }
+                    Toggle("On", isOn: enabled).toggleStyle(.switch).controlSize(.small)
+                        .disabled(!AGSCapabilities.appEvents.contains(hook.event) || testingID != nil)
+                }
             }
             if let result = testResults[hook.id] {
-                NativeCodingAINotice(tone: failedTests.contains(hook.id) ? .error : .info, text: result)
+                DeckSettingsProblem(text: result, warn: failedTests.contains(hook.id))
             }
         }
     }
@@ -131,7 +248,6 @@ struct NativeAGSDefaultsEditor: View {
         let redacted = BackendAGSCodec.masking(.string(text), secrets: values).string ?? text
         return String(redacted.prefix(2_000))
     }
-
 }
 
 private struct NativeAGSAppHookEditor: View {

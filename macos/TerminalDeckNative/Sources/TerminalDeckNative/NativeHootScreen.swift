@@ -117,10 +117,16 @@ struct NativeHootScreen: View {
     @State private var chat: NativeHootChatModel
     @Environment(\.nativeScreenActive) private var screenActive
     private let fixtureMode: Bool
-    init(fixture: NativeRPCValue? = nil, phonePanels: [NativeUIGSessionSimulatorController]? = nil, trailing: AnyView? = nil) {
+    /// Hoot's account and lists: the live ones, or the picture's fixed copies.
+    private let brain: ROUTINESHootBrainModel
+    private let lists: HootSharedLists
+    init(fixture: NativeRPCValue? = nil, phonePanels: [NativeUIGSessionSimulatorController]? = nil, trailing: AnyView? = nil,
+         brain: ROUTINESHootBrainModel? = nil, lists: HootSharedLists? = nil) {
         fixturePhonePanels = fixture == nil ? nil : phonePanels
         fixtureTrailing = fixture == nil ? nil : trailing
         fixtureMode = fixture != nil
+        self.brain = brain ?? .shared
+        self.lists = lists ?? .shared
         _chat = State(initialValue: fixture.map { NativeHootChatModel(fixture: $0) } ?? .shared)
     }
     private var local: NativeHootModel? { fixtureMode ? nil : .shared }
@@ -137,7 +143,7 @@ struct NativeHootScreen: View {
             } else {
                 NativeUIGSessionSimulatorHost(session: NativeHootSimulatorOwner.shared, content: {
                     HStack(spacing: 0) {
-                        NativeHootChat(model: chat, notices: notices).frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                        NativeHootChat(model: chat, notices: notices, lists: lists).frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
                         if !fixtureMode { NativeHandoffSide(owner: .hoot); DeployHootPanel() }
                         if let fixtureTrailing { fixtureTrailing }
                     }
@@ -155,6 +161,9 @@ struct NativeHootScreen: View {
         .background(DeckTokens.page)
         .onAppear {
             guard !fixtureMode else { return }
+            // 15 Nov (items 17, 23): Hoot's choices and lists are read as the page opens, never after a click.
+            if brain.loaded { brain.refreshQuietly() } else { brain.load() }
+            lists.load()
             local?.start(); machines?.start()
             local?.readTurnsIfWanted(started: false)
         }
@@ -179,8 +188,13 @@ struct NativeHootScreen: View {
                 if let remote {
                     Text("On \(remote.name)").font(.callout).foregroundStyle(.secondary)
                 } else {
-                    HootStatusLine(state: chat.avatarState, text: chat.status,
-                        action: { if chat.avatarState == .waiting { chat.requestFocus += 1 } else if !fixtureMode { local?.ensure() } })
+                    // 15 Nov (item 20): Hoot's account where the New session page has its account, after a dot.
+                    HStack(spacing: 6) {
+                        HootStatusLine(state: chat.avatarState, text: chat.status,
+                            action: { if chat.avatarState == .waiting { chat.requestFocus += 1 } else if !fixtureMode { local?.ensure() } })
+                        ChipSeparator()
+                        HootAccountChip(brain: brain, lists: lists, live: !fixtureMode)
+                    }
                     if let off = chat.guardOff {
                         // Hoot runs, but the app's guard on its own records is not on; the app keeps trying.
                         Label("Safety guard is off: retrying", systemImage: "exclamationmark.shield")
@@ -197,9 +211,8 @@ struct NativeHootScreen: View {
                 .buttonStyle(.bordered).disabled(remote != nil || chat.busy || chat.sending || chat.changingConversation)
             NativeUIGSessionSimulatorButton(session: NativeHootSimulatorOwner.shared, panels: fixtureMode ? (fixturePhonePanels ?? []) : nil)
                 .disabled(fixtureMode)
-            // Asad (12 Oct): no Handoff button up here; each message has its own (under the message, on hover).
-            // Hoot's quick settings popover (model, effort, permission and more) on the sliders button.
-            HootQuickSettingsButton(live: !fixtureMode)
+            // Asad (12 Oct): no Handoff button up here; each message has its own (under the message).
+            // 15 Nov: no sliders button; permission, model and effort are the pills under the box, the account is in the bar.
             NativePagePopoutButton(ref: ScreenRef(kind: .panel, id: "hoot", isHoot: true), enabled: !fixtureMode)
         }
         .padding(.horizontal, 24).padding(.vertical, 12)

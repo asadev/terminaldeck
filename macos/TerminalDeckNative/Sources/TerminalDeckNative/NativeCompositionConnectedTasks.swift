@@ -27,10 +27,12 @@ extension NativeCompositionProduction {
             changed: { try? await registry.publish(BackendConnectedTasksTools.changedEvent, arguments: [], ownerID: BackendCompositionRoot.appOwnerID) },
             problem: { NSLog("[connected tasks] %@", $0) },
             chooseFiles: { try await NativeCompositionFolderPicker.files().map { URL(fileURLWithPath: $0) } },
-            openURL: { url in await MainActor.run { _ = NSWorkspace.shared.open(url) } })
+            openURL: { url in await MainActor.run { _ = NSWorkspace.shared.open(url) } }) // person-ok: the task popup's own file link (openTaskFile), a click
         var hub: NativeRPCSubscription?
         do {
             try await service.start()
+            // Tasks everywhere: the Cloud's tasks owner and saved passwords reach the connections through this.
+            await MainActor.run { NativeCloudRecordsOwners.connectedTasks = service }
             try await BackendConnectedTasksTools.install(server: mcp, service: service, authority: authority,
                                                          agentID: { name in try await config.agent(name)?["id"].string }, ownerID: owner)
             try await BackendConnectedTasksTools.installAppChannels(registry: registry, service: service, ownerID: owner,

@@ -44,7 +44,7 @@ struct HistoryContentRouting21Tests {
         let hoot = ScreenRef(kind: .panel, id: "hoot", isHoot: true)
         defer { NativePageWindows.shared.closed(hoot) }
         app.buttonActions.ingest(SidebarState(groups: [.init(id: "main", title: nil, items: [
-            .init(id: "hoot", title: "Hoot", kind: .hoot), .init(id: "overview", title: "Overview", kind: .panel)
+            .init(id: "hoot", title: "Hoot", kind: .hoot), .init(id: "tasks", title: "Tasks", kind: .panel)
         ])], projects: [], selectedId: "hoot"))
         app.buttonActions.followNativeSelection("hoot")
         app.applyButtonState()
@@ -52,12 +52,12 @@ struct HistoryContentRouting21Tests {
         app.movePageToWindow(hoot, bringForward: false)
         #expect(app.takePendingScreens() == [hoot])
         #expect(NativePageWindows.shared.keepsCurrentFocus(hoot))
-        #expect(app.currentScreen?.id == "overview")
+        #expect(app.currentScreen?.id == NativeLanding.pageID)
 
         // This rejected request must not take away the usable page left by Hoot.
         let refused = await app.runButtonForTool(.selectTab("missing-history")).value
         #expect(refused == .refused("That session or page is no longer open."))
-        #expect(app.currentScreen?.id == "overview")
+        #expect(app.currentScreen?.id == NativeLanding.pageID)
         #expect(app.buttonActions.problem == nil)
         let id = "11111111-1111-4111-8111-111111111111"
         let wire = NativeRPCValue.object([.init("id", .string(id)), .init("title", .string("Finished lead history")),

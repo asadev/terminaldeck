@@ -307,3 +307,173 @@ struct IOS2ApprovalsHostTests {
         throw NativeRPCError(code: "fixture-timeout", message: "The host did not answer.")
     }
 }
+
+/// 14 Nov phone faults (seen on both test phones against the real Mac): (1) a raw refusal sentence as the Tasks page's
+/// "Independent" section; (2) a project page's Agents card saying "Idle" for a session the session lists call Working.
+@Suite("Phone panel faults 14 Nov")
+struct PhonePanelFaultsTests {
+    static let independent = "/Users/someone/Terminal Deck/Independent"
+    static let grantSentence = "That project is outside this caller's current project grant. Choose a granted folder or ask the owner to grant access."
+    static func reach(_ kind: BackendRemoteDeviceKind, _ folders: [String]) -> BackendRemoteDeviceReach {
+        .init(kind: kind, unrestricted: false, folders: folders, accounts: nil, drivesWindows: false)
+    }
+    static func context(_ kind: BackendRemoteDeviceKind, _ folders: [String]) -> BackendRemoteHostContext {
+        BackendRemoteHostContext(connectionID: UUID(), deviceID: "phone-1", kind: kind, address: "fixture", peerPublicKey: nil,
+            claimedCapabilities: ["panels"], reach: reach(kind, folders), phoneAccess: .full)
+    }
+    static func read(_ panel: String, path: String? = nil, scope: String? = nil) throws -> BackendRemoteClientMessage {
+        var fields: [V.Field] = [.init("t", .string("panel.read")), .init("panel", .string(panel))]
+        if let path { fields.append(.init("path", .string(path))) }
+        if let scope { fields.append(.init("scope", .string(scope))) }
+        guard case .message(let message) = BackendRemoteProtocol.parseClientMessage(.object(fields)) else {
+            throw NativeRPCError(code: "fixture", message: "panel.read refused by the parser")
+        }
+        return message
+    }
+    /// No row, section, note or notice of an answer carries a refusal sentence.
+    fileprivate static func carriesNoRefusal(_ answer: V) -> Bool {
+        let text = String(decoding: (try? answer.encodedJSON()) ?? Data(), as: UTF8.self)
+        return !["outside this caller", "this caller", "not granted", "was not granted", "belongs to an owner-approved", "did not negotiate"]
+            .contains { text.localizedCaseInsensitiveContains($0) }
+    }
+
+    @Test("his own device (as paired: unrestricted, .mine, Full or no level) reads Independent's tasks; nothing else is added")
+    func ownDeviceReadsIndependent() {
+        let home = "/Users/someone"
+        // The reach a real own device gets (BackendRemoteTrustStore.reach): unrestricted, its offered folders.
+        let real = BackendRemoteHostContext(connectionID: UUID(), deviceID: "phone-1", kind: .mine, address: "relay", peerPublicKey: nil,
+            claimedCapabilities: ["panels"], reach: .init(kind: .mine, unrestricted: true, folders: [home, Self.independent], accounts: nil, drivesWindows: true),
+            phoneAccess: nil)
+        #expect(real.reach.unrestricted)
+        for level in [BackendINT2PhoneAccessLevel.full, nil] {
+            let place = BackendINT2PhonePanelScope.defaultTaskFolder(kind: real.kind, level: level, domain: "tasks", defaultFolder: Self.independent)
+            #expect(place == Self.independent)
+            let own = BackendDeckCoreSecurityCaller(kind: .remote, tiers: [.read], deviceID: "phone-1", tasks: true, folders: nil, defaultTaskFolder: place)
+            #expect(BackendCompositionAuthority.defaultTaskPlace(Self.independent, caller: own), "Independent's tasks: read like an open project's")
+            // A session folder such as his home is NOT newly readable, nor anything else beside Independent.
+            #expect(!BackendCompositionAuthority.defaultTaskPlace(home, caller: own))
+            #expect(!BackendCompositionAuthority.defaultTaskPlace(home + "/Projects/Secret", caller: own))
+            #expect(!BackendCompositionAuthority.defaultTaskPlace(home + "/Terminal Deck", caller: own))
+        }
+        // Only Tasks; only his own device at Full; only the Mac's own default folder.
+        for domain in ["goals", "agents", "connected-tasks", "staysfixed", "settings"] {
+            #expect(BackendINT2PhonePanelScope.defaultTaskFolder(kind: .mine, level: .full, domain: domain, defaultFolder: Self.independent) == nil, "\(domain)")
+        }
+        #expect(BackendINT2PhonePanelScope.defaultTaskFolder(kind: .mine, level: .work, domain: "tasks", defaultFolder: Self.independent) == nil, "below Full")
+        #expect(BackendINT2PhonePanelScope.defaultTaskFolder(kind: .mine, level: .look, domain: "tasks", defaultFolder: Self.independent) == nil)
+        #expect(BackendINT2PhonePanelScope.defaultTaskFolder(kind: .guest, level: .full, domain: "tasks", defaultFolder: Self.independent) == nil, "a guest, even at Full")
+        #expect(BackendINT2PhonePanelScope.defaultTaskFolder(kind: .mine, level: .full, domain: "tasks", defaultFolder: nil) == nil, "no default folder offered")
+        let guest = BackendDeckCoreSecurityCaller(kind: .remote, tiers: [.read], deviceID: "guest-1", tasks: true, folders: ["/Projects/Shared", Self.independent])
+        #expect(!BackendCompositionAuthority.defaultTaskPlace(Self.independent, caller: guest), "a guest: the project grant decides, as today")
+        let gone = BackendDeckCoreSecurityCaller(kind: .remote, tiers: [], deviceID: "phone-1", defaultTaskFolder: Self.independent)
+        #expect(!BackendCompositionAuthority.defaultTaskPlace(Self.independent, caller: gone), "access gone: nothing")
+        // App keys, AI sessions and the app itself never carry it, whatever is passed.
+        for kind in [BackendDeckCoreSecurityCaller.Kind.key, .session, .local] {
+            let other = BackendDeckCoreSecurityCaller(kind: kind, tiers: [.read], defaultTaskFolder: Self.independent)
+            #expect(other.defaultTaskFolder == nil && !BackendCompositionAuthority.defaultTaskPlace(Self.independent, caller: other), "\(kind)")
+        }
+    }
+
+    @Test("a guest's refused Tasks read is an empty section: no refusal text, no error") func guestGetsNoSection() async throws {
+        let registry = BackendRemotePanelRegistry()
+        try await registry.register(.tasks, provider: .init(read: { _, _ in throw NativeRPCError(code: "access-denied", message: Self.grantSentence) }))
+        let answer = try await registry.handle(try Self.read("tasks", path: Self.independent), context: Self.context(.guest, ["/Projects/Shared", Self.independent]))
+        #expect(answer.kind == .panelRows)
+        #expect(answer.value["path"].string == Self.independent && answer.value["rows"].elements?.isEmpty == true)
+        #expect(answer.value["note"] == .missing)
+        #expect(Self.carriesNoRefusal(answer.value))
+        // Outside its folders entirely: the same, an empty answer.
+        let outside = try await registry.handle(try Self.read("tasks", path: "/Projects/Other"), context: Self.context(.guest, ["/Projects/Shared"]))
+        #expect(outside.value["rows"].elements?.isEmpty == true && Self.carriesNoRefusal(outside.value))
+        // A failure that is not a refusal still says why (the phone's Try again): a missing tool, a tool's plain failure
+        // (its code kept through the panel door, `panel-failed` when it has none) and an older phone's "did not negotiate".
+        for code in ["panel-unavailable", "panel-failed", "unavailable", "invalid-arguments"] {
+            let broken = BackendRemotePanelRegistry()
+            try await broken.register(.tasks, provider: .init(read: { _, _ in throw NativeRPCError(code: code, message: "The task store could not be read.") }))
+            await #expect(throws: NativeRPCError.self, "\(code)") { _ = try await broken.handle(try Self.read("tasks", path: "/Projects/Shared"), context: Self.context(.guest, ["/Projects/Shared"])) }
+        }
+        #expect(!BackendRemotePanelRegistry.isRefusal(NativeRPCError(code: "panel-failed", message: "x")))
+        #expect(!BackendRemotePanelRegistry.isRefusal(NativeRPCError(code: "unavailable", message: "This device did not negotiate panels.")))
+    }
+
+    @Test("no panel row can carry a refusal sentence: a refused read through every panel builder") func refusalNeverARow() async throws {
+        let refusal = NativeRPCError(code: "access-denied", message: Self.grantSentence)
+        let refusingPort = BackendIOS2PanelPort(call: { _, _, _, _, _ in throw refusal }, level: { _, _ in .full }, device: { _, _, _ in "phone-1" })
+        let registry = BackendRemotePanelRegistry()
+        try await registry.register(.agents, provider: BackendIOS2PhonePanels.agents(port: refusingPort))
+        try await registry.register(.connectedTasks, provider: BackendIOS2PhonePanels.connectedTasks(port: refusingPort))
+        try await registry.register(.docker, provider: BackendIOS2PhonePanels.docker(port: refusingPort))
+        // The INT2 builders (Tasks, Goals, Stays Fixed, Simulators, Settings, Hooks, Servers) and every other domain throw
+        // their tool's refusal as it is; the registry is where each one meets the device.
+        let served: [BackendRemotePanelRegistry.Domain] = [.agents, .connectedTasks, .docker]
+        let projectPages: [BackendRemotePanelRegistry.Domain] = [.tasks, .goals, .staysfixed, .artifacts, .memory, .github]
+        for domain in BackendRemotePanelRegistry.Domain.allCases where !served.contains(domain) {
+            try await registry.register(domain, provider: .init(scope: projectPages.contains(domain) ? .project : .machine,
+                read: { _, _ in throw refusal }))
+        }
+        let mine = Self.context(.mine, ["/Projects/Deck", Self.independent])
+        for domain in BackendRemotePanelRegistry.Domain.allCases {
+            for scope in [nil, "agent:critic", "org", "pile:all", "server:local", "container:local|abc"] {
+                let answer = try await registry.handle(try Self.read(domain.rawValue, path: Self.independent, scope: scope), context: mine)
+                #expect(answer.kind == .panelRows, "\(domain.rawValue) \(scope ?? "-")")
+                #expect(answer.value["rows"].elements?.isEmpty == true, "\(domain.rawValue) \(scope ?? "-")")
+                #expect(Self.carriesNoRefusal(answer.value), "\(domain.rawValue) \(scope ?? "-")")
+            }
+        }
+        // A machine page for a guest: nothing, not "belongs to an owner-approved device".
+        let guest = try await registry.handle(try Self.read("agents"), context: Self.context(.guest, ["/Projects/Shared"]))
+        #expect(guest.value["rows"].elements?.isEmpty == true && Self.carriesNoRefusal(guest.value))
+    }
+
+    @Test("one refused part of a page is left out; the rest stays") func refusedPartLeftOut() async throws {
+        // Connected tasks: two systems, the second refused. Only the first's tasks; no sentence about the second.
+        let tasksPort = BackendIOS2PanelPort(call: { tool, args, _, _, _ in
+            switch tool {
+            case "connected_tasks.systems":
+                return json(#"{"systems":[{"id":"a","name":"Alpha"},{"id":"b","name":"Beta"}]}"#)
+            case "connected_tasks.list":
+                if args["system"].string == "b" { throw NativeRPCError(code: "not-granted", message: "That system is outside this caller's grant.") }
+                return json(#"{"readAt":1,"tasks":[{"id":"t1","title":"Ship it"}]}"#)
+            default: return .null
+            }
+        }, level: { _, _ in .full }, device: { _, _, _ in "phone-1" })
+        let tasks = try await BackendIOS2PhonePanels.connectedTasks(port: tasksPort).read(.init(path: "", scope: nil, query: nil), rpc)
+        #expect(titles(tasks) == ["Ship it"])
+        #expect(Self.carriesNoRefusal(tasks))
+        // Docker: a container whose logs are refused has no Recent logs section at all.
+        let dockerPort = BackendIOS2PanelPort(call: { tool, _, _, _, _ in
+            switch tool {
+            case "servers.look": return json(#"{"servers":[]}"#)
+            case "docker.containers.inspect": return json(#"{"id":"abc","name":"web","image":"nginx"}"#)
+            case "docker.logs": throw NativeRPCError(code: "access-denied", message: "Logs are outside this caller's grant.")
+            default: return .null
+            }
+        }, level: { _, _ in .full }, device: { _, _, _ in "phone-1" })
+        let container = try await BackendIOS2PhonePanels.docker(port: dockerPort).read(.init(path: "", scope: "container:local|abc", query: nil), rpc)
+        #expect(titles(container) == ["web"])
+        #expect(Self.carriesNoRefusal(container))
+    }
+
+    @Test("the project page's Agents card and the Agents panel give one state for one session, own device and guest") func oneStatePerSession() async throws {
+        // Both phone screens read the same Mac panel (`panel.read agents`, no view): the project page filters its rows by
+        // project, the Agents page shows them all. The same answer, so the same state; a fresh push keeps the card
+        // from holding an old one (BackendRemoteHost.agentsChanged; PhoneStartAsksTests.agentsChangedResendsReadLists).
+        let working = json(#"""
+        {"agents":[{"id":"session:s1","kind":"session","name":"Deck Dev session","project":"/Projects/Deck","projectName":"Deck Dev","statusLabel":"Working","live":"working"},
+                   {"id":"builder","kind":"profile","name":"Builder","project":"/Projects/Deck","projectName":"Deck Dev","statusLabel":"Working","live":"working"}],
+         "groups":[{"title":"Deck Dev","folder":"/Projects/Deck","agents":["session:s1","builder"]}],"notices":[]}
+        """#)
+        let port = BackendIOS2PanelPort(call: { _, _, _, _, _ in working }, level: { _, _ in .full }, device: { _, _, _ in "phone-1" })
+        let registry = BackendRemotePanelRegistry()
+        try await registry.register(.agents, provider: BackendIOS2PhonePanels.agents(port: port))
+        let own = Self.context(.mine, ["/Projects/Deck"])
+        let agentsPage = try await registry.handle(try Self.read("agents"), context: own).value
+        let projectCard = (agentsPage["rows"].elements ?? []).filter { $0["group"].string == "Deck Dev" }
+        let states = { (rows: [V]) in rows.map { [$0["id"].string ?? "", $0["value"].string ?? "", $0["status"].string ?? ""] } }
+        #expect(states(projectCard) == [["session:s1", "Working", "ok"], ["builder", "Working", "ok"]])
+        #expect(states(projectCard) == states((agentsPage["rows"].elements ?? []).filter { $0["group"].string == "Deck Dev" }))
+        // A guest: no Agents panel either way (a machine page), so no second state; nothing said.
+        let guest = try await registry.handle(try Self.read("agents"), context: Self.context(.guest, ["/Projects/Deck"])).value
+        #expect(guest["rows"].elements?.isEmpty == true && Self.carriesNoRefusal(guest))
+    }
+}

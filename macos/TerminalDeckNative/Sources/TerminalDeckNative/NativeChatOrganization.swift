@@ -36,32 +36,38 @@ struct NativeChatOrganizationMenu: View {
 struct NativeChatArchivedRows: View {
     let state: SidebarState
     let open: (String?) -> Void
+    /// A page waiting for the person in one of these chats (MAC-NEXT-13 B1): the hand sits on the group's header, so it
+    /// shows while the group is folded; its own click opens that page.
+    var waiting: String? = nil
     var body: some View {
         if !NativeChatArchives.shared.ids.isEmpty {
-            DisclosureGroup("Archived chats (\(NativeChatArchives.shared.ids.count))") {
+            DisclosureGroup {
                 ForEach(NativeChatArchives.shared.ids, id: \.self) { id in
                     HStack {
                         if let row = state.item(id: id) {
-                            let identity = NativeSessionRowIdentity(id: id, chat: true)
+                            // A session row: the chat icon and its name (Asad, 15 Nov; DESIGN-SESSION-ROWS).
                             Button { open(id) } label: {
-                                HStack(spacing: 10) {
-                                    identity.picture(surface: DeckTokens.frame)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(row.title).lineLimit(1)
-                                        if let subtitle = identity.subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary) }
-                                    }
+                                HStack(spacing: 8) {
+                                    SIDEBARSessionTypeIcon(chat: true)
+                                    Text(row.title).lineLimit(1).truncationMode(.tail)
                                 }
                             }.buttonStyle(.plain)
                         }
                         else {
-                            HStack(spacing: 10) {
-                                NativeSessionRowIdentity(id: id, chat: true).picture(surface: DeckTokens.frame)
+                            HStack(spacing: 8) {
+                                SIDEBARSessionTypeIcon(chat: true)
                                 Text("Chat not currently open").font(.caption).foregroundStyle(.secondary)
                             }
                         }
                         Spacer(minLength: 4)
                         Button("Restore") { NativeChatArchives.shared.set(id, archived: false) }.buttonStyle(.link).font(.caption)
                     }.padding(.vertical, 4)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Archived chats (\(NativeChatArchives.shared.ids.count))")
+                    Spacer(minLength: 0)
+                    if let waiting { SIDEBARWaitingHand(page: waiting) }
                 }
             }.font(.callout)
         }

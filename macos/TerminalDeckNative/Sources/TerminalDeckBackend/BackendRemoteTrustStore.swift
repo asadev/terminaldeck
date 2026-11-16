@@ -71,6 +71,14 @@ public actor BackendRemoteTrustStore {
     var kinds: [String: KindRecord] = [:]
     var windowAllowed: Set<String> = [], windowDenied: Set<String> = []
     var phoneAccessLevels: [String: BackendINT2PhoneAccessLevel] = [:]
+    /// Reach by account (R2): devices of this Mac's account admitted by the sealed handshake and the reach gate, by
+    /// their host id (`reach-<deviceId>`, never a minted pairing id). In memory only, never in remote-auth.json; the
+    /// pairing roster, its credentials and its approvals are not touched. Full access, as the person's own device.
+    var reachAdmitted: [String: BackendRemoteDevice] = [:]
+    /// Reach by account ON for this Mac (switch on, signed in, entitled): no pairing code can be made.
+    var pairingLockedByReach = false
+    public func setPairingLockedByReach(_ on: Bool) { pairingLockedByReach = on; if on { cancelPairing() } }
+    public func pairingLocked() -> Bool { pairingLockedByReach }
     private var changeObservers: [UUID: @Sendable () -> Void] = [:]
     public var onChanged: (@Sendable () -> Void)?
 
@@ -95,11 +103,24 @@ public actor BackendRemoteTrustStore {
             identity = loaded; lease = held
         } catch { throw error }
     }
-    public func close() { localWebPairing.cancel(); cancelPairing(); lease = nil; identity = nil; devices = []; attempts = [:]; decoySalt = Data(); phoneAccessLevels = [:] }
+    public func close() { localWebPairing.cancel(); cancelPairing(); lease = nil; identity = nil; devices = []; attempts = [:]; decoySalt = Data(); phoneAccessLevels = [:]; reachAdmitted = [:] }
     public func hostIdentity() throws -> BackendRemoteHostIdentity { try requireOpen(); guard let identity else { throw BackendRemoteTrustFailure.closed }; return identity }
     public func listDevices() -> [BackendRemoteDevice] { devices.map(\.publicDevice) }
     public func device(_ id: String) -> BackendRemoteDevice? { devices.first { $0.id == id }?.publicDevice }
-    public func isApproved(_ id: String) -> Bool { devices.contains { $0.id == id && $0.approved && !$0.revoked } }
+    public func isApproved(_ id: String) -> Bool { devices.contains { $0.id == id && $0.approved && !$0.revoked } || reachAdmitted[id] != nil }
+    /// Reach by account: the session host calls this only for a hello on a wire whose sealed handshake the reach
+    /// door admitted (`BackendRemoteHostWire.reach`).
+    public func admitReachDevice(_ admission: BackendReachAdmission) -> BackendRemoteDevice {
+        let device = BackendRemoteDevice(id: admission.hostDeviceId, name: admission.label, addedAt: clock(), lastSeenAt: clock(),
+                                         approved: true, revoked: false, fingerprint: nil, platform: admission.platform)
+        reachAdmitted[device.id] = device
+        return device
+    }
+    /// Removed, switched off or signed out: nil forgets every reach device.
+    public func forgetReachDevice(_ hostDeviceId: String?) {
+        if let hostDeviceId { reachAdmitted[hostDeviceId] = nil } else { reachAdmitted = [:] }
+    }
+    public func isReachDevice(_ id: String) -> Bool { reachAdmitted[id] != nil }
     public func handshakePolicy() -> (knownKeys: Set<Data>, permitUnknown: Bool) {
         (Set(devices.filter { !$0.revoked }.compactMap(\.key)), pairingOpen())
     }
@@ -141,6 +162,8 @@ public actor BackendRemoteTrustStore {
 
     public func createPairingOffer() throws -> BackendRemotePairingOffer {
         try requireOpen()
+        // Reach by account ON for this Mac: no pairing codes (owner, 13 Nov). Off (the default): unchanged.
+        guard !pairingLockedByReach else { throw BackendRemoteTrustFailure.denied(BackendReachPairingLock.refusal) }
         let now = clock()
         tokens.removeAll { now >= $0.expiresAt }
         while tokens.count >= 16 { tokens.removeFirst() }
@@ -284,11 +307,25 @@ public actor BackendRemoteTrustStore {
               trimmed.lowercased() != "unknown", !trimmed.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
         return trimmed
     }
+    /// `quietBefore` (14 Nov, the 30-day clean-up, `BackendRemoteStaleDevices`): only when the device has not been
+    /// seen after that time. Checked here, in the same actor turn as the removal, so a device whose connection was
+    /// verified after the clean-up's snapshot (`verify` sets `lastSeenAt` first) is never removed. Nil: always.
     @discardableResult
-    public func revoke(_ id: String) throws -> Bool {
+    public func revoke(_ id: String, quietBefore: Double? = nil) throws -> Bool {
         try requireOpen()
         guard let index = devices.firstIndex(where: { $0.id == id }), !devices[index].revoked else { return false }
+        if let quietBefore, let seen = devices[index].lastSeenAt, seen > quietBefore { return false }
         var next = devices; next[index].revoked = true; try commit(next); clearFailures(["device:" + id]); return true
+    }
+    /// The 30-day clean-up's first step (14 Nov): the devices connected right now were seen now, saved, so a device
+    /// that stays connected for weeks never looks old after an app restart.
+    public func noteSeen(_ ids: Set<String>, at now: Double) throws {
+        try requireOpen()
+        var next = devices, changed = false
+        for index in next.indices where ids.contains(next[index].id) && !next[index].revoked && (next[index].lastSeenAt ?? -Double.infinity) < now {
+            next[index].lastSeenAt = now; changed = true
+        }
+        if changed { try persist(next); devices = next }
     }
     func requireOpen() throws { guard lease != nil else { throw BackendRemoteTrustFailure.closed } }
     private func makeCredential(_ secret: Data, salt: Data) async throws -> Credential {

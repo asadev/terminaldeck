@@ -158,6 +158,27 @@ struct HootComposerDraft: Equatable, Sendable, Codable {
     }
 }
 
+/// 15 Nov (DESIGN 7, DESIGN-FIXES H-4): the permission, model and effort under the box are pills, never bare grey words:
+/// 12 pt secondary text (plus a small chevron where it opens a menu) on a capsule of the grouped-row fill, 24 pt high.
+/// The New session page and every chat (Hoot's included) draw them through this one modifier.
+struct ComposerMetaPill: ViewModifier {
+    var on: Bool
+    var menu = true
+    func body(content: Content) -> some View {
+        if on {
+            HStack(spacing: 4) {
+                content
+                if menu { Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) }
+            }
+            .padding(.horizontal, 10).frame(height: 24)
+            .background(DeckSettingsLook.groupFill, in: Capsule())
+            .contentShape(Capsule())
+        } else {
+            content
+        }
+    }
+}
+
 /// Floating chat control. Mount over the conversation with a bottom inset of
 /// composer height +24; the host supplies data/actions and owns sending errors.
 struct HootComposer: View {
@@ -208,6 +229,28 @@ struct HootComposer: View {
     var onExpandLongPrompt: (() -> Void)? = nil
     /// Fixed activity belongs to the same message surface, so it adds no gap above the box.
     var status: AnyView? = nil
+    /// The New session page: the box takes the keyboard only for a new ticket (launch, or the person asking for a new
+    /// session), never because it was drawn again. Nil everywhere else (`focusWhenShown` rules there).
+    var keyboardClaim: HootComposerKeyboardClaim? = nil
+    /// The box's accessibility identifier, when its owner needs to find it ("landing.box").
+    var boxIdentifier: String? = nil
+    /// The quiet line's "Before it changes files" menu; off for an AI that has no such mode (a plain shell, an added CLI).
+    var showsPermission = true
+    /// In place of the model and effort menus: what will run, as it is, not a choice here (a project agent's own model
+    /// and effort on the New session page), with who set it as the help text.
+    var fixedMeta: (text: String, help: String)? = nil
+    /// The owner's own word on whether a send would really go (the New session page: words in the box; a file alone is
+    /// not enough), asked with the box as it is AT THE PRESS (Return or the arrow), never a value from the last draw:
+    /// a Return typed before the page draws again still sends. The arrow's look follows the draw. Nil everywhere else
+    /// (the draft decides).
+    var sendAllowed: ((HootComposerDraft) -> Bool)? = nil
+    /// The "Before it changes files" mode shown as plain words, not a menu, with why as the help text (the New session
+    /// page while the running session host cannot start a session in a chosen mode). Nil everywhere else.
+    var fixedPermissionHelp: String? = nil
+    /// The modes the permission menu lists (the AI's own, `NewSessionPermissionModes`); nil: all four.
+    var permissionModes: [HootPermissionMode]? = nil
+    /// A risky mode asks first in an open chat; the New session page (nothing runs yet, Bypass is its default) does not.
+    var confirmsRiskyPermission = true
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.agkitOffscreenSolid) private var offscreenSolid
     @Environment(\.nativeScreenActive) private var screenActive
@@ -268,7 +311,8 @@ struct HootComposer: View {
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         } else {
                         HootComposerEditor(draft: $draft, ownerID: ownerID, focusWhenShown: focusWhenShown,
-                                           selected: layoutSelected ?? true, handle: editor, onReturn: returnPressed,
+                                           selected: layoutSelected ?? true, handle: editor, claim: keyboardClaim,
+                                           identifier: boxIdentifier, onReturn: returnPressed,
                                            onFiles: addFiles, onMentionQuery: { mentionQuery = $0 },
                                            mentionNames: { DeckMentionRows.names(for: catalogue.mentions) }, onRecall: onRecall)
                             .id(ownerID)
@@ -437,21 +481,39 @@ struct HootComposer: View {
     /// Short choices, like Claude's own pickers; the explanation is only a tooltip.
     private var metadata: some View {
         HStack {
-            Menu {
-                ForEach(HootPermissionMode.allCases, id: \.self) { mode in
-                    NativeSessionButton { if mode.risky { riskyMode = mode; confirmChanges = true } else { setPermission(mode) } } label: {
-                        choice(mode.short, draft.permissionMode == mode)
-                    }.help(mode.hint)
+            if showsPermission, let fixedPermissionHelp {
+                Text(plainMeta ? draft.permissionMode.fullName : draft.permissionMode.short).lineLimit(1)
+                    .modifier(ComposerMetaPill(on: plainMeta, menu: false))
+                    .frame(minHeight: 28)
+                    .help(fixedPermissionHelp)
+                    .accessibilityLabel(draft.permissionMode.fullName).accessibilityHint(fixedPermissionHelp)
+                    .accessibilityIdentifier("composer.fixed-permission")
+            } else if showsPermission {
+                Menu {
+                    ForEach(permissionModes ?? HootPermissionMode.allCases, id: \.self) { mode in
+                        NativeSessionButton { if mode.risky && confirmsRiskyPermission { riskyMode = mode; confirmChanges = true } else { setPermission(mode) } } label: {
+                            choice(plainMeta ? mode.fullName : mode.short, draft.permissionMode == mode)
+                        }.help(mode.hint)
+                    }
+                } label: {
+                    if plainMeta { Text(draft.permissionMode.fullName).lineLimit(1).modifier(ComposerMetaPill(on: true)) }
+                    else { HStack(spacing: 3) { Label(draft.permissionMode.short, systemImage: "shield"); chevron } }
                 }
-            } label: {
-                if plainMeta { Text(draft.permissionMode.fullName).lineLimit(1) }
-                else { HStack(spacing: 3) { Label(draft.permissionMode.short, systemImage: "shield"); chevron } }
+                .help(draft.permissionMode.hint)
+                .frame(minHeight: 28).contentShape(.rect)
             }
-            .help(draft.permissionMode.hint)
-            .frame(minHeight: 28).contentShape(.rect)
             Spacer(minLength: 8)
+            if let fixedMeta {
+                Text(fixedMeta.text).lineLimit(2).multilineTextAlignment(.trailing)
+                    .modifier(ComposerMetaPill(on: plainMeta, menu: false))
+                    .frame(minHeight: 28)
+                    .help(fixedMeta.help)
+                    .accessibilityLabel(fixedMeta.text).accessibilityHint(fixedMeta.help)
+                    .accessibilityIdentifier("composer.fixed-meta")
+            }
             // Two short buttons, like Claude's "Fable 5.1  Extra": the model, then the effort.
-            if !catalogue.models.isEmpty || !catalogue.featured.isEmpty {
+            // 15 Nov (DESIGN-FIXES H-4): the model pill always shows once the model is known, also before any list is read.
+            else if !catalogue.models.isEmpty || !catalogue.featured.isEmpty || (plainMeta && !draft.modelID.isEmpty) {
                 Menu {
                     // Every installed AI's live list, grouped; nothing added on his behalf, no error row.
                     if catalogue.sections.isEmpty {
@@ -468,11 +530,11 @@ struct HootComposer: View {
                             }
                         }
                     }
-                } label: { Text(shortModel).lineLimit(1) }  // no arrow (Asad 10 Oct)
+                } label: { Text(shortModel).lineLimit(1).modifier(ComposerMetaPill(on: plainMeta)) }  // no arrow (Asad 10 Oct)
                 .help(selectedModel)
                 .frame(minHeight: 28).contentShape(.rect)
             }
-            if !catalogue.efforts.isEmpty, !draft.effort.isEmpty {
+            if fixedMeta == nil, !catalogue.efforts.isEmpty, !draft.effort.isEmpty {
                 NativeSessionButton { showEffort.toggle() } label: {
                     HStack(spacing: 3) {
                         // As wide as the widest level, so the popover never moves while dragging.
@@ -480,7 +542,7 @@ struct HootComposer: View {
                             ForEach(catalogue.efforts, id: \.self) { Text(effortWord($0)).hidden() }
                             Text(effortWord(draft.effort))
                         }.lineLimit(1)
-                    }
+                    }.modifier(ComposerMetaPill(on: plainMeta))
                 }
                 .help("Effort")
                 .frame(minHeight: 28).contentShape(.rect)
@@ -506,7 +568,8 @@ struct HootComposer: View {
         let id = catalogue.resolved[draft.modelID] ?? draft.modelID
         guard let model = (catalogue.featured + catalogue.more + catalogue.models).first(where: { $0.id == id }) else {
             let alias = draft.modelID.split(separator: ":").last.map(String.init) ?? ""
-            return alias.isEmpty ? "Choose a model" : alias.replacingOccurrences(of: "[1m]", with: "").capitalized
+            // "claude-fable-5-2" reads "Fable 5.2" until a list names it (never the raw id).
+            return alias.isEmpty ? "Choose a model" : ROUTINESHootBrainModel.readableModel(alias)
         }
         if model.name == model.id.split(separator: ":").last.map(String.init) {
             return model.name.replacingOccurrences(of: "[1m]", with: "").capitalized   // an alias with no live match
@@ -654,6 +717,7 @@ struct HootComposer: View {
         if !enabled || stopping { return true }
         if primaryAction == .stop { return !canStop }
         return (busy && !allowsSteering) || voice.starting || voice.finishing || (!draft.canSend && !voice.recording)
+            || (sendAllowed.map { !$0(draft) } == true && !voice.recording)
     }
     private var primaryControl: some View {
         NativeSessionButton { if primaryAction == .stop { onStop() } else { submit() } } label: {
@@ -674,10 +738,16 @@ struct HootComposer: View {
         }
     }
     private func sendDraft() {
-        guard inputRule.acceptsFocus, draft.canSend, (!busy || allowsSteering), !voice.starting, !voice.finishing else { return }
+        guard inputRule.acceptsFocus, draft.canSend, sendAllowed?(draft) ?? true, (!busy || allowsSteering), !voice.starting, !voice.finishing else { return }
         do { try attachmentLimits?.validateFiles(draft.attachments.map(\.url)); onSend(draft) }
         catch { notice = error.localizedDescription }
     }
+}
+
+/// The New session page's keyboard rule for the box: `take` answers true once per `ticket` (NativeLandingFocus).
+struct HootComposerKeyboardClaim {
+    let ticket: Int
+    let take: @MainActor () -> Bool
 }
 
 /// What an owner's + panel can ask of the box.
@@ -799,6 +869,9 @@ private struct HootComposerEditor: NSViewRepresentable {
     let focusWhenShown: Bool
     let selected: Bool
     let handle: HootComposerEditorHandle
+    /// The New session page's ticket: claimed once, when the box is in a window (see HootComposerKeyboardClaim).
+    var claim: HootComposerKeyboardClaim? = nil
+    var identifier: String? = nil
     let onReturn: () -> Void
     let onFiles: ([URL]) -> Void
     let onMentionQuery: (String?) -> Void
@@ -826,10 +899,11 @@ private struct HootComposerEditor: NSViewRepresentable {
         text.textContainer?.widthTracksTextView = true; text.textContainer?.lineFragmentPadding = 0
         text.delegate = context.coordinator; text.onFiles = onFiles
         context.coordinator.text = text
-        text.onWindowAttachment = { [weak coordinator = context.coordinator] in coordinator?.updateFocus() }
+        text.onWindowAttachment = { [weak coordinator = context.coordinator] in coordinator?.updateFocus(); coordinator?.claimIfAsked() }
         text.onInputAvailabilityChanged = { [weak coordinator = context.coordinator] in coordinator?.updateFocus() }
         scroll.documentView = text; handle.textView = text
         text.setAccessibilityLabel("Message to Hoot")
+        if let identifier { text.setAccessibilityIdentifier(identifier); text.setAccessibilityLabel("First message") }
         updateNSView(scroll, context: context)
         return scroll
     }
@@ -872,6 +946,8 @@ private struct HootComposerEditor: NSViewRepresentable {
         context.coordinator.lastRenderedDraft = draft.text
         context.coordinator.resize(text)
         context.coordinator.updateFocus()
+        _ = claim?.ticket // a new ticket redraws the box, which then claims the keyboard once
+        context.coordinator.claimIfAsked()
     }
     @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: HootComposerEditor
@@ -945,6 +1021,11 @@ private struct HootComposerEditor: NSViewRepresentable {
                 } else if NativeKeyboardFocus.isTyping(current) { return }
             }
             if window.makeFirstResponder(text) { pendingFocus = false }
+        }
+        /// The New session page's box: takes the keyboard once per ticket, only once it is in a window and may type.
+        func claimIfAsked() {
+            guard let claim = parent.claim, let text, let window = text.window, text.inputRule.acceptsFocus, claim.take() else { return }
+            window.makeFirstResponder(text)
         }
         func raw(_ text: NSTextView) -> String { HootComposerEditor.raw(text) }
         func textDidChange(_ notification: Notification) {

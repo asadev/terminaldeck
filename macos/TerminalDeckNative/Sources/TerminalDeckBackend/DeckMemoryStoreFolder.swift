@@ -62,10 +62,23 @@ extension DeckMemoryStore {
         let relevant = paths.filter { path in
             guard path.hasPrefix(base + "/") else { return path == base }
             let relative = String(path.dropFirst(base.count + 1))
-            return !relative.hasPrefix("memory.db") && !relative.hasPrefix("archive/versions/") && !relative.hasPrefix("archive/backups/")
+            return !relative.hasPrefix("memory.db") && (cloudMemoryEnabled ? !DeckMemoryCloudSchema.isLocalDatabaseBackup(relative)
+                                                                              : (!relative.hasPrefix("archive/versions/") && !relative.hasPrefix("archive/backups/")))
                 && !relative.split(separator: "/").contains { $0.hasPrefix(".") }
         }
         guard rescan || !relevant.isEmpty else { return }
+        if cloudMemoryEnabled {
+            do {
+                let relative = relevant.filter { $0.hasPrefix(base + "/") }.map { String($0.dropFirst(base.count + 1)) }
+                // Known paths are captured now; a rescan only marks the folder dirty for the bounded reconcile (finding 12).
+                try cloudCaptureChangedFiles(force: true, paths: rescan || relevant.contains(base) ? nil : relative)
+                hub.post(.init(area: .folder, at: now()))
+            } catch { try? db.run("INSERT OR REPLACE INTO cloud_memory_control(key,value) VALUES ('captureProblem','capture_failed')") }
+        }
+        // M9: the paths were just captured (or the folder marked for the bounded reconcile); the reindex's own notices
+        // must not send the whole seat folder round again.
+        if cloudMemoryEnabled { cloudCaptureFromWatcher = true }
+        defer { cloudCaptureFromWatcher = false }
         if relevant.contains(base) { _ = try? reindexNow(); kickEmbedding(); return }
         if rescan { _ = try? reindexNow() }
         else {
@@ -273,10 +286,12 @@ extension DeckMemoryStore {
             if !existed { try? files.removeItem(at: to) }
             else { for name in (try? files.contentsOfDirectory(atPath: to.path)) ?? [] { try? files.removeItem(at: to.appendingPathComponent(name)) } }
             try reopen(from)
+            cloudReattachAfterReopen()
             startWatching(); kickEmbedding()
             throw (error as? DeckMemoryError) ?? DeckMemoryError(.moveFailed, "The memory folder could not be moved, so nothing was changed: \(error.localizedDescription)")
         }
         root = to
+        cloudReattachAfterReopen()
         if let dataRoot {
             var previous = DeckMemoryPaths.readPointer(dataRoot: dataRoot)?.previous ?? []
             previous.removeAll { $0 == from.path || $0 == to.path }
@@ -409,6 +424,8 @@ extension DeckMemoryStore {
                 try files.createDirectory(at: url(moved).deletingLastPathComponent(), withIntermediateDirectories: true)
                 try files.moveItem(at: url(path), to: url(moved))
             } catch { throw DeckMemoryError(.io, "A note could not be moved to the parent seat: \(error.localizedDescription)") }
+            // Delete rule (decision 1): the app's own move travels as a move, never as a hand delete.
+            try cloudRecordMemoryMove(from: path, to: moved)
             try indexNote(path: moved, pathOwner: target, archivedByPath: archived, text: nil)
             if archived { try db.run("UPDATE notes SET origin_path = ? WHERE id = ?", [.text(target.notesFolder + "/" + rest), .text(row.text(0))]) }
             report.notes += 1
@@ -425,6 +442,7 @@ extension DeckMemoryStore {
                 try files.createDirectory(at: url(moved).deletingLastPathComponent(), withIntermediateDirectories: true)
                 try files.moveItem(at: url(path), to: url(moved))
             } catch { throw DeckMemoryError(.io, "A topic could not be moved to the parent seat: \(error.localizedDescription)") }
+            try cloudRecordMemoryMove(from: path, to: moved)
             try db.run("UPDATE topics SET missing = 1, path = path || '#folded' WHERE owner = ? AND id = ?", [.text(helper.key), .text(id)])
             try removeSearch(kind: .topic, ref: helper.key + "/" + id)
             try indexTopic(path: moved, owner: target, id: movedID, text: nil)
@@ -438,6 +456,9 @@ extension DeckMemoryStore {
             while files.fileExists(atPath: url(destination).path) { counter += 1; destination = "archive/" + source + ".\(counter)" }
             try? files.createDirectory(at: url(destination).deletingLastPathComponent(), withIntermediateDirectories: true)
             try? files.moveItem(at: url(source), to: url(destination))
+            if !files.fileExists(atPath: url(source).path), files.fileExists(atPath: url(destination).path) {
+                try cloudRecordMemoryMove(from: source, to: destination)
+            }
             try db.run("UPDATE files SET missing = 1 WHERE path = ?", [.text(source)])
         }
         try? removeSearch(kind: .card, ref: helper.key)

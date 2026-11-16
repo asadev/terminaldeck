@@ -17,6 +17,10 @@ extension NativeCompositionProduction {
         let changes = BackendCompositionChangeHub()
         let store = BackendTaskStore(persistence: persistence, writeDelay: 1_000, changed: { await changes.fire() })
         let config = try BackendTaskConfiguration(persistence: persistence, secrets: BackendConnectedTasksKeychain(appName: configuration.appName), changed: { await changes.fire() })
+        // Cloud (lane A's wiring, lean item 7): a reference to this one task configuration for lane A2's agents row.
+        // Nothing is read through it unless an account is built with that row switched on.
+        NativeCloudRecordsOwners.roster = config
+        NativeCloudRecordsOwners.taskStore = store
         let goals = BackendGoalStore(persistence: persistence, changed: { await changes.fire() })
         await installToolUseRestrictions(store: store, config: config)
         try await store.start(); try await config.start(); try await goals.start()
@@ -488,6 +492,14 @@ extension NativeCompositionProduction {
                     return ((try? await BackendPROJRegistry.installed?.projects()) ?? []).contains { $0.lead == "agent:" + worker.agentID }
                 }
                 return false
+            }, deleteActor: { [sessions, store] native in
+                // Delete rule (L6 edit 3): a task or agent deleted by an AI carries this Mac, the session's and agent's
+                // NAMES and one group per call.
+                let session = sessions.manager.list().first { $0.id == native.sessionID }
+                var agent = session?.profileName
+                if agent == nil, !native.sessionID.isEmpty, let worker = try await store.bySession(native.sessionID) { agent = worker.agentID == "hoot" ? "Hoot" : nil }
+                return try await BackendCloudDeleteDoor.aiActor(names: .init(session: session?.title, agent: agent ?? (native.sessionID.isEmpty ? "Hoot" : nil)),
+                                                                door: NativeCloudDeleteToolDoor.live())
             })
         let dependencies = try wired(suppliers, "suppliers").taskDependencies(keyViews: { [core] in await core.keys.list() }, makeCRMKey: { [core] name in
             // A key must name its level (the store refuses one without); a CRM key never opens the MCP doors, and

@@ -17,23 +17,7 @@ final class DevicesWindowRenderTests: XCTestCase {
             try MACHINESHiddenRender.render(MACHINESDevicesScreen(model: remote, fixture: true), dark: dark,
                 size: CGSize(width: 680, height: 440), to: out.appendingPathComponent("MACHINES-devices-window-680-\(dark ? "dark" : "light").png"))
         }
-        XCTAssertEqual(DevicesWindow.sceneID, "devices")
-    }
-
-    /// Device access off: the line under Open web version says the click turns it on (review install-24 S1).
-    @MainActor func testOpenWebVersionSaysItTurnsDeviceAccessOn() throws {
-        let off = RemoteSectionModel()
-        off.setRenderFixture(state: RemoteState(running: false, devices: [
-            RemoteDevice(id: "fixture-phone", name: "Asad’s iPhone", state: .approved, addedAt: Date().timeIntervalSince1970 * 1000 - 86_400_000),
-        ]))
-        XCTAssertEqual(MACHINESDevicesScreen.webAccessNote, "Open web version also turns on device access for this Mac.")
-        guard let dir = ProcessInfo.processInfo.environment["TD_DEVICES_WINDOW_FRAMES"] else { return }
-        let out = URL(fileURLWithPath: dir)
-        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
-        for dark in [false, true] {
-            try MACHINESHiddenRender.render(MACHINESDevicesScreen(model: off, fixture: true), dark: dark,
-                size: CGSize(width: 760, height: 560), to: out.appendingPathComponent("MACHINES-devices-window-access-off-\(dark ? "dark" : "light").png"))
-        }
+        XCTAssertEqual(NativeSettingsNavigation.devicesID, "devices") // no Devices window: Settings → Devices (14 Nov)
     }
 
     /// Review install-24 follow-up: a server's address link (`terminaldeck://server?…`, what a phone pastes under Add a
@@ -58,12 +42,12 @@ final class DevicesWindowRenderTests: XCTestCase {
                     to: out.appendingPathComponent("MACHINES-servers-address-link-\(dark ? "dark" : "light").png"))
             }
         }
-        XCTAssertEqual(SHELLRoutes.resolve("overview"), "overview")
+        XCTAssertEqual(SHELLRoutes.resolve("tasks"), "tasks")
         XCTAssertFalse(SHELLRoutes.asked(SHELLRoutes.serverAddressAction), "another place ends the line")
     }
 
-    /// Review install-24 S5: a phone pairing link clicked on this Mac opens Devices › Pair a device instead of vanishing.
-    @MainActor func testPhonePairingLinkGoesToPairADevice() {
+    /// Review install-24 S5: an old phone link clicked on this Mac is recognised (it opens the Devices window, nothing more).
+    @MainActor func testOldPhoneLinkIsRecognised() {
         XCTAssertTrue(NativeWidgetNavigation.isPairingLink(URL(string: "terminaldeck://pair?v=1&r=wss://example.invalid&h=fixture&t=123456")!))
         XCTAssertTrue(NativeWidgetNavigation.isPairingLink(URL(string: "terminaldeck://pair?x=y")!))
         XCTAssertFalse(NativeWidgetNavigation.isPairingLink(URL(string: "terminaldeck://session/abc")!))

@@ -34,4 +34,6 @@ public enum NativeLaunchSwitches {
     /// to read, and where to write what it saw. xcodebuild hands them on with the TEST_RUNNER_ prefix.
     public static let treeRunnerApp = "TD_TREE_APP"
     public static let treeRunnerOut = "TD_TREE_OUT"
+    /// DEBUG builds only: a file (absolute path) the Cloud account layer appends a proof trace to; release never reads it.
+    public static let cloudTraceFile = "TD_CLOUD_TRACE_FILE"
 }

@@ -8,7 +8,10 @@ final class BackendTaskMCPHandlersTests: XCTestCase, @unchecked Sendable {
         let rig = try await BackendCrmTaskToolsParityFixture.make(localOnly: true)
         for (spec, _) in rig.registrations where spec.id.hasPrefix("tasks.") || spec.id == "hoot.island" || spec.id == "crm.task" {
             XCTAssertNotNil(BackendTaskMCPHandlers.operations[spec.id], spec.id)
-            XCTAssertLessThanOrEqual(spec.description.count, 500, spec.id)
+            // 500 is our own tidy limit (9cf271ea3), not an AI app's: tasks.local_change carries the delete rule's words
+            // (305839b7b, Delete rule L6: delete reaches every device at once, Bin 30 days, only the person puts back),
+            // so it alone may run to 600. No AI app cuts or refuses a tool description of this length.
+            XCTAssertLessThanOrEqual(spec.description.count, spec.id == "tasks.local_change" ? 600 : 500, spec.id)
             if let tiers = BackendTaskToolPolicy.overrides[spec.id] {
                 let verbs = spec.inputSchema["properties"]["do"]["enum"].elements?.compactMap(\.string) ?? []
                 XCTAssertEqual(Set(tiers.keys), Set(verbs), spec.id)

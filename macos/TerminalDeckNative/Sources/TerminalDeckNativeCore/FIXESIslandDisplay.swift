@@ -60,22 +60,28 @@ public enum FIXESIslandDisplayPolicy {
         case .named: return screens.first(where: { $0.id == choice.screenID }) ?? screens.first
         }
     }
+    /// The resting capsule (15 Nov design): 32 pt tall, radius 16, 12 pt side padding.
+    public static let capsuleHeight: CGFloat = 32
+    public static let capsuleRadius: CGFloat = 16
+    public static let capsulePadding: CGFloat = 12
     public static func usesBlack(builtIn: Bool, hasNotch: Bool) -> Bool { builtIn && hasNotch }
     public static func dark(appearance: String, builtIn: Bool, hasNotch: Bool, look: FIXESIslandOptions.Look = .matchApp) -> Bool {
         usesBlack(builtIn: builtIn, hasNotch: hasNotch) || appearance == "dark" || look == .dark
     }
     public static func pill(notchWidth: CGFloat?, barHeight: CGFloat, options: FIXESIslandOptions, quiet: Bool) -> CGSize {
-        // Asad 10 Oct: the chosen width applies at rest too ("always small as before" was the
-        // quiet pill ignoring it). Quiet only keeps the slimmer 26 pt height off a notch.
+        // Asad 10 Oct: the chosen width applies at rest too. 15 Nov design (item 47): off a notch the island is one
+        // capsule 32 pt tall whatever is happening; Compact / Standard / Wide change only its width. Beside a
+        // notch it keeps the notch's own height so it covers the camera housing.
         let wanted: CGFloat = options.width.resting
         let width = max(wanted, notchWidth.map { $0 + 120 } ?? 0)
-        return CGSize(width: width, height: quiet && notchWidth == nil ? 26 : min(44, max(22, barHeight)))
+        return CGSize(width: width, height: notchWidth == nil ? capsuleHeight : min(44, max(22, barHeight)))
     }
     public static func layout(for screen: IslandScreen, options: FIXESIslandOptions, quiet: Bool) -> IslandLayout {
         var layout = IslandGeometry.layout(for: screen)
         let size = pill(notchWidth: layout.notch?.width, barHeight: layout.row, options: options, quiet: quiet)
         let room = max(1, screen.frame.width - 2 * IslandMetrics.screenEdge - 2 * IslandMetrics.panelShoulder)
         layout.pill.width = min(size.width, room); layout.pill.height = size.height; layout.row = size.height
+        layout.pill.radius = min(capsuleRadius, size.height / 2)
         layout.ear = layout.notch.map { max(0, (layout.pill.width - $0.width) / 2) } ?? 0
         layout.gap = layout.notch?.width ?? 0
         layout.panel.width = min(options.width.grown, room); layout.panel.radius = 26

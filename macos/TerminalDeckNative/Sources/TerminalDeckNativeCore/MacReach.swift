@@ -12,7 +12,7 @@ public enum MacReach {
             case .diskUnlock: "Your Mac restarted and is waiting for its disk password at the Mac."
             case .asleep: "Your Mac's screen is asleep — waking it…"
             case .unreachable: "Mac is asleep or unreachable. Check its power and internet connection."
-            case .setup: "Set up access after a restart on your Mac: Devices → Device access → General."
+            case .setup: "Set up access after a restart on your Mac: Settings → Advanced → Access after lock or restart."
             }
         }
     }

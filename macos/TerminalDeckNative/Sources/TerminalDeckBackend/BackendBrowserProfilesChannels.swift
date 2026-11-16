@@ -241,7 +241,8 @@ public enum BackendBrowserProfilesToolFactories {
                                 let outcome = try await passwords.forget(profileID: profile!.id, origin: site, username: username); try requireOutcome(outcome)
                                 value = .object([.init("forgotten", .bool(true)), .init("message", .string(outcome.message))])
                             case "forgetall": let outcome = try await passwords.forgetAll(); try requireOutcome(outcome); value = .object([.init("forgotten", .string("all")), .init("message", .string(outcome.message))])
-                            case "reveal": guard try await passwords.reveal() else { throw NativeRPCError.invalidArguments("Nothing has been saved yet, so there is no file to show.") }; value = .object([.init("shown", .bool(true))])
+                            // A tool never brings Finder forward (Asad 13 Nov): the file's place is named instead.
+                            case "reveal": let store = try await passwords.storeState(); guard store["exists"].bool == true else { throw NativeRPCError.invalidArguments("Nothing has been saved yet, so there is no file to show.") }; value = .object([.init("shown", .bool(false)), .init("path", store["path"]), .init("forThePerson", .string("The saved-logins file is at this path; the person shows it in Finder himself."))])
                             case "offer": value = offer.map { .object([.init("waiting", .bool(true)), .init("site", .string($0.login.origin)), .init("username", .string($0.login.username))]) } ?? .object([.init("waiting", .bool(false))])
                             case "answer":
                                 guard let offer, let save = args["save"].bool else { throw NativeRPCError.invalidArguments("answer needs a pending offer and save: true or false.") }
@@ -257,8 +258,9 @@ public enum BackendBrowserProfilesToolFactories {
                             if let trouble = BackendBrowserSignIn.diagnose(try requiredString(args, "url")) { value = trouble.wireValue.removing("domains").setting("known", .bool(true)).setting("sites", .array(trouble.domains.map(NativeRPCValue.string))) }
                             else { value = .object([.init("known", .bool(false)), .init("note", .string("No known refusal was detected from this address. This is not a sign-in success check."))]) }
                         case "handover":
-                            guard let plan = try await signIn.handover(try requiredString(args, "url")) else { throw NativeRPCError.invalidArguments("The address is not an http or https sign-in page.") }
-                            value = .object([.init("opened", .string(plan.url.absoluteString)), .init("bringBack", .array(plan.domains.map(NativeRPCValue.string))), .init("note", .string(BackendBrowserSignIn.externalReturnLimitation))])
+                            // A tool never brings another app forward (Asad 13 Nov): the person opens the address himself.
+                            guard let plan = BackendBrowserSignIn.handoverPlan(try requiredString(args, "url"), extra: BackendBrowserSignIn.diagnose(try requiredString(args, "url"))?.domains ?? []) else { throw NativeRPCError.invalidArguments("The address is not an http or https sign-in page.") }
+                            value = .object([.init("opened", .bool(false)), .init("url", .string(plan.url.absoluteString)), .init("forThePerson", .string("Give the person this address to open in the system browser; Terminal Deck does not switch apps for a tool.")), .init("bringBack", .array(plan.domains.map(NativeRPCValue.string))), .init("note", .string(BackendBrowserSignIn.externalReturnLimitation))])
                         case "agents":
                             let checked = try await signIn.checkedAgents(), stale = checked.filter(\.stale), unknown = checked.filter { $0.version == nil }
                             value = .object([.init("stale", .array(stale.map(\.wireValue))), .init("checked", .array(checked.map(\.wireValue))),

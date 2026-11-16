@@ -45,9 +45,9 @@ extension NativeCompositionProduction {
                 ("references", .object([.init("type", .string("array")), .init("items", referenceSchema), .init("maxItems", .number(8))])),
                 ("options", BackendSessionChatOptionsTool.schema)], required: ["sessionId", "do"]), tier: .read)
         let start = try BackendMCPTool(id: "sessions.start_agent", wireName: "sessions_start_agent",
-            description: "Start a session with provider (claude, codex, gemini) or a saved agent (id or name), with its own AI, account, settings and seat. Each AI job is a fresh chat; use sessions_conversations for a named brief. The caller's project access applies. Read permission requests and restart handles with sessions_conversations events; answer requests there.",
+            description: "Start a session with provider (claude, codex, gemini) or a saved agent (id or name), with its own AI, account, settings and seat. account picks one of that AI's logins by name or id (default: the one Settings gives the folder). Set model and effort with sessions_chat do options, then send the first message with sessions_chat do say. Each AI job is a fresh chat; use sessions_conversations for a named brief. The caller's project access applies. Read permission requests and restart handles with sessions_conversations events; answer requests there.",
             inputSchema: schema([("agent", string), ("provider", string.setting("enum", .array(["claude", "codex", "gemini"].map(NativeRPCValue.string)))),
-                ("permissionMode", string), ("cwd", string), ("projectId", string),
+                ("permissionMode", string), ("cwd", string), ("projectId", string), ("account", string),
                 ("mode", string.setting("enum", .array([.string("chat"), .string("terminal")])))], required: ["cwd"]), tier: .act)
         var definitions = [chat, start].map { spec in
             BackendDeckToolsDefinition(spec: spec, title: spec.description) { caller, args in
@@ -83,7 +83,7 @@ extension NativeCompositionProduction {
                         // 30 Oct: the seat's account (or the first signed-in one in the person's order), never a signed-out login.
                         let provider = choice.provider
                         let account = try await NativeTeamJobAccounts(sessions: sessions, context: { try gate.authority.localContext() })
-                            .pick(agent: agent, provider: provider, folder: cwd, requested: nil)
+                            .pick(agent: agent, provider: provider, folder: cwd, requested: args["account"].string)
                         if let account { input.profileId = account.id }
                         let authorized = try NativeTeamChatStartPolicy.authorized(input, callID: resolved.callID)
                         let meta = try await lifecycle.create(authorized, context: .init(rememberTab: false, fromAI: true), holdOnFailure: false)
@@ -417,7 +417,7 @@ extension NativeCompositionProduction {
         }
         try await registry.register("session:chat:fork", ownerID: owner, policy: local) { context, args in
             guard args.count == 3 else { throw NativeRPCError.invalidArguments("Expected source session, fork action and arguments.") }
-            return try await self.chatForkFeature(SessionChatArguments.id(args), action: args[1].requireString("action", nonempty: true), arguments: args[2], context: context)
+            return try await self.chatForkFeature(SessionChatArguments.id(args), action: args[1].requireString("action", nonempty: true), arguments: args[2], context: context, chooseForPerson: true)
         }
         try await registry.register("session:chat:read", ownerID: owner, policy: local) { _, args in
             let cursor = try BackendHootChatChannels.integer(args.count > 1 ? args[1] : .null, maximum: Int.max - 1)
@@ -470,11 +470,29 @@ extension NativeCompositionProduction {
             try await chats.ensure(session)
             return try await chats.read(session, cursor: nil, limit: 500)
         }
+        let manager = sessions.manager
         try await registry.register("session:chat:options", ownerID: owner, policy: local) { _, args in
             let session = try SessionChatArguments.id(args)
             guard args.count <= 2 else { throw NativeRPCError.invalidArguments("Expected the session and an optional change.") }
-            if args.count == 2, !args[1].isNullish { return try await chats.setOptions(session, try args[1].requireObject("options")) }
-            return try await chats.options(session)
+            // NativeSessionModeTruth (15 Nov review item 3): the pill shows the mode the session really runs. A restored
+            // session is one launch (its meta's start time); his own change in it is trusted for that launch.
+            let meta = manager.list().first { $0.id == session }
+            let launch = session + "@" + String(Int(meta?.createdAt ?? 0))
+            if args.count == 2, !args[1].isNullish {
+                let patch = try args[1].requireObject("options")
+                let answer = try await chats.setOptions(session, patch)
+                if patch["permissionMode"].string != nil { NativeSessionModeTruth.noteChanged(launch) }
+                return answer
+            }
+            let answer = try await chats.options(session)
+            guard let meta, meta.resumed, meta.provider == "claude", !NativeSessionModeTruth.changedHere(launch) else { return answer }
+            var configDir: String?
+            if let profile = meta.profileId,
+               let listed = try? await registry.invoke("profiles:list", context: authority.localContext(), arguments: []) {
+                configDir = listed["profiles"].elements?.first { $0["id"].string == profile }?["configDir"].string
+            }
+            return NativeSessionModeTruth.corrected(answer, provider: meta.provider, resumed: meta.resumed, changedHere: false,
+                                                    ownDefault: NativeSessionModeTruth.claudeOwnDefault(cwd: meta.cwd, configDir: configDir))
         }
         try await registry.register("session:chat:turn", ownerID: owner, policy: local) { _, args in
             BackendSessionChats.wire(try await chats.turn(try SessionChatArguments.id(args)))
@@ -525,7 +543,7 @@ extension NativeCompositionProduction {
         let lifecycle = sessions.lifecycle
         let agentSpecs = try BackendTaskPersistence(directory: root.dataRoot.appendingPathComponent("remote/task-briefs"), ownership: root.state.ownership)
         try await registry.register("session:start-agent", ownerID: owner, policy: local) { _, args in
-            guard (1...6).contains(args.count) else { throw NativeRPCError.invalidArguments("Expected the agent, its project, the folder, chat or not, the session permission choice and the account picked for this session.") }
+            guard (1...7).contains(args.count) else { throw NativeRPCError.invalidArguments("Expected the agent, its project, the folder, chat or not, the session permission choice, the account picked for this session and whether that permission was the person's own pick.") }
             let agentID = try args[0].requireString("agent", nonempty: true)
             let projectID = args.count > 1 ? args[1].string.flatMap { $0.isEmpty ? nil : $0 } : nil
             let saved = try await registry.invoke("tasks:state", context: try authority.localContext(), arguments: [])
@@ -545,6 +563,9 @@ extension NativeCompositionProduction {
                     throw NativeRPCError.invalidArguments("That permission mode does not belong to the selected AI.")
                 }
                 input.permissionMode = permission
+                // The New session page's own pick (7th argument true): the session starts in exactly it (R73's one
+                // exception, BackendCreateSessionInput.chosenStartPermission). Without it, as before.
+                if args.count > 6, args[6].bool == true { input.chosenStartPermission = permission }
             }
             // 10 Nov (Asad: the account picked in New session is the account the session starts on): an explicit pick
             // wins over the agent's own saved account; no pick keeps the agent's.

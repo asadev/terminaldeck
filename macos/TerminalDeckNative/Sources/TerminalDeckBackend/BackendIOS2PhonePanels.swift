@@ -134,6 +134,21 @@ public enum BackendIOS2PhonePanels {
         default: return agent["sourceFile"].string?.isEmpty == false ? "Claude Code agent" : "Task agent"
         }
     }
+    /// The device Agents panel's fallback to this Mac's own live picture (14 Nov; review 15:01 point 3): only his OWN
+    /// device (`.mine`), at Full control by the one start rule (`BackendPhoneChats.fullControl`: its level, or, with
+    /// none set, his own device). A guest, even raised to Full, gets exactly what it got before.
+    public static func seesThisMacsLiveAgents(kind: BackendRemoteDeviceKind, level: BackendINT2PhoneAccessLevel?) -> Bool {
+        kind == .mine && BackendPhoneChats.fullControl(level: level, kind: kind)
+    }
+    /// A device panel's note: only what the person can act on. Sentences about the caller's own access or about a
+    /// source the app has not connected are for the Mac's owner (14 Nov web walk: "Live activity is outside this
+    /// caller's access."); none of them reaches a phone or browser. Nothing left: no note.
+    static func deviceNote(_ notices: [V]) -> V? {
+        let kept = notices.compactMap(\.string).filter { line in
+            !(line.contains("this caller") || line.hasSuffix("is not connected.") || line.hasSuffix("is not available yet."))
+        }
+        return kept.isEmpty ? nil : .string(kept.joined(separator: " "))
+    }
     static func liveTint(_ agent: V) -> V? {
         switch agent["live"].string { case "working": .string("ok"); case "waiting": .string("warn"); default: nil }
     }
@@ -302,8 +317,7 @@ public enum BackendIOS2PhonePanels {
                                         ("value", text(task["state"].string)), ("detail", text(day(task["updatedAt"].number))),
                                         ("meta", object([("project", text(task["project"].string ?? value["project"].string))]))]))
                 }
-                let notes = (value["notices"].elements ?? []).compactMap(\.string)
-                return payload(request, rows: rows, extra: [("title", .string(name)), ("note", notes.isEmpty ? nil : .string(notes.joined(separator: " ")))])
+                return payload(request, rows: rows, extra: [("title", .string(name)), ("note", deviceNote(value["notices"].elements ?? []))])
             }
             if scope == "org" {
                 let chart = try await port.call("agents.org_chart", .object([]), rpc, domain, .read)
@@ -340,8 +354,7 @@ public enum BackendIOS2PhonePanels {
             for agent in agents where !seen.contains(agent["id"].string ?? "") {
                 if let row = agentRow(agent, group: "Other", names: names) { rows.append(row) }
             }
-            let notes = (value["notices"].elements ?? []).compactMap(\.string)
-            return payload(request, rows: rows, extra: [("title", .string("Agents")), ("note", notes.isEmpty ? nil : .string(notes.joined(separator: " ")))])
+            return payload(request, rows: rows, extra: [("title", .string("Agents")), ("note", deviceNote(value["notices"].elements ?? []))])
         }
         return .init(scope: .machine, read: read, act: { request, rpc in
             let scope = request.panel.scope ?? ""
@@ -494,10 +507,17 @@ public enum BackendIOS2PhonePanels {
                 let name = system["name"].string ?? "Connected tasks"
                 if let problem = system["problem"].string, !problem.isEmpty { notes.append(name + ": " + problem) }
                 var args = object([("system", .string(systemID)), ("pile", .string(pile)), ("limit", .number(200))])
-                var list = try await port.call("connected_tasks.list", args, rpc, domain, .read)
-                if list["readAt"].isNullish {
-                    args = args.setting("refresh", .bool(true))
-                    list = try await port.call("connected_tasks.list", args, rpc, domain, .read)
+                let list: V
+                do {
+                    var read = try await port.call("connected_tasks.list", args, rpc, domain, .read)
+                    if read["readAt"].isNullish {
+                        args = args.setting("refresh", .bool(true))
+                        read = try await port.call("connected_tasks.list", args, rpc, domain, .read)
+                    }
+                    list = read
+                } catch let error where BackendRemotePanelRegistry.isRefusal(error) {
+                    // 14 Nov (phones fault 1): a system this device may not read is left out, never said as its text.
+                    continue
                 }
                 let done = system["doneStatus"].string
                 for row in list["tasks"].elements ?? [] {
@@ -615,6 +635,8 @@ public enum BackendIOS2PhonePanels {
                     }.joined().split(separator: "\n", omittingEmptySubsequences: false).suffix(60).joined(separator: "\n")
                     rows.append(object([("id", .string("logs")), ("title", .string("Recent logs")), ("group", .string("Recent logs")),
                                         ("body", .string(lines.isEmpty ? "No recent log lines." : clip(lines, 12_000) ?? "")), ("bodyStyle", .string("code"))]))
+                } catch let error where BackendRemotePanelRegistry.isRefusal(error) {
+                    // 14 Nov (phones fault 1): logs this device may not read: no Recent logs section at all.
                 } catch {
                     rows.append(object([("id", .string("logs")), ("title", .string("Logs could not be read from here")), ("group", .string("Recent logs")),
                                         ("detail", .string("Open the container's logs on the Mac."))]))

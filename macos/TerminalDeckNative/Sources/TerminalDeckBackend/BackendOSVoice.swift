@@ -82,7 +82,10 @@ public struct BackendOSVoiceHTTP: BackendOSVoiceRequesting, Sendable {
 public actor BackendOSVoiceService {
     public static let channels: Set<String> = ["voice:providers", "voice:status", "voice:save", "voice:forget", "voice:transcribe"]
     public nonisolated let file: URL
-    private let cipher: any BackendOSVoiceEncrypting, http: any BackendOSVoiceRequesting
+    private var cipher: any BackendOSVoiceEncrypting
+    private let http: any BackendOSVoiceRequesting
+    private var cloudFile: URL?
+    private var activeFile: URL { cloudFile ?? file }
     private let store: NativeStateStore
     private let authorize: @Sendable (NativeRPCContext, String) throws -> Void
     private var active = false
@@ -95,8 +98,39 @@ public actor BackendOSVoiceService {
         guard store.ownership == .exclusive, store.file?.deletingLastPathComponent().standardizedFileURL.path == file.deletingLastPathComponent().standardizedFileURL.path else { throw NativeRPCError(code: "unavailable", message: "The native voice service cannot write while the old voice/state owner is still active.") }; active = true
     }
     private func stored() throws -> (provider: String, key: String)? {
-        guard let data = try BackendAccountFiles.boundedRead(file, maximum: 64 * 1024) else { return nil }
+        guard let data = try BackendAccountFiles.boundedRead(activeFile, maximum: 64 * 1024) else { return nil }
         return try BackendOSVoiceRules.decodeKey(cipher.decrypt(data))
+    }
+    /// App-saved key only; never environment variables or a provider request.
+    func cloudSavedKey() throws -> BackendCloudSecretsVoiceValue? {
+        guard let value = try stored() else { return nil }
+        guard let provider = BackendOSVoiceRules.provider(value.provider) else { throw CloudFailure.unsupportedFormat }
+        return .init(provider: value.provider, endpoint: provider.endpoint, key: value.key)
+    }
+    func cloudMergeKey(_ incoming: BackendCloudSecretsVoiceValue) throws -> CloudApplyStatus {
+        guard active else { throw CloudFailure.unavailable }
+        guard let provider = BackendOSVoiceRules.provider(incoming.provider), provider.endpoint == incoming.endpoint,
+              !incoming.key.isEmpty, incoming.key.utf8.count <= 16_384,
+              incoming.key.rangeOfCharacter(from: .controlCharacters) == nil else { throw CloudFailure.invalidRequest }
+        if let local = try cloudSavedKey() { return local == incoming ? .alreadyPresent : .keptBoth }
+        try cipher.prepareForWrites(existingVault: false)
+        let bytes = try cipher.encrypt(BackendOSVoiceRules.encodeKey(provider: provider.id, key: incoming.key), existingVault: false)
+        guard bytes.starts(with: Data("v10".utf8)) else { throw CloudFailure.unsupportedFormat }
+        try BackendAccountFiles.writeAtomic(bytes, to: activeFile)
+        guard try cloudSavedKey() == incoming else { throw CloudFailure.checksumMismatch }
+        return .applied
+    }
+    func cloudNeedsRecovery() throws -> Bool {
+        guard try BackendAccountFiles.boundedRead(activeFile, maximum: 64 * 1024) != nil else { return false }
+        return (try? stored()) == nil
+    }
+    func cloudAdopt(file restored: URL, cipher replacement: any BackendOSVoiceEncrypting) throws {
+        guard active else { throw CloudFailure.unavailable }
+        let alreadyExists = FileManager.default.fileExists(atPath: restored.path)
+        let previous = try? cloudSavedKey()
+        cloudFile = restored; cipher = replacement
+        _ = try stored()
+        if !alreadyExists, let previous { _ = try cloudMergeKey(previous) }
     }
     public func status() -> NativeRPCValue {
         do {
@@ -128,7 +162,7 @@ public actor BackendOSVoiceService {
         let check = try await transcribe(provider: provider, key: key, audio: BackendOSVoiceRules.silentWav(milliseconds: 200), filename: "check.wav")
         try Task.checkCancellation()
         guard check["ok"].bool == true else { return check.removing("text") }
-        let existing = FileManager.default.fileExists(atPath: file.path)
+        let existing = FileManager.default.fileExists(atPath: activeFile.path)
         // voice.ts saveCheckedVoiceKey L162-166: no usable secure store is said in
         // the app's own words, never as the Keychain's status sentence.
         let blob: Data
@@ -138,11 +172,11 @@ public actor BackendOSVoiceService {
         } catch { return .object([.init("ok", .bool(false)), .init("message", .string(BackendOSVoiceRules.noSecureStoreSaved))]) }
         do {
             guard blob.starts(with: Data("v10".utf8)) else { throw NativeRPCError.malformed("The voice cipher did not return the existing Chromium v10 file format.") }
-            try BackendAccountFiles.writeAtomic(blob, to: file)
+            try BackendAccountFiles.writeAtomic(blob, to: activeFile)
         } catch { return .object([.init("ok", .bool(false)), .init("message", .string("The key was accepted but could not be securely saved: " + error.localizedDescription))]) }
         return .object([.init("ok", .bool(true)), .init("message", .string("\(provider.label) accepted the key and answered with \(provider.model)."))])
     }
-    public func forget() throws { guard active else { throw NativeRPCError(code: "unavailable", message: "The native voice writer has not taken ownership.") }; if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) } }
+    public func forget() throws { guard active else { throw NativeRPCError(code: "unavailable", message: "The native voice writer has not taken ownership.") }; if FileManager.default.fileExists(atPath: activeFile.path) { try FileManager.default.removeItem(at: activeFile) } }
     public func transcribeStored(audio: Data?, filename: String?) async throws -> NativeRPCValue {
         let stored = try stored()
         guard let stored else { return Self.result(false, message: "No transcription key is set.") }

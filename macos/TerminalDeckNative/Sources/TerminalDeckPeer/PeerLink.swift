@@ -307,6 +307,13 @@ public final class PeerLink: NSObject, @unchecked Sendable {
     /// Bytes waiting on a channel.
     public func queued(_ lane: PeerLane) -> UInt64 { lock.withLock { channels[lane] }?.bufferedAmount ?? 0 }
 
+    /// 14 Nov phone link: told when the control channel's queue drops to `below` bytes or fewer (the host's outbox tops
+    /// it up then). Runs on the library's thread.
+    private var controlDrained: (below: UInt64, body: @Sendable () -> Void)?
+    public func onControlDrained(below: UInt64, _ body: @escaping @Sendable () -> Void) {
+        lock.withLock { controlDrained = (below, body) }
+    }
+
     public func close() {
         let parts = lock.withLock { () -> (LKRTCPeerConnection?, [LKRTCDataChannel]) in
             finished = true
@@ -453,6 +460,11 @@ extension PeerLink: LKRTCDataChannelDelegate {
         case 3: finish("The direct connection closed.")
         default: break
         }
+    }
+    public func dataChannel(_ dataChannel: LKRTCDataChannel, didChangeBufferedAmount amount: UInt64) {
+        guard PeerLane(rawValue: dataChannel.channelId) == .control else { return }
+        let drained = lock.withLock { controlDrained }
+        if let drained, dataChannel.bufferedAmount <= drained.below { drained.body() }
     }
     public func dataChannel(_ dataChannel: LKRTCDataChannel, didReceiveMessageWith buffer: LKRTCDataBuffer) {
         guard let lane = PeerLane(rawValue: dataChannel.channelId) else { return }

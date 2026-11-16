@@ -6,72 +6,80 @@ import TerminalDeckNativeCore
 /// Settings → Advanced (`AdvancedSection.tsx`): Debug mode and the log folder;
 /// with debug mode on, the stored values, the diagnostics and the files on disk;
 /// and Start over, which resets every setting after asking.
+/// Owner, 15 Nov (DESIGN.md section 4): Debug mode (i) · Open logs (the folder is in the info popover) · Access after lock
+/// or restart › · Remove old Terminal Deck entries (moved here from Privacy) · Reset all settings (red, (i)). With debug
+/// mode on, the stored values, the diagnostics and the files on disk follow as before.
 struct NativeAdvancedSettings: View {
     @State private var model = NativeAdvancedModel()
+    /// Owner, 14 Nov: "Access after lock or restart" left the Devices page; its content opens from this one row.
+    @State private var accessOpen = false
+    @State private var cleanupOpen = false
+    static let accessTitle = "Access after lock or restart"
+    static let cleanupTitle = "Remove old Terminal Deck entries"
+    static let resetInfo = "Every setting goes back to its default. Projects, sessions and accounts are kept."
     private let store = NativeSettingsValues.shared
 
     var body: some View {
         let debug = store.bool("advanced.debugMode")
         let logs = model.paths?.first { $0.key == "logs" }
         let files = model.paths?.filter { $0.key != "logs" } ?? []
-        NativeSettingsPage(sectionId: "advanced") {
-            Section("Problems") {
-                NativeSettingsList(section: "advanced", helpFor: ["advanced.debugMode": "Turn on only when asked."])
-                HStack(spacing: 8) {
-                    Button("Open log folder") { model.open("logs") }
-                    if let logs { Text(logs.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")).font(.caption.monospaced()).lineLimit(1).truncationMode(.middle).help(logs.path) }
+        DeckSettingsScaffold(title: "Advanced") {
+            DeckSettingsGroup {
+                DeckSettingsSchemaRow(id: "advanced.debugMode", title: "Debug mode", info: "Turn on only when asked. It adds the stored values, the diagnostics and the files on disk to this page.")
+                DeckSettingsRow("Logs", info: logs.map { "The log folder: " + $0.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+                    + ($0.exists ? "" : ". Nothing has been written there yet; opening it creates it.") }) {
+                    Button("Open") { model.open("logs") }.controlSize(.small)
                 }
-                if let logs, !logs.exists {
-                    NativeCodingAINotice(tone: .info, text: "Nothing has been written there yet. Opening it creates the folder.")
+                DeckSettingsLinkRow(title: Self.accessTitle) { accessOpen = true }
+                DeckSettingsRow(Self.cleanupTitle, info: "Privacy lists may still show TerminalDeckNativeHelper from older versions. Sessions now use Terminal Deck’s entry, so those can go. Nothing is reset: old bare helpers need the minus button in that list; a reset would not reliably remove their rows.") {
+                    Button(cleanupOpen ? "Hide steps" : "Show steps") { cleanupOpen.toggle() }.controlSize(.small)
                 }
+                if cleanupOpen { NativePrivacyCleanupSteps().padding(DeckSettingsLook.rowPadding) }
             }
-
+            DeckSettingsGroup {
+                if model.confirmReset {
+                    DeckSettingsRow("Reset every setting to its default?") {
+                        HStack(spacing: DeckTokens.Spacing.s8) {
+                            Button("Cancel") { model.confirmReset = false }
+                            Button("Reset everything", role: .destructive) { model.reset() }.disabled(model.resetting)
+                        }
+                    }
+                } else {
+                    DeckSettingsButtonRow(title: "Reset all settings", role: .destructive, info: Self.resetInfo) { model.confirmReset = true }
+                        .disabled(model.resetting)
+                }
+                if let status = model.status { DeckSettingsProblem(text: status, warn: false) }
+            }
             if debug {
-                // FINAL-CONNECT (SETTINGS-TRUTH row 32): it said "Exactly what is on disk" but showed every default
-                // merged in. Now it is the saved files' own contents: settings and preferences, nothing added.
-                Section("Stored values") {
-                    Text("Exactly what is saved: settings, then preferences. A setting never changed is not in them and uses its default.")
-                        .foregroundStyle(.secondary)
-                        .help("Includes keys written by other versions of the app.")
+                // FINAL-CONNECT (SETTINGS-TRUTH row 32): the saved files' own contents, nothing added.
+                DeckSettingsGroup("Stored values", info: "Exactly what is saved: settings, then preferences. A setting never changed is not in them and uses its default.") {
                     Text(model.stored ?? "Reading…")
                         .font(.caption.monospaced())
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(DeckSettingsLook.rowPadding)
                         .task { await model.readStored() }
                 }
-                Section("Diagnostics") {
-                    NativeDebugPanel() // lane T (web: DebugPanel.tsx)
+                DeckSettingsGroup("Diagnostics") {
+                    NativeDebugPanel().padding(DeckSettingsLook.rowPadding) // lane T (web: DebugPanel.tsx)
                 }
-                Section("Files on disk") {
-                    NativeSettingsProse(text: "For a bug report. Everything in them is changed in the app, not here.")
+                DeckSettingsGroup("Files on disk", info: "For a bug report. Everything in them is changed in the app, not here.") {
                     if files.isEmpty {
-                        NativeSettingsProse(text: "No config files have been reported yet.")
+                        DeckSettingsProblem(text: "No config files have been reported yet.", warn: false)
                     } else {
-                        ForEach(files) { entry in pathRow(entry) }
+                        ForEach(files) { entry in pathRow(entry).padding(DeckSettingsLook.rowPadding) }
                     }
                 }
-            }
-
-            Section("Start over") {
-                NativeSettingsProse(text: "Projects, sessions and accounts are kept.")
-                if model.confirmReset {
-                    HStack(spacing: 8) {
-                        Text("Reset every setting to its default?")
-                        Button("Reset everything", role: .destructive) { model.reset() }
-                            .disabled(model.resetting)
-                        Button("Cancel") { model.confirmReset = false }
-                    }
-                } else {
-                    Button("Reset all settings", role: .destructive) { model.confirmReset = true }
-                        .disabled(model.resetting)
-                }
-            }
-
-            if let status = model.status {
-                Section { NativeCodingAINotice(tone: .info, text: status) }
             }
         }
-        .onAppear { model.readPaths() }
+        .onAppear { store.start(); model.readPaths() }
+        .sheet(isPresented: $accessOpen) {
+            VStack(spacing: 0) {
+                Form { NativeMacReachSettings(fixture: false) }.formStyle(.grouped)
+                HStack { Spacer(); Button("Done") { accessOpen = false }.keyboardShortcut(.defaultAction) }.padding(16)
+            }
+            .frame(width: 600, height: 520)
+        }
     }
 
     private func pathRow(_ entry: SettingsConfigPath) -> some View {
@@ -81,7 +89,7 @@ struct NativeAdvancedSettings: View {
                     Text(entry.label)
                     if !entry.exists { NativeCodingAIBadge(text: "not created yet", quiet: true) }
                 }
-                Text(entry.purpose).font(.callout).foregroundStyle(.secondary)
+                Text(entry.purpose).font(DeckSettingsLook.rowSecond).foregroundStyle(.secondary)
                 NativeCodingAICommand(text: entry.path)
             }
             Spacer(minLength: 8)

@@ -75,7 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        urls.forEach { NativeWidgetNavigation.open($0) }
+        urls.forEach { if !NativeCloudAccount.shared.handle($0) { NativeWidgetNavigation.open($0) } }
     }
 
     /// A Dock click on the running app is the person's.

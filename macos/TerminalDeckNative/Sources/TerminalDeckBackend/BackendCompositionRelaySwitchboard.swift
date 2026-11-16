@@ -7,8 +7,24 @@ import TerminalDeckNativeCore
 public actor BackendCompositionRelaySwitchboard: BackendDeckCoreRelayInstallation {
     private var server: BackendDeckCoreSecurityServer?
     private var link: (@Sendable () async -> BackendRemoteRelayState?)?
-    public init() {}
-    public func install(_ server: BackendDeckCoreSecurityServer?) async throws { self.server = server }
+    private var watching: (keys: BackendDeckCoreSecurityAccessKeys, id: UUID)?
+    private let serving: BackendRelayMCPServing
+    public init(serving: BackendRelayMCPServing = .shared) { self.serving = serving }
+    /// 15 Nov: installing the core's server also tells the relay clients whether to serve, now and on every switch change.
+    public func install(_ server: BackendDeckCoreSecurityServer?) async throws {
+        if let old = watching { await old.keys.removeObserver(old.id); watching = nil }
+        self.server = server
+        if let keys = server?.keys?.keys {
+            let serving = self.serving
+            watching = (keys, await keys.onChange { Task { await serving.changed() } })
+        }
+        await serving.changed()
+    }
+    /// "Let AI apps use this Mac" is on and the key door is open: the relay may forward to this Mac.
+    public func isServing() async -> Bool {
+        guard let door = server?.keys else { return false }
+        return await door.serving()
+    }
     /// TS useLink: the host service's relay state, read per call.
     public func useLink(_ link: (@Sendable () async -> BackendRemoteRelayState?)?) { self.link = link }
     public func facts() async -> BackendDeckCoreEventsRelayFacts? {
@@ -20,8 +36,8 @@ public actor BackendCompositionRelaySwitchboard: BackendDeckCoreRelayInstallatio
         guard let server else {
             return .init(status: 404, contentType: "application/json", body: Data("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32001,\"message\":\"Nothing answered at this address. The computer may be off or not connected, or this link may have been turned off.\"}}".utf8))
         }
-        let answer = await server.answerRelay(authorization: head.authorization, pathKey: head.pathKey,
+        let answer = await server.answerRelayMarked(authorization: head.authorization, pathKey: head.pathKey,
             userAgent: head.userAgent, protocolVersion: head.protocolVersion, body: body, cancellation: BackendMCPCancellation())
-        return .init(status: answer.status, contentType: answer.headers["content-type"], body: answer.body)
+        return .init(status: answer.response.status, contentType: answer.response.headers["content-type"], body: answer.response.body, refused: answer.refused)
     }
 }

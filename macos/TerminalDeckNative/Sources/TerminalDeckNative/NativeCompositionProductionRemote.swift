@@ -31,6 +31,7 @@ extension NativeCompositionProduction {
                     try await root.registry.invoke(channel, context: authority.localContext(), arguments: arguments)
                 }, specs: try? BackendTaskPersistence(directory: root.dataRoot.appendingPathComponent("remote/task-briefs"), ownership: root.state.ownership))
                 let boundary = try await joins.phoneStartBoundary(deviceID: request.deviceID, folder: request.cwd)
+                NativePhoneStart.prepareFolder(request.cwd)
                 let meta = try await BackendAGSLaunchScope.$deviceStart.withValue(request.deviceID) {
                     try await sessions.lifecycle.create(input, context: .init(deviceBoundary: boundary, rememberTab: true))
                 }
@@ -45,6 +46,27 @@ extension NativeCompositionProduction {
                     return true
                 }),
             ptySource: sessions.manager)
+        // 14 Nov phone asks (BackendPhoneStartText): a phone's first message, and the Mac's own New session default
+        // folder listed for the person's own devices.
+        await endpoint.setStartTextDelivery { [manager = sessions.manager, root, authority] job in
+            await NativePhoneStart.deliverFirst(job, manager: manager) { channel, arguments in
+                try await root.registry.invoke(channel, context: authority.localContext(), arguments: arguments)
+            }
+        }
+        await endpoint.setDefaultStartFolder { NativeLandingPlaces.independent().path }
+        // 14 Nov (phones ask 4): a task change sends each connected phone the Tasks lists it read, again (unasked
+        // `panel.rows`, BackendRemoteHost.tasksChanged). Only phones that read Tasks; nothing new for any other.
+        if let feed = try? await root.registry.subscribe("tasks:changed", ownerID: BackendCompositionRoot.appOwnerID,
+                                                         handler: { _ in await endpoint.tasksChanged() }) {
+            NativePhoneTaskFeeds.keep(feed)
+        }
+        // 14 Nov (phones fault 2): an agent's live state changed (hook steps, Hoot, task runs): each phone that read an
+        // Agents list is sent it again (BackendRemoteHost.agentsChanged), so a project page's Agents card never keeps a
+        // state the session lists have left. Session status changes reach it inside the host.
+        if let feed = try? await root.registry.subscribe("agents-watch:changed", ownerID: BackendCompositionRoot.appOwnerID,
+                                                         handler: { _ in await endpoint.agentsChanged() }) {
+            NativePhoneTaskFeeds.keep(feed)
+        }
         // stream step 2 (dc2) and m5-direct-only (§11 link only): every paired device that asks gets one WebRTC link per
         // connection — the terminal, every message and the screen's video, same network → internet peer-to-peer →
         // Cloudflare TURN; the relay is only the meeting point. This Mac as a guest of another computer answers the same way.
@@ -65,6 +87,37 @@ extension NativeCompositionProduction {
         let claudeHomes = BackendSessionActivity.claudeHomes(home: configuration.homeDirectory, dataRoot: root.dataRoot,
             sessionEnvironment: configuration.inheritedEnvironment)
         await endpoint.setRecordedActivity { saved in BackendSessionActivity.transcriptActivity(saved: saved, configDirectories: claudeHomes) }
+        // Sessions in the Cloud (15 Nov, step 1): the list this Mac puts is the one its phones get (same status, same
+        // last real use), and each session's history is found in the same homes. Sizes and paths only until it copies.
+        let home = configuration.homeDirectory
+        let environment = configuration.inheritedEnvironment
+        var codexHomes: [String] = []
+        if let configured = environment["CODEX_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines), !configured.isEmpty { codexHomes.append(configured) }
+        codexHomes.append(home.appendingPathComponent(".codex").path)
+        let locator = BackendCloudChatsLocator(claudeHomes: claudeHomes, codexHomes: codexHomes,
+            geminiHome: home.appendingPathComponent(".gemini").path,
+            chats: root.dataRoot.appendingPathComponent("session-chats", isDirectory: true),
+            hoot: root.dataRoot.appendingPathComponent("hoot", isDirectory: true),
+            ownRoots: [root.dataRoot.appendingPathComponent("account-logins", isDirectory: true),
+                       root.dataRoot.appendingPathComponent("agent-homes", isDirectory: true)])
+        await MainActor.run {
+            NativeCloudChats.shared.bind(list: { await endpoint.cloudListed() }, names: { await endpoint.cloudKnownNames() }, locator: locator)
+            // Step 2, "Switch to this Mac": the app's own close and create (NO session host change) and its AI logins.
+            NativeCloudChats.shared.moveHooks = NativeCloudMoveHooks(close: { [sessions] id in
+                try await sessions.lifecycle.close(sessionID: id)
+            }, create: { [sessions] input in
+                try await sessions.lifecycle.create(input, context: .init(rememberTab: true, fromWindow: true), holdOnFailure: false)
+            }, profiles: { [sessions, authority] provider in
+                #if TD_HOST_ACCOUNT_BRIDGE
+                guard let context = try? authority.localContext() else { return [] }
+                return (try? await BackendHOSTProfileScope.withContext(context) { try await sessions.profiles.list(provider: provider) }) ?? []
+                #else
+                _ = authority
+                return (try? await sessions.profiles.list(provider: provider)) ?? []
+                #endif
+            })
+            NativeCloudChats.codeAt = { projectID in await BackendCodeBackupHolder.shared.actions?.lastBackup(projectID: projectID) }
+        }
         joins.bindRemote(trust: trust, host: endpoint, windows: windows)
         remoteTrust = trust; remoteEndpoint = endpoint; windowGrants = windows
         root.events.bind(remote: endpoint) // 2 Nov: phones list the status the app accepted (a hooked AI's turn)
@@ -118,6 +171,9 @@ extension NativeCompositionProduction {
                 return start.isEmpty ? "about:blank" : start })
         let enrollment = BackendRemoteServeEnrollment(trust: trust,
             verifier: BackendRemoteServeSSHVerifier(transport: BackendNodelessSSHAuthTransport()), environment: configuration.inheritedEnvironment)
+        // 15 Nov (AI apps through our server): the relay forwards to this Mac only while "Let AI apps use this Mac" is on.
+        // review-fixes 6: set before any relay client of this Mac can start, so none ever says "serving" unread.
+        BackendRelayMCPServing.shared.setProvider { [relay] in await relay.isServing() }
         remoteHost = try await root.remoteHostService(endpoint: endpoint,
             relayURL: BackendRelayAddress.resolve(),
             webRoot: Bundle.main.resourceURL?.appendingPathComponent("web/pwa"),
@@ -126,7 +182,26 @@ extension NativeCompositionProduction {
                 || BackendDevCopy.isDevCopy(dataDirectory: configuration.dataDirectory),
             mcp: { [relay] head, body in await relay.answer(head, body: body) },
             localPort: UInt16(configuration.inheritedEnvironment["TD_WEB_PORT"] ?? "") ?? 8444, afterEndpointStart: { [weak self] in try await self?.startRemoteRegistration() })
-        if let host = remoteHost { await relay.useLink { await host.status().relay } }
+        // review-fixes 1: the AI-apps page reads whichever relay link carries AI apps now (full or AI-apps-only).
+        if let host = remoteHost { await relay.useLink { await host.aiAppsRelayState() } }
+        // review-fixes 1: the switch alone makes the address work; remote access (phones) is not started by it.
+        if let host = remoteHost {
+            BackendRelayMCPServing.shared.setFollower { [weak host] in await host?.refreshAIAppsLink() }
+            await host.keepAIAppsLink(wanted: { [relay] in await relay.isServing() })
+        }
+        await BackendRelayMCPServing.shared.changed()
+        // Reach by account (R2): the session host and the account meet here; nothing runs while its switch is off.
+        let reachName = Host.current().localizedName ?? "Mac"
+        NativeReachAccount.shared.bindHost(endpoint, card: { [trust] in
+            guard let identity = try? await trust.hostIdentity() else { return nil }
+            return .init(hostId: identity.hostID, hostKey: BackendReachWire.base64url(identity.keys.publicKey), name: reachName)
+        }, door: remoteHost.map { [state] service in
+            // A1 (MAC-NEXT-13): the switch keeps remote access running; the start is remote:start's own (start, then remember it).
+            NativeReachAccount.Door(status: { await service.status() }, start: {
+                guard try await service.start().running else { throw NativeRPCError(code: "remote-unavailable", message: "Remote access did not start.") }
+                _ = try await state.writeSettingsAsync(.object([.init(BackendCompositionRemoteChannels.enabledKey, .bool(true))]))
+            })
+        })
         let usageServe = BackendRemoteServeUsageService(usage: usage.usage, owner: { try authority.localContext() }, push: contextPush,
             hoot: { [weak self] in await MainActor.run { self?.hoot?.usage } })
         self.contextPush = contextPush
@@ -163,6 +238,7 @@ extension NativeCompositionProduction {
                 let boundary = try await joins.phoneStartBoundary(deviceID: request.deviceID, folder: request.cwd)
                 // #27: the person's own device at Full gets this Mac's own git, SSH and GitHub logins (see forStart).
                 let git = BackendRemoteServeGitGuest.forStart(guest, sandboxed: boundary != nil)
+                NativePhoneStart.prepareFolder(request.cwd)
                 let meta = try await BackendAGSLaunchScope.$deviceStart.withValue(request.deviceID) {
                     try await sessions.lifecycle.create(input, context: .init(deviceBoundary: boundary,
                         rememberTab: true, environmentOverrides: git.set, removeEnvironment: Set(git.remove)))
@@ -222,4 +298,11 @@ private final class NativeCompositionAccountDeletion {
         }
     }
     private func stop() async { stopped = true; source?.cancel(); source = nil; await reading?.value; reading = nil }
+}
+
+/// The phones' task-change feed lives as long as the app (a dropped subscription ends itself).
+private enum NativePhoneTaskFeeds {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var feeds: [NativeRPCSubscription] = []
+    static func keep(_ feed: NativeRPCSubscription) { lock.withLock { feeds.append(feed) } }
 }

@@ -54,6 +54,7 @@ final class AppModel {
     @ObservationIgnored lazy var buttonActions = NativeButtonActions(effects: .init(
         invoke: { try await EngineBridge.shared.invoke($0, $1) },
         presentSession: { try NativeButtonPresentation.session(folder: $0) },
+        prepareSession: { NativeLanding.prepare(folder: $0) },
         confirm: { await NativeButtonPresentation.confirm($0) },
         changed: { [weak self] in self?.applyButtonState() },
         forgotten: { NativeTerminalSessions.shared.forget($0) },
@@ -94,6 +95,7 @@ final class AppModel {
     }
 
     @discardableResult func runButton(_ command: PageCommand) -> Task<Bool, Never> {
+        personChose()
         guard NativeButtonActions.names.contains(command.name) else {
             return Task {
                 guard canRun else { buttonActions.problem = "The page is still loading. Please try again."; return false }
@@ -152,15 +154,15 @@ final class AppModel {
     // Settings page
     private(set) var settingsSections: [SettingsSection] = []
     private(set) var settingsSelection: String?
+    /// The page the last opening of Settings asked for, until the web page has reported its own list once.
+    @ObservationIgnored private var settingsWanted: String?
     private(set) var settingsReady = false
     private(set) var settingsModalOpen = false
     private(set) var settingsFailure: String?
     /// Bumped to ask the main window to open (or focus) the Settings window.
     private(set) var settingsWindowRequest = 0
-    /// Bumped to open (or focus) the one Devices window; `devicesPairOnOpen` starts it on the pairing sheet.
-    private(set) var devicesWindowRequest = 0
-    private(set) var devicesPairOnOpen = false
-    func requestDevicesWindow(pair: Bool = false) { devicesPairOnOpen = pair; devicesWindowRequest += 1 }
+    /// Owner, 14 Nov: no Devices window any more; his devices are Settings → Devices, the one place they are listed.
+    func openDevices() { openSettings(section: NativeSettingsNavigation.devicesID) }
     /// Bumped when screens are waiting to be opened in windows of their own.
     private(set) var screenWindowRequest = 0
     private var pageAfterMove: String?
@@ -191,7 +193,11 @@ final class AppModel {
         settingsWeb = WebBridge(log: engine.log, revealOnLoad: true)
         buttonActions = buttons
         web.onMessage = { [weak self] message in self?.handleMainPage(message) }
+        web.onReady = { [weak self] in self?.mainPageReady() }
+        web.onReloading = { [weak self] in self?.mainPageReloading() }
     }
+    /// The launch's opening step, as `init` runs it (without the box's keyboard ticket, which is the launch's own).
+    func setOpensOnForTests(_ value: NativeLandingOpensOn) { applyOpening(value, giveKeyboard: false) }
     #endif
 
     private init() {
@@ -234,19 +240,15 @@ final class AppModel {
             Task { await self.appearancePreferencesReady() }
             self.web.load(url)
             for screen in self.screens.values { self.loadScreen(screen) }
+            NativeLanding.engineReady()
         }
 
         web.onReady = { [weak self] in
             Task { await NativeCompositionRoot.shared.mainPageReady() }
-            self?.pageReady = true
-            self?.web.run(.nativeScreens(NativeScreens.registered))
-            self?.web.focus()
+            self?.mainPageReady()
         }
         web.onMessage = { [weak self] message in self?.handleMainPage(message) }
-        web.onReloading = { [weak self] in
-            self?.pageReady = false
-            self?.pageModalOpen = false
-        }
+        web.onReloading = { [weak self] in self?.mainPageReloading() }
         web.onLoadFailed = { [weak self] message in
             self?.pageReady = false
             self?.pageFailure = EngineFailure(title: "Terminal Deck couldn't load", message: message, detail: nil)
@@ -268,7 +270,79 @@ final class AppModel {
         }
         appearancePreferences = NativeAppearancePreferences(bridge: .shared) { [weak self] in self?.applyAppearance($0) }
         appearancePreferences?.start()
+        // Owner, 14 Nov: the app opens on the New session page, in its first frame, with the keyboard in its box
+        // (Settings › General › When Terminal Deck opens). Nothing is made until he sends.
+        if fixture == nil { applyOpening(NativeLandingOpensOn.current(), giveKeyboard: true) }
     }
+
+    /// "When Terminal Deck opens", applied once at launch. With New session the page is shown and HELD until he acts:
+    /// the page's rail fills in after the first load (its sessions are listed, the sessions kept alive or reopened are
+    /// put back, and its automatic choice picks the first of them, `tab-selection.ts` AUTO_SELECTION); none of that is
+    /// a choice of his, so none of it replaces the New session page (Owner, 14 Nov: the Mac mini opened on "Session 1").
+    private func applyOpening(_ value: NativeLandingOpensOn, giveKeyboard: Bool) {
+        opensOn = value
+        guard value == .newSession else { return }
+        sidebarSelection = NativeLanding.pageID
+        landingHeld = true
+        if giveKeyboard { NativeLandingFocus.shared.personAsked() }
+    }
+    /// Something was chosen through the window's own doors (a row, a tab, a button, a shortcut, his send on the page):
+    /// the launch hold ends and the window follows as always. The page's rail and a reopened session never end it.
+    /// It never moves the keyboard: the page keeps the box's launch ticket only, so a hold that outlives his first
+    /// click changes nothing about where he types.
+    private func personChose() { landingHeld = false; openingApplied = true }
+
+    /// "When Terminal Deck opens: Hoot chat" (Owner, 15 Nov): Hoot's chat opens once the engine is up (the page's
+    /// first rail), once per launch. If the engine is not up yet it is tried on the next rail; once he has chosen
+    /// anything himself it is never applied. Hoot switched off for this copy: the New session page instead.
+    private func applyOpeningOnce(_ fromPageMemory: Bool) {
+        guard !openingApplied, fromPageMemory || opensOn == .hoot else { return }
+        guard opensOn == .hoot else { openingApplied = true; return }
+        guard HootReadyDefaults.enabled() else { openingApplied = true; select(NativeLanding.pageID); return }
+        guard engineIsUp else { return }
+        openingApplied = true
+        openHootPage()
+    }
+
+    /// What the app opened on this launch (read once, from this Mac's copy of the setting).
+    @ObservationIgnored private var opensOn: NativeLandingOpensOn = .leftOff
+    /// The New session page the app opened on stays until he acts (see `applyOpening`).
+    @ObservationIgnored private var landingHeld = false
+    @ObservationIgnored private var mainPageLoads = 0
+    @ObservationIgnored private var openingApplied = false
+    @ObservationIgnored private var railAfterReload = false
+    @ObservationIgnored private var tabsAfterReload = false
+
+    /// The main page is up. It takes the keyboard only on the launch's first load, while it is what the window shows
+    /// and nothing else holds the keyboard (NativePageKeyboard): a reload or crash recovery never moves his typing.
+    func mainPageReady() {
+        pageReady = true
+        // LANDING-FIX-3: the window's own list of running sessions (session:list, then session events) starts with the
+        // page, not with the first button he presses: the strip lists every running session at launch (it showed one
+        // of four until he visited a page). It reads and lists only; it never selects or moves anything.
+        buttonActions.start()
+        web.run(.nativeScreens(NativeScreens.registered))
+        mainPageLoads += 1
+        if NativePageKeyboard.mayTake(firstLoad: mainPageLoads == 1, pageOnScreen: webPageOnScreen,
+                                      window: web.webView.window, page: web.webView) { web.focus() }
+    }
+    /// The page reloads (by itself, or after its web process ended): its first rail and tabs are its memory, which never
+    /// change the page or session he is on.
+    func mainPageReloading() {
+        pageReady = false
+        pageModalOpen = false
+        railAfterReload = true; tabsAfterReload = true
+    }
+    /// The web page itself is what the window shows (no native screen drawn over it). Sessions, browser tabs and Hoot
+    /// are always drawn natively; only a page the native screens do not draw is the web page. Asked of panels only, so it
+    /// never reaches `AppModel.shared` (the split check does) from another app model.
+    var webPageOnScreen: Bool {
+        guard failure == nil, let screen = currentScreen, screen.kind == "panel", !Self.nativeOnly(screen.id) else { return false }
+        return NativeScreens.detail(kind: "panel", id: screen.id) == nil
+    }
+
+    /// The New session page is what the main window shows.
+    var landingOnScreen: Bool { failure == nil && currentScreen?.kind == "panel" && currentScreen?.id == NativeLanding.pageID }
 
     // MARK: Messages from the pages
 
@@ -293,6 +367,8 @@ final class AppModel {
             // The page's first rail after it loads is its memory, not a choice made now.
             let fromPageMemory = !pageSidebarArrived
             pageSidebarArrived = true
+            let reloadMemory = railAfterReload // a reloaded page's memory never moves him
+            railAfterReload = false
             // The retired Simulators page (page shortcuts, deep links): the phone panel instead. Remembered at
             // launch it opens nothing: the phone panel would open Hoot's page, and Hoot stays closed until the
             // person opens it (Asad, 3 Nov).
@@ -300,25 +376,51 @@ final class AppModel {
                 lastPageSelectedId = filtered.selectedId
                 pageSidebar = NativeRCVNavigation.sidebar(NativeINT2Navigation.sidebar(filtered))
                 sidebar = pageSidebar.map { named($0) }
-                if canRun, !fromPageMemory { SHELLRoutes.openPhonePanel() }
+                if canRun, !fromPageMemory, !reloadMemory { SHELLRoutes.openPhonePanel() }
+                applyOpeningOnce(fromPageMemory)
                 return
             }
-            if pageSelectionChanged && !buttonActions.ownsSelection { activeBrowserTab = nil }
+            // The retired Overview page (Owner, 15 Nov): the hidden page's own Overview (its ⌘⇧D, its memory) is never
+            // adopted. His own press opens the stand-in (SHELLRoutes.overviewStandIn); its memory opens nothing.
+            if filtered.selectedId == SHELLRoutes.retiredOverview {
+                let pressed = pageSelectionChanged && canRun && !fromPageMemory && !reloadMemory
+                lastPageSelectedId = filtered.selectedId
+                pageSidebar = NativeRCVNavigation.sidebar(NativeINT2Navigation.sidebar(filtered))
+                if let pageSidebar { buttonActions.ingest(pageSidebar) }
+                sidebar = named(buttonActions.sidebar)
+                // "Where I left off" when he left off on the old Overview: the page it drew (the project's), else New session.
+                let leftOffThere = fromPageMemory && opensOn == .leftOff && !nativeHootSelected
+                if pressed || leftOffThere { select(SHELLRoutes.overviewStandIn()) }
+                applyOpeningOnce(fromPageMemory)
+                return
+            }
+            if pageSelectionChanged && !buttonActions.ownsSelection && !reloadMemory { activeBrowserTab = nil }
             lastPageSelectedId = filtered.selectedId
             pageSidebar = NativeRCVNavigation.sidebar(NativeINT2Navigation.sidebar(filtered)) // RCV
             if let pageSidebar { buttonActions.ingest(pageSidebar) }
             sidebar = named(buttonActions.sidebar)
-            if !nativeHootSelected, pageSelectionChanged || !Self.nativeOnly(sidebarSelection) /* AGT, RCV, SHELL native-only places */,
+            // The page's memory never replaces the New session page the app opened on (Owner, 14 Nov).
+            let keepsLanding = (fromPageMemory || landingHeld) && sidebarSelection == NativeLanding.pageID
+            if !nativeHootSelected, !keepsLanding, !reloadMemory, pageSelectionChanged || !Self.nativeOnly(sidebarSelection) /* AGT, RCV, SHELL native-only places */,
                filtered.selectedId != SHELLRoutes.retiredSimulators /* never adopt the retired page */ {
                 sidebarSelection = sidebar?.selectedId
             }
+            applyOpeningOnce(fromPageMemory)
         case .tabs(let state):
             let filtered = UIGMemoryVisibility.tabs(state)
             let active = filtered.activeID
-            if active != lastActiveTabId, active != nil, !buttonActions.ownsSelection { activeBrowserTab = nil }
+            let afterReload = tabsAfterReload, kept = tabsAfterReload ? tabs?.activeID : nil
+            tabsAfterReload = false
+            if active != lastActiveTabId, active != nil, !buttonActions.ownsSelection, !afterReload { activeBrowserTab = nil }
             lastActiveTabId = active
             buttonActions.ingest(filtered)
             tabs = named(preservingHoot(in: buttonActions.tabs))
+            // A reloaded page's remembered tab never replaces the one he is on.
+            if let kept, tabs?.activeID != kept, tabs?.tabs.contains(where: { $0.id == kept && $0.kind == "session" }) == true {
+                buttonActions.followNativeSelection(kept)
+                buttonSelectionRevision = buttonActions.selectionRevision
+                tabs = named(preservingHoot(in: buttonActions.tabs))
+            }
         case .openSettings(let url, let section):
             showSettings(url, section: section)
         case .openWindow(let ref, let title):
@@ -348,7 +450,13 @@ final class AppModel {
         case .settingsSections(let sections, let selected):
             // Hoot first, as in the main side panel (Asad, 2026-10-07); the rest keep their order.
             settingsSections = sections.filter(\.isHoot) + sections.filter { !$0.isHoot }
-            settingsSelection = selected
+            // Owner, 14 Nov: the page an opening asked for (General, or the page a link names) wins over what the
+            // web page remembered.
+            let next = NativeSettingsNavigation.afterPageReport(wanted: settingsWanted, current: settingsSelection,
+                                                                selected: selected, pageIDs: sections.map(\.id))
+            settingsWanted = nil
+            settingsSelection = next.selection
+            if let tell = next.tellPage { settingsWeb.run(.settingsSection(tell)) }
         case .openSettings(let url, let section):
             showSettings(url, section: section)
         case .openWindow(let ref, let title):
@@ -438,9 +546,6 @@ final class AppModel {
         }
     }
 
-    /// The shortcuts sheet over the Settings window (NativeSettingsShortcuts.present).
-    var settingsShortcuts: Set<String>?
-    func showSettingsShortcuts(hidden: Set<String>) { settingsShortcuts = hidden }
 
     // MARK: Appearance
 
@@ -485,7 +590,7 @@ final class AppModel {
 
     /// Move a whole page, keeping its shared stores and leaving a usable page in main.
     func movePageToWindow(_ ref: ScreenRef, bringForward: Bool = true) {
-        if ref.id == SHELLRoutes.devices { requestDevicesWindow(); return } // Devices is its own window, never a page
+        if ref.id == SHELLRoutes.devices { openDevices(); return } // Devices is a page of Settings, never a window of its own
         let page = NativePageWindows.page(kind: ref.screenKind, id: ref.id) ?? ref
         guard UIGMemoryVisibility.showsScreen(page) else { return }
         if NativePageWindows.shared.savedFrame(page) == nil, let frame = web.webView.window?.frame {
@@ -539,10 +644,15 @@ final class AppModel {
             if let current, NativePageWindows.page(kind: current.kind, id: current.id) == NativePageWindows.page(kind: ref.screenKind, id: ref.id) { pageAfterMove = NativePageWindows.shared.fallback() }
         }
         let screen = ScreenModel(ref: ref, log: engine.log)
+        var screenLoads = 0
         screen.web.onReady = { [weak screen] in
             screen?.ready = true
             screen?.web.run(.nativeScreens(NativeScreens.registered))
-            if let screen, NativePageWindows.needsWebFocus(screen.ref) { screen.web.focus() }
+            screenLoads += 1
+            if let screen, NativePageWindows.needsWebFocus(screen.ref),
+               NativePageKeyboard.mayTake(firstLoad: screenLoads == 1, pageOnScreen: true, window: screen.web.webView.window, page: screen.web.webView) {
+                screen.web.focus()
+            }
         }
         screen.web.onMessage = { [weak self, weak screen] message in
             guard let self, let screen else { return }
@@ -598,7 +708,8 @@ final class AppModel {
     func takeScreensToRestore() -> [ScreenRef] {
         // Only pages that really reopen count as moved: a memory page while memory is off opens no window.
         // Hoot's own window is never reopened by itself, even from a list saved before 3 Nov (isRemembered).
-        let restored = UIGMemoryVisibility.restoredScreens(screensToRestore.filter(\.isRemembered))
+        // Owner, 14 Nov: Settings is one window; a Settings page moved out before that is not reopened on its own.
+        let restored = UIGMemoryVisibility.restoredScreens(screensToRestore.filter { $0.isRemembered && !$0.id.hasPrefix("settings:") })
         screensToRestore = []
         for ref in restored where ref.kind == .panel { NativePageWindows.shared.requested(ref) }
         if restored.contains(where: { $0.kind == .panel }) { pageAfterMove = NativePageWindows.shared.fallback() }
@@ -633,21 +744,27 @@ final class AppModel {
     private func showSettings(_ relative: String, section: String?) {
         // Hoot's settings and profile live on the Hoot page now, not in Settings.
         if section == "copilot" || section == "hoot" { HootProfileRoute.open(tab: "brain"); return }
+        // Owner, 15 Nov: the Browser's settings left the Settings window; every old link opens their own small window.
+        if let section, NativeBrowserSettingsWindow.handles(section) { NativeBrowserSettingsWindow.show(); return }
         guard let engineURL, let url = SettingsLocation.resolve(relative, engineURL: engineURL) else {
             engine.log.note("refused open-settings for \(EngineLineParser.redacted(relative)) (not on the engine's origin)")
             buttonActions.problem = "Settings could not be opened. Please try again after the app has started."
             return
         }
+        // Owner, 14 Nov: Settings opens on General every time, whichever page it was closed on; a link that names a
+        // page on purpose ("Fix this in Settings", a tool) still opens that page.
+        let wanted = NativeSettingsNavigation.opened(naming: section)
         if url != settingsWeb.requestedURL || settingsFailure != nil {
             settingsReady = false
             settingsModalOpen = false
             settingsFailure = nil
             settingsSections = []
-            settingsSelection = nil
+            settingsSelection = wanted
+            settingsWanted = wanted
             settingsWeb.load(url)
-        } else if let section {
-            settingsSelection = section
-            settingsWeb.run(.settingsSection(section))
+        } else {
+            settingsSelection = wanted
+            settingsWeb.run(.settingsSection(wanted))
         }
         settingsWindowRequest += 1
     }
@@ -714,12 +831,24 @@ final class AppModel {
                         active: tab.id == browserSelected, status: tab.loading ? "loading" : nil, closable: true)
             }
             + NativeFIXESDeviceTabs.shared.tabs.map { $0.with(active: browserSelected == nil && $0.id == NativeFIXESDeviceTabs.shared.selectedID) }
-        let state = TabsState(tabs: merged, canNewTerminal: page.canNewTerminal,
+        var state = TabsState(tabs: merged, canNewTerminal: page.canNewTerminal,
                               canNewBrowser: BrowserTabsHook.provider != nil || page.canNewBrowser,
                               layout: page.layout, accountSwitch: page.accountSwitch)
+        // A session still named after its project's folder reads as the project (display only, NativeProjectNames).
+        state = SessionNames.applied(NativeProjectNames.folderNamed(state.tabs, in: sidebar), to: state)
         guard !state.tabs.isEmpty || state.canNewTerminal || state.canNewBrowser else { return nil }
         return state
     }
+
+    /// A tab of the strip is what the window shows (a session, a browser or device tab). False on every page: the strip
+    /// keeps the open sessions, in their order, with none selected, and the window title names the page.
+    var stripShowsWhatIsOnShow: Bool { stripTabs?.tabs.contains(where: \.active) == true }
+    /// 15 Nov review items 10 and 13: the window bar shows the tab strip whenever there is one, on every page as on
+    /// Hoot, and the window's title only when there is no strip. With the title beside it the strip did not fit and
+    /// macOS folded it into the toolbar's overflow "»" (the double arrow at the top right that only offered "Session 1"),
+    /// and "New session" was written twice (bar and page heading). The page's own heading names the page; the title
+    /// still names the window in the Window menu and Mission Control.
+    var windowBarShowsTitle: Bool { stripTabs == nil }
 
     /// Favicons for the native browser's tabs, by tab id.
     var stripFavicons: [String: NSImage] {
@@ -850,7 +979,9 @@ final class AppModel {
                 window.makeFirstResponder(nil)
             }
             DeckTerminalSlot.restoreFocus(in: window)
-        } else if pageReady {
+        } else if pageReady, NativeFront.personActing, NativePageKeyboard.personJustPressed() {
+            // Only his own click (or ⌘-shortcut) gives the page the keyboard: a tool switching the view or the page
+            // opening a dialog by itself leaves it where he is typing (Owner, 14 Nov).
             page.focus()
         }
     }
@@ -868,40 +999,73 @@ final class AppModel {
     }
 
     var windowTitle: String {
+        if landingOnScreen { return "New session" }
         guard canRun else { return "Terminal Deck" }
         if let screen = currentScreen, screen.kind == "session",
            let title = buttonActions.tabs.tabs.first(where: { $0.id == screen.id })?.title ?? sidebar?.item(id: screen.id)?.title,
-           !title.isEmpty { return title }
+           !title.isEmpty {
+            return NativeProjectNames.sessionTitle(title, folder: sessionGroup(screen.id)?.id)
+        }
         if let heading = nativeHeading { return heading.title }
+        // Owner, 14 Nov: the title names what the window shows. A page drawn here (Cloud, Projects, a project, Code…)
+        // or a browser / device tab is named by itself; the web page's own title is the page's view underneath (it
+        // stays on the session it last showed: "Session 1 – ClaudeCRM" over the Cloud page).
+        if let screen = currentScreen, screen.kind != "session" {
+            if let name = shownName(screen) { return name }
+            if !webPageOnScreen { return "Terminal Deck" }
+        }
         guard let pageTitle, !pageTitle.isEmpty else { return "Terminal Deck" }
         return pageTitle
+    }
+
+    /// The side panel's (or the strip's) own name for the screen on show.
+    private func shownName(_ screen: (kind: String, id: String)) -> String? {
+        if screen.kind == "panel" {
+            if let title = sidebar?.item(id: screen.id)?.title, !title.isEmpty { return title }
+            if let page = Sidebar21Pages.standard.first(where: { $0.id == screen.id }) { return page.title }
+            if SHELLRoutes.owns(screen.id), screen.id.hasPrefix(SHELLRoutes.projectPrefix) {
+                return SHELLRoutes.project(forPath: String(screen.id.dropFirst(SHELLRoutes.projectPrefix.count))).name
+            }
+        }
+        if let title = stripTabs?.tabs.first(where: { $0.id == screen.id })?.title, !title.isEmpty { return title }
+        return nil
     }
 
     /// A sidebar view drawn natively names itself. The page's heading is the page's own
     /// view, and it does not always follow the native selection — Hoot not set up yet
     /// leaves the page on whatever it showed before ("Simulators" over the Hoot screen).
-    /// Tabs (sessions, browsers) keep the page's heading: the page owns that selection.
+    /// The project goes in the subtitle only for a session (`shownProject`).
     private var nativeHeading: (title: String, subtitle: String)? {
         if currentScreen?.kind == "hoot" { return (hootTitle, "") }
         guard let screen = currentScreen, screen.kind != "session", screen.kind != "browser",
               let item = sidebar?.item(id: screen.id), !item.title.isEmpty,
               NativeScreens.detail(kind: screen.kind, id: screen.id) != nil else { return nil }
-        // The page agrees: its subtitle is the right one.
-        if item.title == pageTitle { return (item.title, pageSubtitle ?? "") }
-        // Hoot is not about a project (the page sends no folder for the copilot).
-        if item.isHoot { return (item.title, "") }
-        // A view is about the project the page's views are about (`activeProjectPath`).
-        guard let path = sidebar?.project else { return (item.title, "") }
-        let name = sidebar?.projects.first { $0.id == path }?.title ?? URL(fileURLWithPath: path).lastPathComponent
-        return (item.title, name == item.title ? "" : name)
+        return (item.title, "")
     }
 
-    /// Real state only: engine progress, else the page's own subtitle (or nothing).
+    /// LANDING-FIX-2 (Owner, 14 Nov: "Cloud – ClaudeCRM", "Tasks – ClaudeCRM"): macOS draws the subtitle after the title,
+    /// and it used to be the hidden web page's subtitle (the project of the session it last showed) or, on a page, the
+    /// project the page's views were about. A project's name now follows the title only when the window shows one of
+    /// that project's sessions; a page (New session, Cloud, Tasks, Overview, a project's own page whose title already
+    /// is its name) stands alone.
+    var shownProject: String {
+        guard let screen = currentScreen, screen.kind == "session", let group = sessionGroup(screen.id) else { return "" }
+        // The project's own name ("CRM"), not its folder's ("ClaudeCRM"); a folder of no project keeps the rail's name.
+        let project = NativeProjectNames.project(folder: group.id) ?? group.title
+        return project == windowTitle ? "" : project
+    }
+    /// The rail's project group (folder) a session is listed under.
+    private func sessionGroup(_ id: String) -> SidebarProject? {
+        sidebar?.projects.first { $0.sessions.contains { $0.id == id } }
+    }
+
+    /// Real state only: engine progress, else the project of the session on show (or nothing).
     var windowSubtitle: String {
         if failure != nil { return "Not running" }
+        if landingOnScreen { return "" }
         switch engine.phase {
         case .idle, .starting: return "Starting…"
-        case .ready: return pageReady ? (nativeHeading?.subtitle ?? pageSubtitle ?? "") : "Loading…"
+        case .ready: return pageReady ? shownProject : "Loading…"
         case .failed: return "Not running"
         }
     }
@@ -922,6 +1086,7 @@ final class AppModel {
     // MARK: Native button actions
 
     private func send(_ command: PageCommand) {
+        personChose()
         guard UIGMemoryVisibility.showsPageCommand(command) else { buttonActions.problem = "That page is not available here."; return }
         if NativeButtonActions.names.contains(command.name) { runButton(command); return }
         guard canRun else { buttonActions.problem = "The page is still loading. Please try again."; return }
@@ -952,6 +1117,7 @@ final class AppModel {
     /// says Hoot, or an "open Hoot" they asked for. Launch never lands on Hoot any more (Asad, 3 Nov: "It should
     /// not be always open until we open the Hoot" — replaces 10 Oct "it should always land on Hoot").
     private func openHootPage() {
+        personChose()
         let page = ScreenRef(kind: .panel, id: "hoot", isHoot: true)
         if NativePageWindows.shared.contains(page) { movePageToWindow(page); return }
         guard engineIsUp else { buttonActions.problem = "The app is still starting. Please try again."; return }
@@ -983,6 +1149,7 @@ final class AppModel {
     func newSession(in projectPath: String) { send(.newSessionIn(projectPath)) }
     func closeProject(_ projectPath: String) { send(.closeProject(projectPath)) }
     func selectTab(_ id: String) {
+        personChose()
         if id.hasPrefix("held:") { runButton(.select(id)); return }
         if let tab = tabs?.tabs.first(where: { $0.id == id }), let page = NativePageWindows.page(kind: tab.kind, id: tab.id), NativePageWindows.shared.contains(page) { movePageToWindow(page); return }
         pageAfterMove = nil
@@ -1075,6 +1242,7 @@ final class AppModel {
     /// A new native browser tab, selected — or, in a build without the native browser,
     /// the page's own (the engine's browser window).
     func newBrowserTab() {
+        personChose()
         deactivateHoot(selecting: nil)
         guard engineIsUp else { buttonActions.problem = "The app is still starting. Please try again."; return }
         NativeFIXESDeviceTabs.shared.selectedID = nil
@@ -1088,6 +1256,7 @@ final class AppModel {
     }
 
     func select(_ id: String?) {
+        personChose()
         // Held rows request Retry; they never become the active screen or a synthetic tab.
         if let id, id.hasPrefix("held:") { runButton(.select(id)); return }
         if let id, let page = NativePageWindows.page(kind: "panel", id: id), NativePageWindows.shared.contains(page) {
@@ -1096,6 +1265,7 @@ final class AppModel {
         pageAfterMove = nil
         guard let raw = id, let id = SHELLRoutes.resolve(raw) else { return }
         if id == SHELLRoutes.retiredSimulators { SHELLRoutes.openPhonePanel(); return }
+        if id == SHELLRoutes.retiredOverview { select(SHELLRoutes.overviewStandIn()); return }
         if HootReadyDefaults.enabled(), id == "hoot" || sidebar?.item(id: id)?.kind == .hoot { openHootPage(); return }
         guard UIGMemoryVisibility.showsScreen(kind: sidebar?.item(id: id)?.kind.name ?? "panel", id: id) else { return }
         if Self.nativeOnly(id) {
@@ -1125,6 +1295,7 @@ final class AppModel {
 
     func selectSettingsSection(_ id: String?) {
         guard let id, id != settingsSelection else { return }
+        if settingsWanted != nil { settingsWanted = id } // "open Settings, then this page" keeps this page
         settingsSelection = id
         settingsWeb.run(.settingsSection(id))
     }
@@ -1362,6 +1533,8 @@ final class AppModel {
 extension NativeCompositionRoot.Runtime {
     static var application: Self {
         var runtime = Self()
+        runtime.cloudAccount = { root in try await NativeCloudApplication.make(root: root) }
+        runtime.cloudOffered = { root in NativeCloudApplication.canSignIn(root: root) }
         runtime.window = { NSApp.mainWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) }
         runtime.showProject = { path in await MainActor.run { AppModel.shared.select(path); return true } }
         runtime.whereWindow = { try await AppModel.shared.compositionWhereWindow() }

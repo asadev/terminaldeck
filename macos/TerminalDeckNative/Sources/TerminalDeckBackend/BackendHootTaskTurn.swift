@@ -127,14 +127,14 @@ public extension BackendCopilotSessionRuntime {
             let prefix = BackendHootBackgroundTurn.turnPrefix + reason + ":"
             for waiting in waitingPrefixes(startingWith: prefix) { noteCancelled(waiting) }
             let turn = await chat.activeTurnID
-            if turn.hasPrefix(prefix), await chat.isBusy { noteInterrupted(turn); try? await chat.interrupt() }
+            if turn.hasPrefix(prefix), await chat.isBusy { noteInterrupted(turn); await chat.markStop("background turn"); try? await chat.interrupt() }
             return
         }
         let prefix = BackendHootBackgroundTurn(reason: reason, id: id, title: "", message: "").turnPrefix
         let turn = await chat.activeTurnID
         // The running one is interrupted, and any copy still waiting behind it never starts.
         noteCancelled(prefix)
-        if turn.hasPrefix(prefix), await chat.isBusy { noteInterrupted(turn); try? await chat.interrupt() }
+        if turn.hasPrefix(prefix), await chat.isBusy { noteInterrupted(turn); await chat.markStop("background turn"); try? await chat.interrupt() }
     }
 
     /// L6 TASK-TURN API. Hands Hoot one assigned task and returns when Hoot has finished it: a background

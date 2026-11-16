@@ -59,6 +59,17 @@ extension DeckMemoryStore {
         file.set("date", DeckMemoryFiles.stamp(labels.date)); file.set("source", source)
     }
 
+    /// The live places an archived note may have come from: `archive/<path>` → `<path>`, and `archive/<stem>-N.md`
+    /// (`archiveNow` when the first name was taken) → `<stem>-N.md` and `<stem>.md`.
+    static func archiveOrigins(_ archived: String) -> [String] {
+        guard archived.hasPrefix("archive/") else { return [] }
+        let live = String(archived.dropFirst("archive/".count))
+        var out = [live]
+        if live.hasSuffix(".md"), let dash = live.dropLast(3).lastIndex(of: "-"), Int(live[live.index(after: dash)..<live.index(live.endIndex, offsetBy: -3)]) != nil {
+            out.append(String(live[..<dash]) + ".md")
+        }
+        return out
+    }
     /// Reads one note file and brings its index row and search row in line. A file with no id (dropped in by hand)
     /// gets its labels written into it. Returns the note's id, and whether anything about it changed.
     @discardableResult
@@ -68,8 +79,22 @@ extension DeckMemoryStore {
         let modified = Date(timeIntervalSince1970: info.mtime)
         var id = file.value("id") ?? ""
         // The same id at another path whose file is still there means this is a copy: it becomes its own note.
-        if !id.isEmpty, let other = try db.first("SELECT path FROM notes WHERE id = ? AND missing = 0", [.text(id)])?.text(0), other != path,
-           FileManager.default.fileExists(atPath: url(other).path) { id = "" }
+        if !id.isEmpty, let otherRow = try db.first("SELECT path, archived, origin_path FROM notes WHERE id = ? AND missing = 0", [.text(id)]), otherRow.text(0) != path,
+           FileManager.default.fileExists(atPath: url(otherRow.text(0)).path) {
+            // The one rule (lane memory-one-rule): an ARCHIVE MOVE that reached this Mac from another one is the same
+            // note, not a copy. The archived file takes the id; the old live file left at the note's origin is a stale
+            // copy: never indexed again (it would become a second live note with a new id, written into its file and
+            // sent back), and the Cloud's removal of that place, or the one-time settling, takes it out of memory.
+            let other = otherRow.text(0)
+            // Only the SAME WORDS make it the same note: the same id with other words is an edit made after the
+            // archive, and it stays a note of its own (never hidden).
+            let sameWords = DeckMemoryFiles.read(url(other)).map { DeckMemoryFile(text: $0).body == file.body } ?? false
+            if sameWords, archivedByPath, Self.archiveOrigins(path).contains(other) {
+                // Indexed under the note's own id: the note's one row moves to the archive place.
+            } else if sameWords, !archivedByPath, !otherRow.isNull(1), (otherRow.string(2).map { [$0] } ?? Self.archiveOrigins(other)).contains(path) {
+                return nil
+            } else { id = "" }
+        }
         if id.isEmpty {
             id = Self.newNoteID(modified)
             let owner = DeckMemoryOwner(key: file.value("seat") ?? file.value("owner") ?? "") ?? pathOwner
@@ -262,6 +287,8 @@ extension DeckMemoryStore {
             try FileManager.default.createDirectory(at: url(target).deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.moveItem(at: url(path), to: url(target))
         } catch { throw DeckMemoryError(.io, "The note could not be moved to the archive: \(error.localizedDescription)") }
+        // Delete rule (decision 1): every caller (page, tool, supersede, merge, rewind) records the app's own move.
+        try cloudRecordMemoryMove(from: path, to: target)
         try indexNote(path: target, pathOwner: owner, archivedByPath: true, text: file.text)
         try db.run("UPDATE notes SET origin_path = ? WHERE id = ?", [.text(path), .text(id)])
         return note(try noteRow(id)!)
@@ -283,6 +310,7 @@ extension DeckMemoryStore {
             try FileManager.default.createDirectory(at: url(target).deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.moveItem(at: url(path), to: url(target))
         } catch { throw DeckMemoryError(.io, "The note could not be brought back: \(error.localizedDescription)") }
+        try cloudRecordMemoryMove(from: path, to: target)
         // Retest 11 Oct: a restore left its emptied folder under archive/. Remove folders the move emptied,
         // walking up, but never archive/ itself and never a folder that still holds anything.
         if path.hasPrefix("archive/") {

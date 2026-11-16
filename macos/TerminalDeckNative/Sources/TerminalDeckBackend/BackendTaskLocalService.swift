@@ -18,6 +18,10 @@ public actor BackendTaskLocalService {
     private var busy = false, waiters: [CheckedContinuation<Void, Never>] = []
     public init(store: BackendTaskStore, configuration: BackendTaskConfiguration, goals: BackendGoalStore, engine: any BackendTaskExecuting) {
         self.store = store; config = configuration; self.configuration = configuration; self.goals = goals; self.engine = engine
+        store.recordDeletes.setTaskDeleter { [weak self] id, actor in
+            guard let self else { throw CancellationError() }
+            try await self.remove(id, by: actor.by == .person ? "me" : BackendTaskActor.current, deletedBy: actor)
+        }
     }
     public func assignee(_ input: NativeRPCValue) async throws -> NativeRPCValue {
         let id = input.string ?? "none", kind: String
@@ -108,14 +112,16 @@ public actor BackendTaskLocalService {
             try await updateObserver(before, after, writtenNotes, by)
         }; return after
     }
-    public func remove(_ id: String, by: String = BackendTaskActor.current) async throws {
+    public func remove(_ id: String, by: String = BackendTaskActor.current, deletedBy actor: CloudDeleteActor? = nil) async throws {
         let record = try await task(id)
         // U70: stopping its session (which can start the next queued task) runs outside the lock.
         if record.sessionID != nil { try await engine.cancel(id, reason: "the task was deleted.") }
         // FORK-TASKS: Hoot has no session on the task, so nothing stopped it when its task was deleted.
         await (engine as? BackendTaskEngine)?.taskRemoved(id)
+        let given: CloudDeleteActor
+        if let actor { given = actor } else { given = await store.recordDeletes.currentActor(by: by) }
         await enter(); defer { leave() }
-        try await store.note(id, by: by, kind: "edited", text: "Moved to Trash."); try await store.moveToTrash(id)
+        try await store.note(id, by: by, kind: "edited", text: "Moved to Trash."); try await store.moveToTrash(id, deletedBy: given)
     }
     public func restore(_ id: String, by: String = BackendTaskActor.current) async throws -> BackendTaskRecord {
         await enter(); defer { leave() }; _ = try await store.restore(id); try await store.note(id, by: by, kind: "edited", text: "Restored from Trash."); return try await task(id)

@@ -39,7 +39,8 @@ extension NativeCompositionProduction {
                 case let .swipe(fromX, fromY, toX, toY, ms):
                     try await tools.swipe(id, from: .object([.init("x", .number(fromX)), .init("y", .number(fromY))]),
                                           to: .object([.init("x", .number(toX)), .init("y", .number(toY))]), durationMS: Int(ms))
-                case .type(let text): try await tools.type(id, text: text)
+                // His own typing on his phone's Devices page (MAC-NEXT-15c: marked as his, as the Mac's phone panel is).
+                case .type(let text): try await BackendSimulatorPasteboard.$typingForPerson.withValue(true) { try await tools.type(id, text: text) }
                 case .key(let key): try await tools.key(id, key: key, modifiers: [])
                 case .button(let button): try await tools.button(id, button: button)
                 case .rotate: _ = try await manager.rotate(id)
@@ -133,7 +134,7 @@ extension NativeCompositionProduction {
         guard !(await mcp.registrations().contains { $0.0.id == id }) else { return }
         do {
             let spec = try BackendMCPTool(id: id, wireName: "devices_phone_watch",
-                description: "Which simulators and emulators a paired phone is watching live from the phone app's Devices page right now (device, phone, pictures a second). Leave those running: a person is looking at them.",
+                description: "Which simulators and emulators a connected phone is watching live from the phone app's Devices page right now (device, phone, pictures a second). Leave those running: a person is looking at them.",
                 inputSchema: .object([.init("type", .string("object")), .init("properties", .object([])), .init("additionalProperties", .bool(false))]),
                 tier: .read)
             try await mcp.registerTool(spec, ownerID: "native.phone-devices") { caller, _ in
@@ -630,7 +631,7 @@ extension NativeCompositionProduction {
         let mcp = root.mcp, joins = self.joins
         let empty = NativeRPCValue.object([.init("type", .string("object")), .init("properties", .object([])), .init("additionalProperties", .bool(false))])
         let tools: [(String, BackendMCPTier, String)] = [
-            ("mac_screen.status", .read, "This Mac's screen on paired phones and other Macs: whether Terminal Deck has the Screen Recording and Accessibility permissions, the displays, which phones or Macs are watching or controlling this Mac now, and which other Macs this Mac is showing (remote). Read only."),
+            ("mac_screen.status", .read, "This Mac's screen on your phones and other Macs: whether Terminal Deck has the Screen Recording and Accessibility permissions, the displays, which phones or Macs are watching or controlling this Mac now, and which other Macs this Mac is showing (remote). Read only."),
             ("mac_screen.wake", .act, "Ask the person to wake this Mac's sleeping displays once. Never unlocks it or starts screen sharing."),
             ("mac_screen.stop", .act, "Stop every phone or Mac watching or controlling this Mac's screen and close every window here showing another Mac's screen. Nothing can start a screen session except the person, from a phone or from Devices › Other Macs."),
 

@@ -112,7 +112,8 @@ final class NativePageWindows {
         return ref.id
     }
     func fallback() -> String {
-        ["overview", "tasks", "agents-all", "memory", "servers"].first {
+        // Overview is gone (Owner, 15 Nov): the New session page, the app's home, comes first.
+        [NativeLanding.pageID, "tasks", "agents-all", "memory", "servers"].first {
             let ref = ScreenRef(kind: .panel, id: $0)
             return UIGMemoryVisibility.showsScreen(ref) && !contains(ref)
         } ?? Self.emptyMainID

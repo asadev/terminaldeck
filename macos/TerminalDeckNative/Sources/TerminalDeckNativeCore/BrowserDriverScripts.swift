@@ -83,10 +83,40 @@ public enum BrowserDriverScripts {
       return v === '' || v === 'true' || v === 'plaintext-only';
     };
     var SECRET_AUTOCOMPLETE = /(current-password|new-password|one-time-code|cc-[a-z-]+)/i;
+    // MAC-NEXT-15b: secret by its words too, in name / id / autocomplete / aria-label / placeholder. Words, not letters:
+    // camelCase and _ - . split first, so "userPin" and "otp_code" match while "spinner" and "opinion" do not.
+    // MAC-NEXT-15c: no "pin code"/"pincode" (a postal code in Pakistan and India), no plain "social" or "token"; "pin"
+    // only for a real PIN (pin, card pin, atm pin, security pin, pin number) with no place or postal word beside it.
+    // ("2FA" is split to "2 fa" by the camelCase step below, hence "2 ?fa".)
+    var SECRET_WORDS = /\b(?:otp|passcode|passphrase|security ?code|verification ?code|auth ?code|recovery ?code|one ?time ?code|2 ?fa|mfa|ssn|cvv2?|cvc|csc|card ?number|iban|routing|account ?number|secret|(?:auth|access|api|secret) ?tokens?|(?:api|secret|private) ?keys?)\b/;
+    var PIN_WORDS = /\b(?:(?:card|atm|security) ?)?pin(?: ?number)?\b/;
+    var PLACE_WORDS = /\b(?:code|postal|post|postcode|zip|location|address|map|area|city|town|place|places|drop)\b/;
+    // The field's own label text: <label for=…> and a wrapping <label> (el.labels has both), as a person reads it.
+    // Only for fields (a page walk asks isSecret of every node; other nodes have no label to read).
+    var labelWords = function (el) {
+      var tg = String(el.tagName || '').toLowerCase();
+      if (tg !== 'input' && tg !== 'textarea' && tg !== 'select' && !editableAttr(el)) return '';
+      var out = [];
+      try { var ls = el.labels; if (ls) for (var i = 0; i < ls.length && i < 4; i++) out.push(line(ls[i])) } catch (e) {}
+      if (!out.length) {
+        try {
+          var id = attr(el, 'id'), doc = el.ownerDocument;
+          if (id && doc) { var all = doc.getElementsByTagName('label'); for (var j = 0; j < all.length; j++) if (all[j].htmlFor === id) { out.push(line(all[j])); break } }
+        } catch (e) {}
+        try { var wrap = el.closest ? el.closest('label') : null; if (wrap) out.push(line(wrap)) } catch (e) {}
+      }
+      return out.join(' ').slice(0, 300);
+    };
+    var secretWords = function (el) {
+      var raw = ['name', 'id', 'autocomplete', 'aria-label', 'placeholder'].map(function (n) { return attr(el, n) }).join(' ') + ' ' + labelWords(el);
+      var words = raw.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_\-.:\[\]\/#]+/g, ' ').toLowerCase();
+      if (SECRET_WORDS.test(words)) return true;
+      return PIN_WORDS.test(words) && !PLACE_WORDS.test(words);
+    };
     var isSecret = function (el) {
       var t = typeOf(el);
       if (t === 'password' || t === 'file') return true;
-      return SECRET_AUTOCOMPLETE.test(attr(el, 'autocomplete')) || /(?:card.?num|credit.?card|cc.?num|cvv|cvc|csc|one.?time.?code|password|passwd)/i.test(attr(el, 'name') + ' ' + attr(el, 'id'));
+      return SECRET_AUTOCOMPLETE.test(attr(el, 'autocomplete')) || /(?:card.?num|credit.?card|cc.?num|cvv|cvc|csc|one.?time.?code|password|passwd)/i.test(attr(el, 'name') + ' ' + attr(el, 'id')) || secretWords(el);
     };
     var visible = function (el) {
       var r = localBox(el);
@@ -643,25 +673,300 @@ public enum BrowserDriverScripts {
       try { H.click.call(el) } catch (e) { fire('click') }
       return { ok: true };
     }
-    if (args.action === 'type') {
-      try { H.focus.call(el) } catch (e) {}
-      var v = String(args.value == null ? '' : args.value);
-      if (editableAttr(el)) { el.textContent = v }
-      else {
-        var proto = tagOf(el) === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-        var setter = Object.getOwnPropertyDescriptor(proto, 'value');
-        try { setter && setter.set ? setter.set.call(el, v) : (el.value = v) } catch (e) { el.value = v }
+    // MAC-NEXT-14: an AI's typing and keys happen HERE, inside the page, never as AppKit key events (those reach
+    // the person's own focused session when the page does not take them). Each character is what a keyboard does in
+    // a browser: keydown, keypress, then the browser's own editing command (it fires the trusted beforeinput and
+    // input events frameworks and rich editors listen for, and keeps undo), then keyup. A page that takes the key
+    // itself (preventDefault on keydown) gets no default action, as with a real keyboard.
+    var deep = function (node) {
+      try {
+        for (var i = 0; i < 8 && node; i++) {
+          var t = tagOf(node);
+          if ((t === 'iframe' || t === 'frame') && node.contentDocument && node.contentDocument.activeElement) { node = node.contentDocument.activeElement; continue }
+          if (node.shadowRoot && node.shadowRoot.activeElement) { node = node.shadowRoot.activeElement; continue }
+          break;
+        }
+      } catch (e) {}
+      return node;
+    };
+    var NAMED = { Enter: [13, 'Enter'], Tab: [9, 'Tab'], Escape: [27, 'Escape'], Backspace: [8, 'Backspace'], Delete: [46, 'Delete'],
+      ArrowDown: [40, 'ArrowDown'], ArrowUp: [38, 'ArrowUp'], ArrowLeft: [37, 'ArrowLeft'], ArrowRight: [39, 'ArrowRight'], Space: [32, 'Space'],
+      Home: [36, 'Home'], End: [35, 'End'], PageUp: [33, 'PageUp'], PageDown: [34, 'PageDown'], Insert: [45, 'Insert'] };
+    var keyInfo = function (k) {
+      if (NAMED[k]) return { key: k === 'Space' ? ' ' : k, code: NAMED[k][1], keyCode: NAMED[k][0] };
+      if (/^F([1-9]|1[0-2])$/.test(k)) return { key: k, code: k, keyCode: 111 + Number(k.slice(1)) };
+      var up = k.toUpperCase();
+      if (/^[a-z]$/i.test(k)) return { key: k, code: 'Key' + up, keyCode: up.charCodeAt(0) };
+      if (/^[0-9]$/.test(k)) return { key: k, code: 'Digit' + k, keyCode: k.charCodeAt(0) };
+      if (k === ' ') return { key: ' ', code: 'Space', keyCode: 32 };
+      return { key: k, code: '', keyCode: 0 };
+    };
+    var keyEvent = function (node, type, info, charCode) {
+      var w = winOf(node), ev;
+      var init = { key: info.key, code: info.code, bubbles: true, cancelable: true, composed: true, view: w,
+                    shiftKey: !!mods.shift, ctrlKey: !!mods.control, altKey: !!mods.alt, metaKey: !!mods.meta,
+                    keyCode: info.keyCode, which: type === 'keypress' ? charCode : info.keyCode, charCode: type === 'keypress' ? charCode : 0 };
+      try { ev = new w.KeyboardEvent(type, init) } catch (e) { return true }
+      // Older sites read keyCode / which / charCode, which the constructor may leave at 0.
+      ['keyCode', 'which', 'charCode'].forEach(function (name) {
+        try { if (ev[name] !== init[name]) Object.defineProperty(ev, name, { get: function () { return init[name] } }) } catch (e) {}
+      });
+      try { return node.dispatchEvent(ev) } catch (e) { return true }
+    };
+    var exec = function (node, command, value) {
+      try { return node.ownerDocument.execCommand(command, false, value === undefined ? null : value) } catch (e) { return false }
+    };
+    var hasValue = function (node) { var t = tagOf(node); return t === 'input' || t === 'textarea' };
+    var editable = function (node) {
+      if (!node) return false;
+      if (hasValue(node)) return !node.disabled && !node.readOnly;
+      try { return !!node.isContentEditable } catch (e) { return false }
+    };
+    var setValue = function (node, value) {
+      var proto = tagOf(node) === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      var setter = Object.getOwnPropertyDescriptor(proto, 'value');
+      try { setter && setter.set ? setter.set.call(node, value) : (node.value = value) } catch (e) { node.value = value }
+    };
+    var activeIn = function (doc) { try { return deep(doc.activeElement) } catch (e) { return null } };
+    // Where a keyboard's keys go now: the page's focused editable element (a page that moves focus on, like a code
+    // box with one field per digit, is followed), else the field the step named.
+    var caretTarget = function (fallback) {
+      var now = activeIn(fallback.ownerDocument);
+      return editable(now) ? now : fallback;
+    };
+    var contentOf = function (node) {
+      try { return hasValue(node) ? String(node.value) : String(node.textContent || '') } catch (e) { return '' }
+    };
+    // MAC-NEXT-15: a field takes a character into its own value at the caret (replacing a selection), as a keyboard
+    // would, never by setting the whole value to the one character (the old "1234" ended as "4").
+    var spliceChar = function (node, ch) {
+      var cur = String(node.value == null ? '' : node.value), s0 = null, e0 = null;
+      try { s0 = node.selectionStart; e0 = node.selectionEnd } catch (e) {}
+      var at = typeof s0 === 'number' && typeof e0 === 'number' && s0 <= cur.length && e0 <= cur.length;
+      var next = at ? cur.slice(0, s0) + ch + cur.slice(e0) : cur + ch;
+      var max = -1; try { max = Number(node.maxLength) } catch (e) {}
+      if (max >= 0 && Array.from(next).length > max) return false;
+      setValue(node, next);
+      if (at) { try { node.setSelectionRange(s0 + ch.length, s0 + ch.length) } catch (e) {} }
+      try { node.dispatchEvent(new (winOf(node).InputEvent)('input', { bubbles: true, inputType: 'insertText', data: ch })) } catch (e) {}
+      return true;
+    };
+    // Fields whose value went in through the value setter (no native editing): they get the "change" a person's
+    // typing gets when the field is left (MAC-NEXT-15; the browser fires it itself for its own editing).
+    var setterUsed = [];
+    var insertChar = function (node, ch) {
+      var before = contentOf(node), focused = activeIn(node.ownerDocument) === node;
+      // The focused field takes it through the editing command (and keeps its own limits, like maxlength). A rich
+      // editor that handles the input itself may answer false although it inserted the character: what the field
+      // holds decides, so a character is never inserted twice.
+      if (focused) { exec(node, 'insertText', ch); if (contentOf(node) !== before) return }
+      if (hasValue(node)) {
+        // The editing command did nothing, or the page took its focus away: into the value at the caret.
+        if (spliceChar(node, ch) && setterUsed.indexOf(node) < 0) setterUsed.push(node);
+        return;
       }
-      try { el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: v })) } catch (e) { fire('input') }
-      try { el.dispatchEvent(new Event('change', { bubbles: true })) } catch (e) {}
-      return { ok: true };
+      if (!focused) {
+        try { node.ownerDocument.defaultView.getSelection().collapse(node, node.childNodes.length) } catch (e) {}
+        exec(node, 'insertText', ch);
+        if (contentOf(node) !== before) return;
+      }
+      try {
+        node.appendChild(node.ownerDocument.createTextNode(ch));
+        node.dispatchEvent(new (winOf(node).InputEvent)('input', { bubbles: true, inputType: 'insertText', data: ch }));
+      } catch (e) {}
+    };
+    var secretStop = function (node, typed) {
+      return { ok: false, secret: true, typed: typed, reason: 'the page moved the typing into a password, one-time-code or other secret field' };
+    };
+    // After typing, the fields must hold what was sent (a page's own formatting, like spaces or dashes in a phone
+    // number, is allowed for). Otherwise the step says so, with what they hold, so the AI can hand the page over.
+    var squash = function (t) {
+      var out = String(t).replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\u00a0/g, ' ');
+      try { out = out.replace(/[\s\p{P}\p{S}]/gu, '') } catch (e) { out = out.replace(/[\s.,;:!?'"()\[\]{}\-_\/\\+*#@&%$^=<>|~`]/g, '') }
+      return out;
+    };
+    // Case too: a field may show what was typed in capitals.
+    var contains = function (got, sent) {
+      if (got.indexOf(sent) >= 0) return true;
+      var want = squash(sent).toLowerCase();
+      return want === '' ? got.replace(/\s/g, '').indexOf(sent.replace(/\s/g, '')) >= 0 : squash(got).toLowerCase().indexOf(want) >= 0;
+    };
+    // MAC-NEXT-15b: judged against what each field held when the step began. What typing ADDED (the part of the
+    // field that differs from its start) must hold the text; or, when typing replaced the whole field with the same
+    // text, the field changed during the step and now equals it. A field that already held the text and ignored the
+    // typing never passes.
+    var addedTo = function (start, now) {
+      var a = 0; while (a < start.length && a < now.length && start.charAt(a) === now.charAt(a)) a++;
+      var b = 0; while (b < start.length - a && b < now.length - a && start.charAt(start.length - 1 - b) === now.charAt(now.length - 1 - b)) b++;
+      return now.slice(a, now.length - b);
+    };
+    var changedDuringStep = false;
+    var holds = function (fields, sent) {
+      var nows = fields.map(contentOf);
+      var added = nows.map(function (now, k) { return addedTo(startValues[k], now) }).join('');
+      if (contains(added, sent)) return true;
+      var whole = nows.join('');
+      return changedDuringStep && squash(whole).toLowerCase() === squash(sent).toLowerCase() && contains(whole, sent);
+    };
+    var finishChange = function () {
+      setterUsed.forEach(function (node) {
+        var fire = function () { try { node.dispatchEvent(new Event('change', { bubbles: true })) } catch (e) {} };
+        if (activeIn(node.ownerDocument) === node) { try { node.addEventListener('blur', fire, { once: true }) } catch (e) {} } else fire();
+      });
+      // Enter commits like a person's (the key action fires "change" before submitting).
+      fieldsTyped.forEach(function (node) { if (hasValue(node)) { try { node.__tdTypedFrom = node.__tdTypedFrom == null ? startValues[fieldsTyped.indexOf(node)] : node.__tdTypedFrom } catch (e) {} } });
+    };
+    var fieldsTyped = [], startValues = [];
+    var touch = function (node) { if (fieldsTyped.indexOf(node) < 0) { fieldsTyped.push(node); startValues.push(contentOf(node)) } };
+    // Date, time, month, week, local date-time, colour and slider fields take no typing: their whole value is set at
+    // once, with the input and change events a picker gives (as the driver did before MAC-NEXT-14).
+    var WHOLE_VALUE = /^(date|time|month|week|datetime-local|color|range)$/;
+    var mismatch = function (typed) {
+      if (fieldsTyped.some(isSecret)) return { ok: false, secret: true, typed: typed, reason: 'secret field' };
+      var got = fieldsTyped.map(contentOf).join(' | ');
+      return { ok: false, mismatch: true, typed: typed, holds: got.length > 200 ? got.slice(0, 200) + '…' : got };
+    };
+    if (args.action === 'type') {
+      try { if (activeIn(el.ownerDocument) !== el) H.focus.call(el) } catch (e) {}
+      var v = String(args.value == null ? '' : args.value);
+      var target = caretTarget(el);
+      if (isSecret(el) || isSecret(target)) return secretStop(target, 0);
+      if (tagOf(el) === 'input' && WHOLE_VALUE.test(typeOf(el))) {
+        touch(el);
+        setValue(el, v);
+        try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })) } catch (e) {}
+        // The browser keeps only a value of the field's own form (2026-11-14, #f5d76e, 14:30, 50).
+        if (String(el.value).toLowerCase() !== v.toLowerCase()) return { ok: false, mismatch: true, typed: 0, holds: String(el.value).slice(0, 200) };
+        return { ok: true, typed: Array.from(v).length, whole: true };
+      }
+      touch(target);
+      if (v === '') {
+        if (!exec(target, 'delete') || contentOf(target) !== '') {
+          if (hasValue(target)) { setValue(target, ''); setterUsed.push(target) } else target.textContent = '';
+          try { target.dispatchEvent(new (winOf(target).InputEvent)('input', { bubbles: true, inputType: 'deleteContentBackward' })) } catch (e) {}
+        }
+        finishChange();
+        if (squash(contentOf(target)).replace(/\s/g, '') !== '') return mismatch(0);
+        return { ok: true, typed: 0 };
+      }
+      var chars = Array.from(v);
+      // Long text goes in at once, as a paste would (BrowserStepRules.perKeyLimit, 200).
+      if (chars.length > 200) {
+        var was = contentOf(target);
+        if (activeIn(target.ownerDocument) === target) exec(target, 'insertText', v);
+        if (contentOf(target) !== was) changedDuringStep = true;
+        if (contentOf(target) === was) {
+          if (hasValue(target)) { setValue(target, v); setterUsed.push(target) } else target.textContent = v;
+          try { target.dispatchEvent(new (winOf(target).InputEvent)('input', { bubbles: true, inputType: 'insertFromPaste', data: v })) } catch (e) {}
+          if (contentOf(target) !== was) changedDuringStep = true;
+        }
+        finishChange();
+        if (!holds([target], v)) return mismatch(chars.length);
+        return { ok: true, typed: chars.length };
+      }
+      var typed = 0;
+      for (var i = 0; i < chars.length; i++) {
+        var ch = chars[i], info = keyInfo(ch);
+        target = caretTarget(target);
+        // MAC-NEXT-15: a page that moves the cursor into a password or code field (username, then password) never
+        // gets the AI's text there: typing stops, as the engine refuses such a field before typing.
+        if (isSecret(target)) { finishChange(); return secretStop(target, typed) }
+        touch(target);
+        var beforeKey = contentOf(target), keyed = target;
+        if (keyEvent(target, 'keydown', info) && keyEvent(target, 'keypress', info, ch.codePointAt(0))) insertChar(target, ch);
+        keyEvent(target, 'keyup', info);
+        if (contentOf(keyed) !== beforeKey) changedDuringStep = true;
+        typed++;
+      }
+      finishChange();
+      if (!holds(fieldsTyped, v)) return mismatch(typed);
+      return { ok: true, typed: typed };
     }
     if (args.action === 'key') {
-      try { if (el !== document.body) H.focus.call(el) } catch (e) {}
-      var key = String(args.key || 'Enter');
-      fire('keydown', { key: key }); fire('keyup', { key: key });
-      if (key === 'Enter' && el.form && typeof el.form.requestSubmit === 'function') { try { el.form.requestSubmit() } catch (e) {} }
-      return { ok: true };
+      var name = String(args.key || 'Enter');
+      if (args.selector) { try { if (activeIn(el.ownerDocument) !== el) H.focus.call(el) } catch (e) {} }
+      var node = deep(el);
+      var info = keyInfo(name), plain = !mods.meta && !mods.control && !mods.alt;
+      var go = keyEvent(node, 'keydown', info);
+      var tag = tagOf(node), role = attr(node, 'role').toLowerCase();
+      if (go && (name === 'Enter' || (name === 'Space' && !editable(node)))) go = keyEvent(node, 'keypress', info, name === 'Enter' ? 13 : 32);
+      if (go && plain) {
+        var shift = !!mods.shift;
+        if (name === 'Enter') {
+          // A person's Enter in a field commits it: "change" first, when typing changed it (MAC-NEXT-15).
+          if (tag === 'input') { try { if (node.__tdTypedFrom != null && node.__tdTypedFrom !== String(node.value)) node.dispatchEvent(new Event('change', { bubbles: true })); node.__tdTypedFrom = null } catch (e) {} }
+          if (tag === 'textarea') exec(node, 'insertLineBreak');
+          else if (!hasValue(node) && editable(node)) exec(node, 'insertParagraph');
+          else if (tag === 'input' && node.form && typeof node.form.requestSubmit === 'function') { try { node.form.requestSubmit() } catch (e) {} }
+          else if (tag === 'button' || tag === 'a' || tag === 'summary' || role === 'button' || role === 'link') { try { H.click.call(node) } catch (e) {} }
+        } else if (name === 'Space' && !editable(node)) {
+          if (tag === 'button' || tag === 'summary' || role === 'button' || role === 'checkbox' || (tag === 'input' && /^(checkbox|radio|button|submit|reset)$/.test(typeOf(node)))) { try { H.click.call(node) } catch (e) {} }
+        } else if (name === 'Space') {
+          insertChar(node, ' ', null);
+        } else if (name === 'Backspace') {
+          if (editable(node) && !exec(node, 'delete') && hasValue(node)) {
+            var bs = node.selectionStart, be = node.selectionEnd, bv = node.value;
+            if (typeof bs === 'number') { var from = bs === be ? Math.max(0, bs - 1) : bs; setValue(node, bv.slice(0, from) + bv.slice(be)); try { node.setSelectionRange(from, from) } catch (e) {} }
+            try { node.dispatchEvent(new (winOf(node).InputEvent)('input', { bubbles: true, inputType: 'deleteContentBackward' })) } catch (e) {}
+          }
+        } else if (name === 'Delete') {
+          if (editable(node)) exec(node, 'forwardDelete');
+        } else if (name === 'Tab') {
+          var doc = node.ownerDocument || document;
+          var all = Array.prototype.slice.call(doc.querySelectorAll('a[href],area[href],button,input,select,textarea,iframe,summary,[tabindex],[contenteditable]')).filter(function (n) {
+            if (n.disabled || (tagOf(n) === 'input' && typeOf(n) === 'hidden')) return false;
+            var ti = n.getAttribute('tabindex'); if (ti !== null && Number(ti) < 0) return false;
+            return visible(n);
+          });
+          var positive = all.filter(function (n) { return Number(n.getAttribute('tabindex')) > 0 }).sort(function (a, b) { return Number(a.getAttribute('tabindex')) - Number(b.getAttribute('tabindex')) });
+          var order = positive.concat(all.filter(function (n) { return !(Number(n.getAttribute('tabindex')) > 0) }));
+          var at = order.indexOf(node), next = order[shift ? (at <= 0 ? order.length - 1 : at - 1) : (at + 1) % Math.max(1, order.length)];
+          if (next) { try { H.focus.call(next); if (typeof next.select === 'function' && hasValue(next)) next.select() } catch (e) {} }
+        } else if (tag === 'select' && (name === 'ArrowDown' || name === 'ArrowUp')) {
+          var idx = node.selectedIndex + (name === 'ArrowDown' ? 1 : -1);
+          if (idx >= 0 && idx < node.options.length) {
+            node.selectedIndex = idx;
+            try { node.dispatchEvent(new Event('input', { bubbles: true })); node.dispatchEvent(new Event('change', { bubbles: true })) } catch (e) {}
+          }
+        } else if (/^(Arrow(Left|Right|Up|Down)|Home|End)$/.test(name)) {
+          if (hasValue(node) && typeof node.selectionStart === 'number') {
+            var len = node.value.length, s0 = node.selectionStart, e0 = node.selectionEnd, p;
+            var lineStart = node.value.lastIndexOf('\n', Math.max(0, s0 - 1)) + 1;
+            if (s0 > 0 && node.value.charAt(s0 - 1) === '\n') lineStart = s0;
+            var lineEnd = node.value.indexOf('\n', e0); if (lineEnd < 0) lineEnd = len;
+            if (name === 'ArrowLeft') p = s0 !== e0 && !shift ? s0 : Math.max(0, s0 - 1);
+            else if (name === 'ArrowRight') p = s0 !== e0 && !shift ? e0 : Math.min(len, e0 + 1);
+            else if (name === 'Home') p = tag === 'textarea' ? lineStart : 0;
+            else if (name === 'End') p = tag === 'textarea' ? lineEnd : len;
+            else if (tag !== 'textarea') p = name === 'ArrowUp' ? 0 : len;
+            else if (name === 'ArrowUp') {
+              if (lineStart === 0) p = 0;
+              else { var prevStart = node.value.lastIndexOf('\n', lineStart - 2) + 1; p = Math.min(prevStart + (s0 - lineStart), lineStart - 1) }
+            } else {
+              if (lineEnd >= len) p = len;
+              else { var nextEnd = node.value.indexOf('\n', lineEnd + 1); if (nextEnd < 0) nextEnd = len; p = Math.min(lineEnd + 1 + (s0 - lineStart), nextEnd) }
+            }
+            try {
+              if (shift) { var anchor = node.selectionDirection === 'backward' ? e0 : s0; node.setSelectionRange(Math.min(anchor, p), Math.max(anchor, p), p < anchor ? 'backward' : 'forward') }
+              else node.setSelectionRange(p, p);
+            } catch (e) {}
+          } else {
+            try {
+              var sel = winOf(node).getSelection();
+              var dir = name === 'ArrowLeft' || name === 'ArrowUp' || name === 'Home' ? 'backward' : 'forward';
+              var unit = name === 'ArrowUp' || name === 'ArrowDown' ? 'line' : (name === 'Home' || name === 'End' ? 'lineboundary' : 'character');
+              sel.modify(shift ? 'extend' : 'move', dir, unit);
+            } catch (e) {}
+          }
+        }
+      } else if (go && (mods.meta || mods.control) && !mods.alt && name.toLowerCase() === 'a') {
+        try {
+          if (typeof node.select === 'function' && hasValue(node)) node.select();
+          else { var range = node.ownerDocument.createRange(); range.selectNodeContents(editable(node) ? node : node.ownerDocument.body); var ws = winOf(node).getSelection(); ws.removeAllRanges(); ws.addRange(range) }
+        } catch (e) {}
+      }
+      keyEvent(node, 'keyup', info);
+      return { ok: true, prevented: !go };
     }
     return { ok: false, reason: 'unknown action' };
     })()

@@ -239,7 +239,7 @@ struct RemoteFoldersView: View {
                 RemoteNotice(tone: .error, text: "\(problem) What is below may be out of date.")
             }
             if let grants = model.grants, devices.contains(where: { grants[$0.id] == nil }) {
-                RemoteSentence( "A device paired before folder approval existed has nothing chosen for it, so it can open nothing on \(machine). Add a folder here, or revoke it and pair it again.")
+                RemoteSentence( "A device connected before folder approval existed has nothing chosen for it, so it can open nothing on \(machine). Add a folder here, or remove it.")
             }
 
             if devices.isEmpty {

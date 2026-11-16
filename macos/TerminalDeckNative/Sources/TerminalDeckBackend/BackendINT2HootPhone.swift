@@ -130,7 +130,10 @@ public actor BackendINT2HootPhone: BackendDeckCoreConsentRelay {
             }
             _ = try await chat.say(text, attachments: attachments,
                 consentCaller: .init(kind: .remote, tiers: current.phoneAccess?.tiers ?? [], deviceID: current.deviceID), clientMessageID: BackendChatRetryIdentity.messageID(frame["clientMessageId"].string, caller: "phone:" + current.deviceID, conversation: chat.conversationID, text: try frame["text"].requireString("message"), frame: frame.value)); return []
-        case "hoot.cancel": try await owner.structuredChat?.interrupt(); return []
+        case "hoot.cancel":
+            // Named for the log: a Stop from a phone or the web reads apart from the Mac's own (15 Nov).
+            await owner.structuredChat?.markStop("phone or web (device " + (context.deviceID.isEmpty ? "unknown" : context.deviceID) + ")")
+            try await owner.structuredChat?.interrupt(); return []
         case "hoot.stop": _ = try await owner.stop(); return []
         case "hoot.interactive": try await setInteractive(frame["on"].bool == true); return []
         case "hoot.account.read":

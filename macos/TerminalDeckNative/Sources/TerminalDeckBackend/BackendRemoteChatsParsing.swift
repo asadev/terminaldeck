@@ -67,6 +67,7 @@ extension BackendRemoteProtocol {
             message = message.setting("cwd", .string(try r.folder("cwd", unusable: "chats.new with an unusable folder", oversized: "chats.new with a folder over the path limit")))
             let provider = try r.named("provider", allowed: Array(BackendCreateSessionInput.chatProviders).sorted(), reason: "chats.new naming no chat agent")
             try startChoices(r, into: &message, type: r.type)
+            try startText(r, into: &message)
             return message.setting("provider", .string(provider))
         case "hoot.account.read":
             return message.setting("rid", .string(try r.id("rid", reason: "hoot.account.read without a request id")))
@@ -108,6 +109,14 @@ extension BackendRemoteProtocol {
             message = message.setting("permissionMode", .string(try r.named("permissionMode", allowed: BackendRemoteStartChoices.permissionModes,
                 reason: "\(type) with an unknown permission mode")))
         }
+    }
+
+    /// 14 Nov (`start.text`): an optional first message on `create` / `chats.new`, the same shape as a chat message
+    /// (up to 16 KiB; newlines and tabs, no other control bytes). Empty or absent: nothing to deliver.
+    static func startText(_ r: BackendRemoteReader, into message: inout NativeRPCValue) throws {
+        guard r["text"] != .missing, r["text"] != .null else { return }
+        let text = try messageText(r, allowEmpty: true)
+        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { message = message.setting("text", .string(text)) }
     }
 
     /// A phone's New session choices (`create`, `chats.new`): the option words above, plus the agent it runs as

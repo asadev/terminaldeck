@@ -12,27 +12,26 @@ public actor BackendDeckToolsMachinesRemote {
     typealias A = BackendDeckToolsArgs
     typealias S = BackendDeckToolsMachinesShared
     public static let ids = ["remote.status", "remote.manage"]
-    public static let verbs = ["open-web", "start", "stop", "show-code", "cancel-code", "approve", "revoke", "rename", "set-folders", "set-accounts", "set-sessions", "set-windows", "disconnect", "stop-tunnel", "keep-awake"]
-    static let openWebOnlyHere = "open-web always opens the web version in this Mac’s own browser; its one-time pairing address is never handed out. Call it without openBrowser."
-    private static let needsDevice = ["approve", "revoke", "rename", "set-folders", "set-accounts", "set-sessions", "set-windows"]
+    public static let verbs = ["start", "stop", "revoke", "rename", "set-folders", "set-accounts", "set-sessions", "set-windows", "disconnect", "stop-tunnel", "keep-awake"]
+    /// The old ways to add a device (a six-digit number on screen, letting a waiting device in, the local web version with
+    /// its one-time address) are gone (owner, 13 Nov): a call for one is answered with how devices join now.
+    public static let retired = ["show-code", "cancel-code", "approve", "open-web"]
+    private static let needsDevice = ["revoke", "rename", "set-folders", "set-accounts", "set-sessions", "set-windows"]
     private let channels: any BackendDeckToolsMachinesChannels
     private var lastDevices: [V]?
     public init(channels: any BackendDeckToolsMachinesChannels) { self.channels = channels }
     private func call(_ name: String, _ args: [V], _ context: BackendDeckToolsMachinesContext) async throws -> V { try await channels.call(name, args, context: context) }
     private func name(_ id: String) -> String { lastDevices?.first { $0["id"].string == id }?["name"].string.map { "“\($0)”" } ?? "the device \(id)" }
-    private func known(_ id: String) throws { if let lastDevices, !lastDevices.contains(where: { $0["id"].string == id }) { throw S.refused("There is no device \(id) paired with this computer. remote.status lists them.") } }
+    private func known(_ id: String) throws { if let lastDevices, !lastDevices.contains(where: { $0["id"].string == id }) { throw S.refused("There is no device \(id) connected to this computer. remote.status lists them.") } }
     public func definitions(environment: any BackendDeckToolsMachinesEnvironment) throws -> [BackendDeckToolsDefinition] {
         try BackendDeckToolsMachinesFactory.definitions(ids: Self.ids, environment: environment, prepare: { [self] spec, args, context in try await self.policy(spec, args, context) }, run: { [self] id, args, context in try await self.run(id, args, context) })
     }
     public func policy(_ spec: BackendMCPTool, _ args: V, _ context: BackendDeckToolsMachinesContext) throws -> BackendDeckToolsMachinesPolicy {
         try S.hereOnly(context, spec.id == "remote.status" ? "Reading who can reach this computer" : "Changing who can reach this computer")
         if spec.id == "remote.manage" {
+            if let asked = args["do"].string, Self.retired.contains(asked) { throw S.refused(DevicesPage.joinBySigningIn) }
             let verb = try A.oneOf(args, "do", Self.verbs)
             if Self.needsDevice.contains(verb) { try known(A.str(args, "deviceId")) }
-            if verb == "approve" { let kind = try A.oneOf(args, "kind", ["mine", "guest"]); if kind == "guest" { _ = try A.strList(args, "folders"); _ = try A.oneOf(args, "loginShare", ["all", "selected"]) } }
-            // The one-time address pairs any browser at Full, so it never goes to an AI: open-web always opens this
-            // Mac's own browser (review install-24 S2). A request for the bare address is refused before the owner is asked.
-            if verb == "open-web", try !A.optBool(args, "openBrowser", true) { throw S.refused(Self.openWebOnlyHere) }
             if verb == "rename" { _ = try Self.newName(args) }
             if verb == "set-folders" { _ = try A.strList(args, "folders") }; if verb == "set-accounts" { _ = try A.oneOf(args, "loginShare", ["all", "selected"]) }; if verb == "set-sessions" { _ = try A.oneOf(args, "sessionShare", ["all", "selected"]) }
             if verb == "set-windows" { _ = try A.bool(args, "allowed") }; if ["disconnect", "stop-tunnel"].contains(verb) { _ = try A.str(args, "connectionId") }; if verb == "stop-tunnel" { _ = try A.str(args, "tunnelId") }; if verb == "keep-awake" { _ = try A.bool(args, "on") }
@@ -44,13 +43,9 @@ public actor BackendDeckToolsMachinesRemote {
         let device = name(args["deviceId"].string ?? "?"), verb = args["do"].string ?? ""
         func list(_ key: String) -> String { let rows = args[key].elements?.compactMap(\.string) ?? []; return rows.isEmpty ? "none" : rows.joined(separator: ", ") }
         switch verb {
-        case "open-web": return "Open the web version in this Mac’s own browser and approve that browser at Full control (device access is turned on if it is off)"
-        case "start": return "Turn remote access on, so paired phones and computers can reach this one"
+        case "start": return "Turn remote access on, so devices connected before accounts can reach this one"
         case "stop": return "Turn remote access off: every phone and computer connected to this one is cut off"
-        case "show-code": return "Show a pairing code on this computer, so a new phone or computer can be paired with it"
-        case "cancel-code": return "Withdraw the pairing code on screen"
-        case "approve": return args["kind"].string == "mine" ? "Approve \(device) as the owner’s own device: it can reach everything this computer offers" : "Approve \(device) as a guest: it may start sessions only in \(list("folders")), using \(args["loginShare"].string == "all" ? "every login" : "the logins " + list("logins"))"
-        case "revoke": return "Revoke \(device): it is disconnected and can no longer reach this computer"
+        case "revoke": return "Remove \(device): it is disconnected and can no longer reach this computer"
         case "rename": return "Rename \(device) to “\((args["name"].string ?? "").trimmingCharacters(in: .whitespacesAndNewlines))”"
         case "set-folders": return "Let \(device) start sessions in: \(list("folders"))"
         case "set-accounts": return args["loginShare"].string == "all" ? "Let \(device) use every agent login" : "Let \(device) use only the logins: \(list("logins"))"
@@ -71,7 +66,7 @@ public actor BackendDeckToolsMachinesRemote {
     public static func rows(devices: [V], kinds: [V], folders: [V], accounts: [V], sessions: [V], windows: [String], connected: Set<String>) -> [V] {
         devices.map { device in
             let id = device["id"].string ?? "", kind = kinds.first { $0["deviceId"].string == id }?["kind"] ?? .null, account = accounts.first { $0["deviceId"].string == id }, session = sessions.first { $0["deviceId"].string == id }
-            var row = S.object(["id": device["id"], "name": device["name"], "status": device["status"], "kind": kind, "connected": .bool(connected.contains(id)), "lastSeenAt": device["lastSeenAt"], "fingerprint": device["fingerprint"], "platform": device["platform"], "sessions": session.map { S.object(["share": $0["mode"], "ids": $0["sessions"]]) } ?? .null, "drivesWindows": .bool(windows.contains(id))])
+            var row = S.object(["id": device["id"], "name": device["name"], "status": device["status"], "kind": kind, "connected": .bool(connected.contains(id)), "lastSeenAt": device["lastSeenAt"], "fingerprint": device["fingerprint"], "platform": device["platform"], "sessions": session.map { S.object(["share": $0["mode"], "ids": $0["sessions"]]) } ?? .null, "drivesWindows": .bool(windows.contains(id)), "joined": .string("before accounts")])
             if kind.string == "guest" { row = row.setting("folders", folders.first { $0["deviceId"].string == id }?["folders"] ?? .array([])).setting("logins", account.map { S.object(["share": $0["mode"], "ids": $0["accounts"]]) } ?? .null) }; return row
         }
     }
@@ -83,29 +78,18 @@ public actor BackendDeckToolsMachinesRemote {
             let rows = Self.rows(devices: lastDevices!, kinds: kindRows.elements ?? [], folders: folderRows.elements ?? [], accounts: accountRows.elements ?? [], sessions: sessionRows.elements ?? [], windows: windowIDs.elements?.compactMap(\.string) ?? [], connected: Set(connections.compactMap { $0["deviceId"].string }))
             let relay = remote["relay"].isNullish ? V.null : S.object(["connected": remote["relay"]["connected"], "why": remote["relay"]["reason"], "fingerprint": remote["relay"]["fingerprint"]])
             var result = S.object(["remoteAccess": S.object(["on": remote["running"], "why": remote["reason"], "relay": relay]), "devices": .array(rows), "connections": .array(connections.map { S.object(["id": $0["id"], "deviceId": $0["deviceId"], "device": $0["deviceName"], "platform": $0["platform"], "connectedAt": $0["connectedAt"], "sessions": $0["sessionIds"], "tunnels": $0["tunnels"]]) }), "offeredSessions": running, "keepAwake": keepAwake, "confinement": confine])
+            // The account's own devices are on the Devices window and in devices_page; these rows are the old way only.
+            result = result.setting("howDevicesJoin", .string(DevicesPage.joinBySigningIn))
             if try A.optBool(args, "tailscale", false) { result = result.setting("tailscale", S.object(["optional": .bool(true), "status": try await call("tailnet:status", [.bool(false)], context)])) }
             return .init(result, S.object(["on": remote["running"], "devices": .number(Double(rows.count)), "connected": .number(Double(connections.count))]))
         }
+        if let asked = args["do"].string, Self.retired.contains(asked) { throw S.refused(DevicesPage.joinBySigningIn) }
         let verb = try A.oneOf(args, "do", Self.verbs), deviceID = args["deviceId"].string ?? ""
         if Self.needsDevice.contains(verb) { lastDevices = try await call("remote:devices", [], context).elements ?? []; try known(deviceID) }
         func list(_ key: String) throws -> V { args[key] == .missing ? .array([]) : .array(try A.strList(args, key).map(V.string)) }
         let summary = S.object(["deviceId": .string(deviceID)])
         switch verb {
-        case "open-web":
-            // Always this Mac's browser; the address stays inside this call (S2). openBrowser is never read here.
-            let opened = try await call("remote:web:open", [], context)
-            guard let url = opened["url"].string else { throw S.refused("The web version did not return its local address.") }
-            guard try await call("link:system", [.string(url)], context).bool == true else {
-                throw S.refused("The browser could not open the web version. Try again.")
-            }
-            return .init(S.object(["opened": .bool(true)]), S.object(["opened": .bool(true)]))
         case "start", "stop": let after = try await call(verb == "start" ? "remote:start" : "remote:stop", [], context); return .init(S.object(["on": after["running"], "why": after["reason"]]), S.object(["on": after["running"]]))
-        case "show-code": let shown = try await call("remote:pair", [], context); let found = shown["findable"].bool == true; return .init(S.object(["code": shown["token"], "expiresAt": shown["expiresAt"], "findable": .bool(found), "note": .string(found ? "Type this into the app on the new phone or computer. It works once." : "The code could not be published to the relay, so only a device on this computer’s own network can use it.")]), S.object(["shown": .bool(true), "findable": .bool(found)]))
-        case "cancel-code": _ = try await call("remote:pair:cancel", [], context); return .init(S.object(["cancelled": .bool(true)]), S.object(["cancelled": .bool(true)]))
-        case "approve":
-            let kind = try A.oneOf(args, "kind", ["mine", "guest"]), guest = kind == "guest"
-            let after = try await call("remote:device:approve", [.string(deviceID), .string(kind), guest ? .array(A.strList(args, "folders").map(V.string)) : .array([]), .string(guest ? A.oneOf(args, "loginShare", ["all", "selected"]) : "all"), guest ? list("logins") : .array([])], context)
-            lastDevices = after.elements ?? []; guard let device = lastDevices!.first(where: { $0["id"].string == deviceID }), device["status"].string == "approved" else { throw S.refused("\(name(deviceID)) was not approved. It may already have been decided, or revoked.") }; return .init(S.object(["device": device]), summary.setting("kind", .string(kind)))
         case "revoke": let after = try await call("remote:device:revoke", [.string(deviceID)], context); lastDevices = after.elements ?? []; return .init(S.object(["device": lastDevices!.first { $0["id"].string == deviceID } ?? .null]), summary)
         case "rename":
             let newName = try Self.newName(args), after = try await call("remote:device:rename", [.string(deviceID), .string(newName)], context)

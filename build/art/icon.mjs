@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// superseded by brand/terminal-deck-logo/generate.mjs; do not run
 /**
  * Terminal Deck application icon — original artwork, generated from scratch.
  *

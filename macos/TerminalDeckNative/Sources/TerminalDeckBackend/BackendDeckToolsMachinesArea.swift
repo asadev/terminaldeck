@@ -46,7 +46,7 @@ public actor BackendDeckToolsMachinesArea {
     }
     private func view(_ context: BackendDeckToolsMachinesContext) async throws -> V { let value = try await call("machines:list", [], context); lastView = value; return value }
     private func known(_ id: String, in view: V?) throws {
-        if let view, !(view["machines"].elements ?? []).contains(where: { $0["id"].string == id }) { throw S.refused("There is no machine with the id \(id) in this app. Use machines.look to see the machines it is paired to.") }
+        if let view, !(view["machines"].elements ?? []).contains(where: { $0["id"].string == id }) { throw S.refused("There is no machine with the id \(id) in this app. Use machines.look to see the machines it reaches.") }
     }
     private func requireMachine(_ id: String, _ context: BackendDeckToolsMachinesContext) async throws -> V { let value = try await view(context); try known(id, in: value); return value }
     private static func sessions(_ view: V, _ machine: String) -> [V] { view["links"].elements?.first { $0["id"].string == machine }?["sessions"].elements ?? [] }
@@ -72,11 +72,12 @@ public actor BackendDeckToolsMachinesArea {
     }
     public func policy(_ spec: BackendMCPTool, _ args: V, _ context: BackendDeckToolsMachinesContext) async throws -> BackendDeckToolsMachinesPolicy {
         let id = spec.id, verb = args["do"].string ?? ""
-        let words = ["machines.look": "Looking at the other computers", "machines.session": "Driving a session on another computer", "machines.copilot": "Talking to Hoot on another computer", "machines.ports": "Reaching another computer’s ports", "machines.upload": "Sending files to another computer", "machines.manage": "Changing which computers this app is paired to"]
+        let words = ["machines.look": "Looking at the other computers", "machines.session": "Driving a session on another computer", "machines.copilot": "Talking to Hoot on another computer", "machines.ports": "Reaching another computer’s ports", "machines.upload": "Sending files to another computer", "machines.manage": "Changing the other computers this app reaches"]
         try S.hereOnly(context, words[id] ?? "Using another computer")
         let machine = try A.optStr(args, "machineId"), session = try A.optStr(args, "sessionId")
         if id == "machines.look", session != nil { _ = try A.str(args, "machineId") }
-        if id != "machines.look", id != "machines.manage" || !["pair", "show-code", "cancel-code"].contains(verb) { try known(A.str(args, "machineId"), in: lastView) }
+        if id == "machines.manage", BackendDeckToolsMachinesRemote.retired.contains(verb) || verb == "pair" { throw S.refused(DevicesPage.joinBySigningIn) }
+        if id != "machines.look" { try known(A.str(args, "machineId"), in: lastView) }
         var tier = spec.tier
         switch id {
         case "machines.session":
@@ -101,8 +102,8 @@ public actor BackendDeckToolsMachinesArea {
             _ = try A.oneOf(args, "do", ["send", "cancel"]); tier = verb == "cancel" ? .act : .alter
             if verb == "send" { _ = try S.sendable(A.str(args, "path"), dataRoot: dataRoot, home: home) }
         case "machines.manage":
-            _ = try A.oneOf(args, "do", ["pair", "show-code", "cancel-code", "connect", "disconnect", "rename", "forget", "allow-windows", "restart-host", "stop-host", "sign-in", "sign-out", "github-connect", "github-cancel", "github-disconnect"])
-            if verb == "pair" { _ = try A.str(args, "code") }; if verb == "rename" { _ = try A.str(args, "name") }
+            _ = try A.oneOf(args, "do", ["connect", "disconnect", "rename", "forget", "allow-windows", "restart-host", "stop-host", "sign-in", "sign-out", "github-connect", "github-cancel", "github-disconnect"])
+            if verb == "rename" { _ = try A.str(args, "name") }
             if verb == "allow-windows" { _ = try A.bool(args, "allowed") }; if ["sign-in", "sign-out"].contains(verb) { _ = try A.str(args, "loginId") }
         default: break
         }
@@ -112,7 +113,7 @@ public actor BackendDeckToolsMachinesArea {
         let verb = args["do"].string ?? "", machine = name(args["machineId"].string ?? "?"), target = "session \(args["sessionId"].string ?? "?") on \(machine)"
         let value = { (key: String) in args[key].string ?? "undefined" }
         switch id {
-        case "machines.look": if args["machineId"].isNullish { return "List the other computers this app is paired to" }; return args["sessionId"].isNullish ? "Look at \(machine)" : "Look at \(target)"
+        case "machines.look": if args["machineId"].isNullish { return "List the other computers this app reaches" }; return args["sessionId"].isNullish ? "Look at \(machine)" : "Look at \(target)"
         case "machines.session": switch verb {
             case "start": return "Start a \(args["agent"].string.map { $0 + " " } ?? "")session on \(machine)\((args["folder"].string ?? "").isEmpty ? "" : " in " + value("folder"))"
             case "send": return "Type into \(target): “\(args["text"].string ?? "")”\(args["submit"].bool == false ? "" : " and press return")"
@@ -127,13 +128,10 @@ public actor BackendDeckToolsMachinesArea {
         case "machines.ports": switch verb { case "open-here": return "Give port \(args["port"].compact) on \(machine) an address on this computer"; case "close-here": return "Stop serving port \(args["port"].compact) of \(machine) here"; case "open-there": return "Open \(value("url")) in the browser on \(machine)"; case "refresh": return "Ask \(machine) what it is serving"; default: return "List what \(machine) is serving" }
         case "machines.upload": return verb == "cancel" ? "Cancel the file transfer to \(machine)" : "Send \(value("path")) from this computer to \(machine), into \((args["folder"].string ?? "").isEmpty ? "its downloads folder" : value("folder"))"
         default: switch verb {
-            case "pair": return "Pair this computer to the one showing that code, so this app can reach it and its sessions"
-            case "show-code": return "Show a pairing code on this computer, so another computer can be paired to it"
-            case "cancel-code": return "Withdraw the pairing code on screen"
             case "connect": return "Connect to \(machine)"
             case "disconnect": return "Disconnect from \(machine) until it is connected again"
             case "rename": return "Rename \(machine) to “\(value("name"))” in this app"
-            case "forget": return "Forget \(machine): this computer stops reaching it and would need a new code to pair again"
+            case "forget": return "Forget \(machine): this computer stops reaching it"
             case "allow-windows": return args["allowed"].bool == true ? "Let sessions on \(machine) drive browser windows in this app" : "Stop sessions on \(machine) driving browser windows in this app"
             case "restart-host": return "Restart the host program on \(machine). Its connections drop and come back"
             case "stop-host": return "Stop the host program on \(machine). It cannot be started again from here — only on that computer"
@@ -150,12 +148,16 @@ public actor BackendDeckToolsMachinesArea {
         let mine: @Sendable (String, String) async -> Bool = { await context.startedByCopilot(Self.startedKey($0, $1)) }
         if id == "machines.look" {
             let state: V
-            if let machine { state = try await requireMachine(machine, context) } else { state = try await view(context) }
+            if let machine { state = try await requireMachine(machine, context) } else {
+                // His machines that are on are reached by sign-in first (15 Nov), so they are listed beside paired ones.
+                _ = try? await call("machines:reach:open", [], context)
+                state = try await view(context)
+            }
             let rows = await Self.rows(state, mine: mine)
             guard let machine else {
                 var result = S.object(["thisComputer": state["here"], "machines": .array(rows)])
                 if !state["blocked"].isNullish { result = result.setting("cannotPairNow", state["blocked"]) }
-                if rows.isEmpty { result = result.setting("note", .string("This computer is not paired to any other. machines.manage with do \"pair\" and a code shown on the other computer adds one.")) }
+                if rows.isEmpty { result = result.setting("note", .string("This computer reaches no other the old way. " + DevicesPage.joinBySigningIn)) }
                 return .init(result, S.object(["machines": .number(Double(rows.count)), "online": .number(Double(rows.filter { $0["online"].bool == true }.count))]))
             }
             let row = rows.first { $0["id"].string == machine } ?? .null
@@ -180,14 +182,7 @@ public actor BackendDeckToolsMachinesArea {
             else if seen["live"].bool != true { value = value.setting("screenNote", .string("This is the last screen seen here; nothing on this computer is receiving it now.")) }
             return .init(value, S.object(["machineId": .string(machine), "sessionId": .string(session), "screen": .bool(!seen.isNullish), "live": .bool(seen["live"].bool == true)]))
         }
-        if id == "machines.manage", ["pair", "show-code", "cancel-code"].contains(verb) {
-            if verb == "cancel-code" { _ = try await call("machines:code:cancel", [], context); return .init(S.object(["cancelled": .bool(true)]), S.object(["cancelled": .bool(true)])) }
-            if verb == "show-code" { let answer = try S.ok(await call("machines:code", [], context)); return .init(S.object(["code": answer["code"]["token"], "expiresAt": answer["code"]["expiresAt"], "note": .string("Type this on the other computer, in its Machines list. It works once.")]), S.object(["shown": .bool(true), "expiresAt": answer["code"]["expiresAt"]])) }
-            let result = try S.ok(await call("machines:pair", [.string(A.str(args, "code"))], context)), state = try await view(context)
-            let host = result["offer"]["hostId"].string ?? result["offer"]["id"].string ?? ""
-            let row = await Self.rows(state).first { $0["id"].string == host }
-            return .init(S.object(["paired": .bool(true), "machineId": .string(host), "name": row?["name"] ?? result["offer"]["name"], "machine": row ?? .null]), S.object(["paired": .bool(true), "machineId": .string(host)]))
-        }
+        if id == "machines.manage", BackendDeckToolsMachinesRemote.retired.contains(verb) || verb == "pair" { throw S.refused(DevicesPage.joinBySigningIn) }
         let machineID = try A.str(args, "machineId"), state = try await requireMachine(machineID, context), summary = S.object(["machineId": .string(machineID)])
         if id == "machines.session" {
             if verb == "start" {
@@ -200,6 +195,11 @@ public actor BackendDeckToolsMachinesArea {
                 await context.noteStarted(Self.startedKey(machineID, started["id"].string ?? "")); return .init(Self.sessionRow(started).setting("machineId", .string(machineID)).setting("startedByYou", .bool(true)), summary.setting("sessionId", started["id"]).setting("started", .bool(true)))
             }
             let sessionID = try A.str(args, "sessionId"), target = try await requireSession(machineID, sessionID, context), both = summary.setting("sessionId", .string(sessionID)), params: [V] = [.string(machineID), .string(sessionID)]
+            if verb == "send", target["chat"].bool == true {
+                // An app chat on that machine (15 Nov): the message goes to the chat as its phones send it.
+                guard try await call("machines:chats", [.string(machineID), .string("say"), .string(sessionID), .string(A.str(args, "text"))], context).bool == true else { throw S.refused("\(name(machineID)) did not take the message.") }
+                return .init(both.setting("sent", .bool(true)), both.setting("text", args["text"]))
+            }
             if ["send", "keys"].contains(verb) {
                 if !target["exitCode"].isNullish { throw A.bad("session \(sessionID) has already exited; there is nothing to type into") }
                 let write: @Sendable (String) async throws -> Void = { [self] data in _ = try S.ok(await self.call("machines:send", params + [.string(data)], context)) }

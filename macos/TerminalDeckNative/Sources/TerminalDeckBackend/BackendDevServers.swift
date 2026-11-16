@@ -9,6 +9,10 @@ public protocol BackendDevSessionAccess: Sendable {
     func type(sessionID: String, text: String, context: NativeRPCContext) async throws
     func output(sessionID: String, context: NativeRPCContext) async throws -> String
     func alive(sessionID: String) async -> Bool
+    func processID(sessionID: String) async -> Int32?
+}
+public extension BackendDevSessionAccess {
+    func processID(sessionID: String) async -> Int32? { nil }
 }
 public struct BackendDevSessionAdapter: BackendDevSessionAccess, Sendable {
     private let manager: BackendPTYManager
@@ -22,6 +26,7 @@ public struct BackendDevSessionAdapter: BackendDevSessionAccess, Sendable {
     public func type(sessionID: String, text: String, context: NativeRPCContext) async throws { try await authorize(sessionID, context); try manager.write(sessionID, data: text) }
     public func output(sessionID: String, context: NativeRPCContext) async throws -> String { try await authorize(sessionID, context); return manager.scrollback(sessionID) }
     public func alive(sessionID: String) async -> Bool { manager.pidOf(sessionID) != nil }
+    public func processID(sessionID: String) async -> Int32? { manager.pidOf(sessionID) }
 }
 
 /// dev-server.ts's real state machine: lockfile-selected declared scripts,
@@ -51,6 +56,7 @@ public actor BackendDevServers {
     private var listeners: [UUID: @Sendable (NativeRPCValue) async -> Void] = [:]
     private var logListeners: [UUID: @Sendable (String, String) async -> Void] = [:]
     private var stopped = false
+    private var preparation: (@Sendable (String, NativeRPCContext) async throws -> Void)?
     public init(files: BackendFilesystemService, sessions: any BackendDevSessionAccess, ports: any BackendDevPortScanning,
                 now: @escaping @Sendable () -> Date = { Date() },
                 sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
@@ -71,6 +77,23 @@ public actor BackendDevServers {
         }
         return try await resting(folder, context: context)
     }
+    /// Portable command structure only; package script text and local shell state never leave this runner.
+    public func launchArguments(folder: String, context: NativeRPCContext) async throws -> [String] {
+        _ = try await files.authority.authorize(folder, context: context)
+        let value = try await resting(folder, context: context)
+        let arguments = (value["command"].string ?? "").split(separator: " ").map(String.init)
+        guard arguments.count == 3, ["npm", "pnpm", "yarn", "bun"].contains(arguments[0]), arguments[1] == "run",
+              ["dev", "start", "serve"].contains(arguments[2]) else { throw NativeRPCError.invalidArguments("This project has no supported start command.") }
+        return arguments
+    }
+    public func processID(folder: String, context: NativeRPCContext) async throws -> Int32? {
+        _ = try await files.authority.authorize(folder, context: context)
+        let value = try await status(folder: folder, context: context)
+        guard let id = value["sessionId"].string, await sessions.alive(sessionID: id) else { return nil }
+        return await sessions.processID(sessionID: id)
+    }
+    /// Composition may bind verified restored recipes. Ordinary projects retain their existing start path.
+    public func setPreparationHandler(_ prepare: (@Sendable (String, NativeRPCContext) async throws -> Void)?) { preparation = prepare }
     public func start(folder: String, context: NativeRPCContext) async throws -> NativeRPCValue {
         guard !stopped else { throw NativeRPCError(code: "closed", message: "Development services have stopped") }
         let key = Self.folderKey(folder)
@@ -87,6 +110,11 @@ public actor BackendDevServers {
         if rest["status"].string == "no-dev-script" { return rest }
         let key = Self.folderKey(folder), entry = Entry(rest)
         entries[key]?.task?.cancel(); entries[key] = entry
+        if let preparation {
+            await set(entry, rest.setting("status", .string("starting")).setting("note", .string("Preparing project libraries")))
+            do { try await preparation(folder, context) }
+            catch { await fail(entry, sessionID: nil, message: "The project libraries could not be prepared. No server was started."); return entry.state }
+        }
         let before: Set<Int>
         do { before = Set(try await ports.scan(force: true).map(\.port)) }
         catch { await fail(entry, sessionID: nil, message: "This machine could not say which ports are already in use, so nothing was started."); return entry.state }

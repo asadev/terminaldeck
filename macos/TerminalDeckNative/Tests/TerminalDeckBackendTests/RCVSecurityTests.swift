@@ -420,3 +420,48 @@ final class RCVSecurityTests: XCTestCase {
         XCTAssertTrue(typed.contains("rm -rf /"))
     }
 }
+
+// review-fixes 3 (15 Nov): a source that arrives from another Mac through the Cloud writes the store directly; the
+// Receiver declares it to the relay at once (so the relay forwards it without an app restart) and the page is told.
+private final class RCVChangedCount: @unchecked Sendable {
+    private let lock = NSLock(); private var count = 0
+    func add() { lock.withLock { count += 1 } }
+    var value: Int { lock.withLock { count } }
+}
+
+extension RCVSecurityTests {
+    func testASourceArrivingFromTheCloudIsDeclaredAndShownWithoutARestart() async throws {
+        let store = BackendRCVStore(persistence: nil, cipher: nil), changed = RCVChangedCount()
+        let service = BackendRCVService(store: store, dispatch: RCVFakeDispatch(), relayBase: { "https://relay.example" },
+                                        now: { RCVClock().now() }, changed: { changed.add() })
+        try await service.start()
+        let frames = RCVFrames()
+        await service.relayOpened { type, channel, payload in await frames.add(type, channel, payload) }
+        let syncsBefore = await frames.frames.filter { $0.0 == BackendRCVWire.sync }.count
+        let changedBefore = changed.value
+        // What BackendCloudKeysReceiverStore.merge does for a source new here.
+        let arrived = RCVSource(id: BackendRCVWire.mintSourceID(), name: "From the other Mac", preset: "webhook",
+                                auth: .init(scheme: .token), mapping: RCVPresets.generic.mapping)
+        try await store.update { state in
+            state.sources.append(arrived); state.secrets[arrived.id] = .init(secret: "made-up-secret-for-test", reply: nil)
+        }
+        var syncs: [(UInt8, Data, Data)] = []
+        for _ in 0..<100 {
+            syncs = await frames.frames.filter { $0.0 == BackendRCVWire.sync }
+            if syncs.count > syncsBefore && changed.value > changedBefore { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertGreaterThan(syncs.count, syncsBefore, "the relay is told about the new source")
+        XCTAssertTrue(String(decoding: try XCTUnwrap(syncs.last).2, as: UTF8.self).contains(arrived.id))
+        XCTAssertGreaterThan(changed.value, changedBefore, "the Receiver page is told to read again")
+        // A delivery for it is accepted with no restart (the store is read fresh per delivery).
+        let views = try await service.sources()
+        XCTAssertTrue(views.contains { $0.id == arrived.id })
+        // A change that does not touch sources, secrets or the key (an event) does not sync again.
+        let syncsNow = await frames.frames.filter { $0.0 == BackendRCVWire.sync }.count
+        try await store.update { state in state.seen["x|y"] = 1 }
+        try await Task.sleep(for: .milliseconds(100))
+        let syncsAfter = await frames.frames.filter { $0.0 == BackendRCVWire.sync }.count
+        XCTAssertEqual(syncsAfter, syncsNow)
+    }
+}

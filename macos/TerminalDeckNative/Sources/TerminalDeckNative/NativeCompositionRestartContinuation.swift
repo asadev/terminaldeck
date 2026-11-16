@@ -28,7 +28,7 @@ extension NativeCompositionProduction {
         // SETTINGS-TRUTH row 55: "Pick up where you left off" (on unless he turns it off). Off: interrupted task work
         // stays handed back to him on its task, and a reply there carries it on.
         guard Self.picksUpAfterRestart(await root.state.getPreferences()) else {
-            report("restart: Pick up where you left off is off, so interrupted task work waits for a reply on its task"); return
+            report("restart: Reopen sessions after a restart is off, so interrupted task work waits for a reply on its task"); return
         }
         var continued: [String] = []
         // An interrupted agent's task was handed back to the person at start ("Handed to you"): it still names its

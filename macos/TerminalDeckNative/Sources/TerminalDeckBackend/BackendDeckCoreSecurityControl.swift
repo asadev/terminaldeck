@@ -26,6 +26,8 @@ public struct BackendDeckCoreSecurityCallResult: Sendable {
     public let error: String?
     public let refusal: BackendDeckCoreSecurityRefusalReason?
     public let row: NativeRPCValue
+    /// A failed tool's own error code (a `NativeRPCError`'s), so a reader can tell a refusal from a failure (14 Nov).
+    public var code: String? = nil
     public var reply: BackendMCPToolReply { ok ? .value(value) : .failure(error ?? "the call failed") }
 }
 private final class BackendDeckCoreSecurityStarted: @unchecked Sendable {
@@ -324,7 +326,9 @@ public actor BackendDeckCoreSecurityControl {
             if let refused = end.effect?.refusal {
                 return await record(tool: policy.tool.id, tier: end.tier, baseTier: end.base, summary: end.summary, outcome: .refused, confirmed: end.confirmed, error: refused.message, refusal: refused.reason)
             }
-            return await record(tool: policy.tool.id, tier: end.tier, baseTier: end.base, summary: end.summary, outcome: .error, confirmed: end.confirmed, error: error.localizedDescription)
+            var failed = await record(tool: policy.tool.id, tier: end.tier, baseTier: end.base, summary: end.summary, outcome: .error, confirmed: end.confirmed, error: error.localizedDescription)
+            failed.code = (error as? NativeRPCError)?.code
+            return failed
         }
     }
 

@@ -354,30 +354,30 @@ import TerminalDeckNativeCore
         model.selectedServer = "box"; await model.submitNative()
         XCTAssertEqual(model.error, "This server's private key is missing from the vault.")
     }
-    func testButtons21RemoveFolderEndsMatchingSessionsBeforeRemovingAndUpdating() async {
+    /// Delete rule J-4: "Remove from this Mac" is one press with no question. The registered entry is marked first,
+    /// then the folder leaves this Mac's list. No session is listed or closed (the old route killed them).
+    func testRemoveFromThisMacMarksTheEntryAndClosesNoSession() async {
         var order: [String] = []
-        let model = form(effects: .init(invoke: { channel, args in
-            order.append(channel)
-            if channel == "session:list" { return [["id": "one", "cwd": "/work"], ["id": "unrelated", "cwd": "/elsewhere"]] }
-            if channel == "session:kill" { XCTAssertEqual(args[0] as? String, "one") }
-            return true
-        }, removedProject: { path, ids in XCTAssertEqual(path, "/work"); XCTAssertEqual(ids, ["one"]); order.append("updated") }))
+        let model = form(effects: .init(invoke: { channel, _ in order.append(channel); return true },
+            removedProject: { path, ids in XCTAssertEqual(path, "/work"); XCTAssertEqual(ids, []); order.append("updated") },
+            removeProjectEntry: { path in XCTAssertEqual(path, "/work"); order.append("entry") }))
         await model.removeNative("/work")
-        XCTAssertEqual(order, ["session:list", "session:kill", "projects:remove", "updated"])
+        XCTAssertEqual(order, ["entry", "projects:remove", "updated"])
         XCTAssertTrue(model.projects.isEmpty); XCTAssertNil(model.selectedPath)
     }
-    func testButtons21RemoveRefusalKeepsFolderAndStopsBeforeNextCall() async {
-        for refused in ["session:list", "session:kill", "projects:remove"] {
+    func testRemoveFromThisMacRefusalKeepsTheFolderListed() async {
+        struct Refused: Error {}
+        for refused in ["entry", "projects:remove"] {
             var calls: [String] = []
             let model = form(effects: .init(invoke: { channel, _ in
                 calls.append(channel)
-                if channel == refused { return false }
-                if channel == "session:list" { return [["id": "one", "cwd": "/work"]] }
-                return true
-            }, removedProject: { _, _ in XCTFail("Must not remove native folder") }))
+                return channel != refused
+            }, removedProject: { _, _ in XCTFail("Must not remove native folder") },
+            removeProjectEntry: { _ in calls.append("entry"); if refused == "entry" { throw Refused() } }))
             await model.removeNative("/work")
-            XCTAssertEqual(calls.last, refused); XCTAssertEqual(model.projects.count, 1)
-            XCTAssertEqual(model.selectedPath, "/work"); XCTAssertNotNil(model.error)
+            XCTAssertEqual(calls.last, refused); XCTAssertFalse(calls.contains("session:kill"))
+            XCTAssertEqual(model.projects.count, 1); XCTAssertEqual(model.selectedPath, "/work")
+            XCTAssertEqual(model.error, "That project could not be removed from this Mac.")
         }
     }
     func testButtons21CancelClosesNativelyBeforePageNotification() {

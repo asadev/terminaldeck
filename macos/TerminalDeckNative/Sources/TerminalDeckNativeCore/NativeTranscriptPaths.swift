@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public struct NativeTranscriptHomeScope: Sendable {
     public let home: String
@@ -54,6 +55,23 @@ public enum NativeTranscriptPaths {
         }
     }
 
+    /// Cloud projections use a newly-created private root and O_EXCL files. Existing provider stores are never overwritten.
+    public static func createCloudProjectionFile(relative: String, in root: URL) throws -> FileHandle {
+        guard CloudConversationEnumerator.safeRelative(relative), root.standardizedFileURL == root.resolvingSymlinksInPath() else { throw CloudFailure.unsafeConfiguration }
+        var directory = Darwin.open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directory >= 0 else { throw CloudFailure.unavailable }
+        defer { Darwin.close(directory) }
+        let parts = relative.split(separator: "/").map(String.init)
+        for part in parts.dropLast() {
+            if mkdirat(directory, part, 0o700) != 0, errno != EEXIST { throw CloudFailure.unavailable }
+            let next = openat(directory, part, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard next >= 0 else { throw CloudFailure.unsafeConfiguration }
+            Darwin.close(directory); directory = next
+        }
+        let descriptor = openat(directory, parts.last!, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw CloudFailure.versionChanged }
+        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    }
     public static func resolved(_ path: String) -> String { URL(fileURLWithPath: path).standardizedFileURL.path }
     public static func canonical(_ path: String) -> String { URL(fileURLWithPath: resolved(path)).resolvingSymlinksInPath().path }
     public static func isDescendant(_ path: String, of root: String) -> Bool {

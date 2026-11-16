@@ -26,13 +26,15 @@ extension NativeCompositionProduction {
                 let input = try await NativePhoneStart.input(request, chat: true, invoke: invoke, specs: specs)
                 // At Full control no folder sandbox (Decker D2): the AI reaches its login, the network and its settings.
                 let boundary = try await joins.phoneStartBoundary(deviceID: request.deviceID, folder: request.cwd)
+                NativePhoneStart.prepareFolder(request.cwd)
                 let meta = try await BackendAGSLaunchScope.$deviceStart.withValue(request.deviceID) {
                     try await sessions.lifecycle.create(input, context: .init(deviceBoundary: boundary, rememberTab: true))
                 }
                 if boundary == nil { NativePhoneStart.rememberFolder(request.cwd) }
                 return meta
             },
-            choices: { folder in await NativePhoneStart.choices(folder: folder, invoke: invoke) },
+            // The same lists as this Mac's own New session page (models filled as the page fills them, ask 5).
+            choices: { folder in await NativePhoneStart.newSessionLists(folder: folder, invoke: invoke) },
             options: { id in try await chats.options(id) },
             setOptions: { id, patch in try await chats.setOptions(id, patch) },
             steer: { id, text in _ = try await chats.steer(id, text: text) })

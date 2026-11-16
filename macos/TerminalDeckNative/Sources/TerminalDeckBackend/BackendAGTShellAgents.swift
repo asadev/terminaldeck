@@ -16,6 +16,7 @@ public final class BackendAGTShellAgents: @unchecked Sendable {
     private let file: URL
     private let home: String
     private var records: [String: AGTShellAgent] = [:]
+    private var cloudArchive: BackendCloudBrainAgentsArchive?
     private var lastScan: [String: Date] = [:]
     private let changed: @Sendable () -> Void
 
@@ -29,6 +30,60 @@ public final class BackendAGTShellAgents: @unchecked Sendable {
                 if let record = AGTShellAgent.decode(field.value), record.updatedAt >= cutoff { records[field.key] = record }
             }
         }
+    }
+
+    // MARK: Cloud (lane A2). Shell tab ↔ conversation links are history: kept in the Cloud, never put into this
+    // Mac's resume map (applyResume must only see this machine's own shells). The cwd is the link's historical
+    // folder (§5.3 conversation links), never mapped onto this Mac.
+    public func cloudAttach(_ account: CloudBrainAgentsAccount) throws {
+        try lock.withLock {
+            if cloudArchive == nil { cloudArchive = .init(ownerDirectory: file.deletingLastPathComponent(), namespace: "shell-conversation-links", domains: ["seats"]) }
+            try cloudArchive!.attach(account)
+        }
+    }
+    public func cloudDetach() { lock.withLock { cloudArchive?.detach() } }
+    /// Every tab of the written file, unknown fields included.
+    private static func cloudRecords(_ saved: NativeRPCValue?) -> [CloudBrainAgentsRecord] {
+        (saved?["tabs"].fields ?? []).map { field in
+            .init(domain: "seats", id: CloudBrainTasks.entity(kind: "seat", id: field.key), value: .object([.init("tabKey", .string(field.key)), .init("record", field.value)]))
+        }
+    }
+    private func cloudDisk() throws -> NativeRPCValue? {
+        try BackendTaskPersistence(directory: file.deletingLastPathComponent()).read(file.lastPathComponent, maximumBytes: 2 * 1024 * 1024)
+    }
+    public func cloudSeatInventory() throws -> [CloudCoverage] {
+        let records = Self.cloudRecords(try cloudDisk())
+        return try lock.withLock {
+            [try BackendCloudBrainAgentsSupport.coverage(row: "I10", sourceID: "shell-conversation-links", records: records, blocked: [], attention: cloudArchive?.attention() ?? [])]
+        }
+    }
+    public func cloudSeatSnapshot(cut: CloudSnapshotCut) throws -> CloudBrainAgentsExport {
+        let records = Self.cloudRecords(try cloudDisk())
+        let operations = try lock.withLock { () -> [CloudOperation] in
+            guard cloudArchive?.attached == true else { throw CloudFailure.gateClosed }
+            try cloudArchive!.capture(records, sourceID: "shell-conversation-links", complete: true)
+            return try cloudArchive!.ownOperations()
+        }
+        return .init(operations: operations, coverage: try cloudSeatInventory())
+    }
+    public func cloudSeatImport(_ operations: [CloudOperation]) throws -> [CloudItemResult] {
+        try lock.withLock {
+            guard cloudArchive?.attached == true else { throw CloudFailure.gateClosed }
+            return try cloudArchive!.importing(operations, current: { _ in nil }, shape: .init(show: { op, payload in
+                guard payload["tabKey"].string.map({ CloudBrainTasks.entity(kind: "seat", id: $0) }) == op.entityId else { throw CloudFailure.invalidRequest }
+                return nil
+            }), write: { _ in [:] })
+        }
+    }
+    public func cloudSeatRetained(_ operations: [CloudOperation]) throws -> Bool { try lock.withLock { try cloudArchive?.retained(operations) ?? false } }
+    public func cloudSeatVersions() throws -> [CloudOperation] { try lock.withLock { try cloudArchive?.revisions() ?? [] } }
+    public func cloudSeatOwnChanges(after: String?, limit: Int) throws -> [CloudOperation] {
+        try lock.withLock { guard let cloudArchive else { throw CloudFailure.gateClosed }; return try cloudArchive.ownChanges(after: after, limit: limit) }
+    }
+    public func cloudSeatCursor() throws -> String? { try lock.withLock { guard let cloudArchive else { throw CloudFailure.gateClosed }; return try cloudArchive.cursor() } }
+    public func cloudSeatSaveCursor(_ value: String) throws { try lock.withLock { guard cloudArchive != nil else { throw CloudFailure.gateClosed }; try cloudArchive!.saveCursor(value) } }
+    public func cloudSeatNotices() -> AsyncStream<Void> {
+        lock.withLock { cloudArchive == nil ? AsyncStream { $0.finish() } : cloudArchive!.notices() }
     }
 
     // MARK: The process-wide instance (restore and the launcher read it)
@@ -112,6 +167,8 @@ public final class BackendAGTShellAgents: @unchecked Sendable {
         let value = NativeRPCValue.object([.init("version", .number(1)),
             .init("tabs", .object(snapshot.keys.sorted().map { .init($0, snapshot[$0]!.wireValue) }))])
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? Data(value.compact.utf8).write(to: file, options: .atomic)
+        guard (try? Data(value.compact.utf8).write(to: file, options: .atomic)) != nil else { return }
+        // Cloud capture follows the successful write, from the value written.
+        lock.withLock { _ = try? cloudArchive?.capture(Self.cloudRecords(value), sourceID: "shell-conversation-links", complete: true) }
     }
 }

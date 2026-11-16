@@ -25,11 +25,14 @@ public protocol BrowserDriverHost: AnyObject {
     func displayTitle(_ id: String) -> String
     /// Run one of `BrowserDriverScripts` in the page.
     func evaluate(_ id: String, _ script: String) async throws -> Any?
-    /// Bring the tab forward; true once it is on screen (real input possible).
-    func reveal(_ id: String) async -> Bool
+    /// Make the page ready for real input WHERE IT IS: in the person's window if they show it, else in an
+    /// off-screen parking window. It never selects the tab, never shows it, never moves the person (Asad, 31 Oct
+    /// and 13 Nov: "use everything in the background"). True once the page is in a window.
+    func readyForInput(_ id: String) async -> Bool
 
     /// Real input into the page. False when it is not on screen: the engine
-    /// then uses the scripted fallback.
+    /// then uses the scripted fallback. The Mac app's `focusForTyping`, `type` and `press` are always false
+    /// (MAC-NEXT-14): AppKit key events reach the person's own focused view, so keys go in at page level.
     func click(_ id: String, cssRect: CGRect) -> Bool
     func focusForTyping(_ id: String) -> Bool
     func type(_ id: String, plan: BrowserTypingPlan) -> Bool
@@ -62,6 +65,14 @@ public protocol BrowserDriverHost: AnyObject {
     /// Show the ask (if not already) and wait for Done / Stop / the tab closing /
     /// `windowMs` — "resumed", "stopped", "drive-ended" or "still-waiting".
     func handOver(_ id: String, prompt: String, windowMs: Int) async -> String
+    /// Whether the person has opened the page he was handed (it is in front of him now).
+    func handoverOpened(_ id: String) -> Bool
+    /// What the page asked while the tool drove it (MAC-NEXT-15; default: none).
+    func takePageNotes(_ id: String) -> [[String: Any]]
+    /// A tool's step (input) starts on this page (MAC-NEXT-15c): from now on what the page asks is answered for the
+    /// tool, and a question already held there for the person is answered that way first, so the step is not blocked
+    /// behind it. Default: nothing (a host whose pages never ask the person).
+    func toolStepStarts(_ id: String)
 
     func closeTab(_ id: String)
     func unbind(_ id: String)
@@ -69,6 +80,15 @@ public protocol BrowserDriverHost: AnyObject {
     /// Milliseconds on a steady clock, and a pause — a test drives both.
     func now() -> Double
     func pause(ms: Int) async
+}
+
+public extension BrowserDriverHost {
+    /// A host with no person's window to open the page in: never opened.
+    func handoverOpened(_ id: String) -> Bool { false }
+    /// MAC-NEXT-15: what the page asked while the tool drove it (a dialog answered for it, a file chooser not opened),
+    /// each `kind`, `message`, `site`, `answer`; taken once. A host whose pages never ask the person: none.
+    func takePageNotes(_ id: String) -> [[String: Any]] { [] }
+    func toolStepStarts(_ id: String) {}
 }
 
 public extension BrowserDriverHost {
@@ -346,8 +366,11 @@ public final class BrowserDriverEngine {
             throw BrowserDriverRefusal("a drag step needs `to` (where to drop it) or `x`/`y` (how far to move it)")
         }
 
+        // MAC-NEXT-15c: before anything waits on the page (settle, the element probe), so a question held there for
+        // the person is answered for this tool first instead of blocking the step.
+        host.toolStepStarts(id)
         let nativeInput: Set<String> = ["click", "dblclick", "hover", "type", "press", "check", "uncheck", "submit"]
-        if nativeInput.contains(verb) { _ = await host.reveal(id) }
+        if nativeInput.contains(verb) { _ = await host.readyForInput(id) }
         _ = await host.settle(id, timeoutMs: 5_000)
 
         var found: [String: Any] = [:]
@@ -385,10 +408,13 @@ public final class BrowserDriverEngine {
             let type = ((found["type"] as? String) ?? "").lowercased()
             if found["secret"] as? Bool == true || type == "password" || type == "file" { throw secretField(said) }
             guard found["editable"] as? Bool == true else { throw BrowserDriverRefusal("\(said) is not a field that can be typed into") }
-            try await click(id, rect, selector, modifiers: BrowserClickModifiers())
+            // A date, time or colour field takes its whole value at once (the script); a click would open the Mac's
+            // date or colour picker over the person's window (MAC-NEXT-15b).
+            if !Self.wholeValueTypes.contains(type) { try await click(id, rect, selector, modifiers: BrowserClickModifiers()) }
             _ = try? await evaluate(id, BrowserDriverScripts.focusAndSelect, ["selector": selector])
             if !(host.focusForTyping(id) && host.type(id, plan: plan ?? .clear)) {
-                try await scripted(id, ["action": "type", "selector": selector, "value": value ?? ""])
+                let answer = try await evaluate(id, BrowserDriverScripts.scriptedInput, ["action": "type", "selector": selector, "value": value ?? ""])
+                if answer["ok"] as? Bool != true { throw typingRefusal(answer, said: said) }
             }
         case "select":
             var args: [String: Any] = ["selector": selector, "value": value ?? ""]
@@ -436,7 +462,17 @@ public final class BrowserDriverEngine {
         extra["ok"] = nil; extra["rect"] = nil
 
         await host.pause(ms: 60)
+        // MAC-NEXT-15: what the page asked in answer to this step reaches the AI here. One page round trip first: WebKit
+        // delivers its messages in order, so a dialog or chooser the click caused has been answered by then.
+        if ["click", "dblclick", "check", "uncheck", "type", "press", "submit"].contains(verb) {
+            _ = try? await host.evaluate(id, BrowserDriverScripts.with(BrowserDriverScripts.activeSecret, args: [:]))
+        }
+        let notes = host.takePageNotes(id)
+        if notes.contains(where: { $0["kind"] as? String == "file-chooser" }) {
+            throw BrowserDriverRefusal(BrowserPagePersonRule.fileChooserRefusal)
+        }
         var result: [String: Any] = ["verb": verb, "selector": said, "label": label, "url": host.pageURL(id)]
+        if !notes.isEmpty { result["pageAsked"] = notes }
         for (key, item) in extra where result[key] == nil { result[key] = item }
         result["window"] = windowName ?? NSNull()
         var summary: [String: Any] = ["verb": verb, "selector": said, "label": label, "url": host.pageURL(id)]
@@ -444,11 +480,28 @@ public final class BrowserDriverEngine {
         if verb == "type", let value { summary["chars"] = value.count }
         if verb == "press", let chord { summary["key"] = chord.key }
         if verb == "upload" { summary["files"] = files.map { ($0 as NSString).lastPathComponent } }
+        if !notes.isEmpty { summary["pageAsked"] = notes.count }
         return BrowserDriverResult.value(result, summary: summary)
     }
 
     private func secretField(_ said: String) -> BrowserDriverRefusal {
         BrowserDriverRefusal("\(said) is a password, one-time-code or file field. Nothing will be typed into it. Call browser.handover with a sentence saying what the person should fill in, and they will do it themselves — you will not see what they type, and neither will the log. (Files go in with an upload step.)")
+    }
+
+    static let wholeValueTypes: Set<String> = ["date", "time", "month", "week", "datetime-local", "color", "range"]
+
+    /// MAC-NEXT-15: why page-level typing stopped. A secret field the page moved the cursor into is refused as one
+    /// named before typing; a field that does not hold what was sent says what it holds (never for a secret field).
+    func typingRefusal(_ answer: [String: Any], said: String) -> BrowserDriverRefusal {
+        let typed = (answer["typed"] as? NSNumber)?.intValue ?? 0
+        if answer["secret"] as? Bool == true {
+            return BrowserDriverRefusal("typing stopped after \(typed) character\(typed == 1 ? "" : "s"): the page moved the cursor into a password, one-time-code or other secret field. Nothing more was typed. Call browser.handover with a sentence saying what the person should fill in; you will not see what they type.")
+        }
+        if answer["mismatch"] as? Bool == true {
+            let holds = BrowserLine.sanitize((answer["holds"] as? String) ?? "", max: 220)
+            return BrowserDriverRefusal("the text did not go into \(said) as sent: it now holds \"\(holds)\". This page does not take typing from a script; call browser.handover with a sentence saying what the person should type there.")
+        }
+        return BrowserDriverRefusal((answer["reason"] as? String) ?? "the page did not take that")
     }
 
     /// Wait for the element to exist, be visible, enabled, in view, still, and —
@@ -570,7 +623,7 @@ public final class BrowserDriverEngine {
         let waitedMs = Int(host.now() - started)
         let url = host.tabExists(id) ? host.pageURL(id) : ""
         return BrowserDriverResult.value(
-            ["resumed": outcome == "resumed", "reason": outcome, "url": url,
+            ["resumed": outcome == "resumed", "reason": outcome, "opened": outcome == "resumed" || host.handoverOpened(id), "url": url,
              "title": host.tabExists(id) ? host.title(id) : "", "waitedMs": waitedMs],
             summary: ["outcome": outcome, "waitedMs": waitedMs, "url": url])
     }

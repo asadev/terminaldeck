@@ -215,6 +215,8 @@ check "every file owner-writable (ShipIt)"  "[ -z \"\$(find '$APP' ! -perm -u+w 
 if [[ "$MODE" == developer-id ]]; then
     check "Developer ID authority"         "grep -q 'Authority=Developer ID Application' <<<\"\$SIG\""
     check "secure timestamp"               "grep -q '^Timestamp=' <<<\"\$SIG\""
+    [[ "${TD_MAC_APP_PROFILE:-}" == none ]] ||
+        check "passkey: profile embedded, webcredentials, 0220z entitlements kept" "bash '$REPO/scripts/mac-passkey-signing-check.sh' '$APP'"
 fi
 [[ "$fail" -eq 0 ]] || die "the app did not verify — do not publish it."
 

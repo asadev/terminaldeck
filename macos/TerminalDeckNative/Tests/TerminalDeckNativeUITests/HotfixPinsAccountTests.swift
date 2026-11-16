@@ -106,14 +106,18 @@ import TerminalDeckNativeCore
 
     func testRenderShellAccountExplanationAtBothMenuWidthsAndThemes() throws {
         NSApplication.shared.setActivationPolicy(.prohibited)
-        let output = try XCTUnwrap(ProcessInfo.processInfo.environment["TD_HOTFIX_PINS_FRAMES"])
+        guard let output = ProcessInfo.processInfo.environment["TD_HOTFIX_PINS_FRAMES"] else {
+            throw XCTSkip("Render pictures run only on request: set TD_HOTFIX_PINS_FRAMES to a scratch folder.")
+        }
         try FileManager.default.createDirectory(atPath: output, withIntermediateDirectories: true)
         for width in [CGFloat(260), CGFloat(420)] {
             for (scheme, name) in [(ColorScheme.light, "light"), (.dark, "dark")] {
                 let view = VStack(alignment: .leading, spacing: 2) {
                     NativeLocalAccountChip.shellAccountInstructions
-                    AccountRowLine(current: false, color: nil, provider: "claude", login: "New session · example@example.com", state: "Signed in")
-                    AccountRowLine(current: false, color: nil, provider: "codex", login: "New session · Work", state: "Signed in")
+                    NewSessionAccountMenu(groups: [
+                        NewSessionAccountGroup(provider: "claude", name: "Claude Code", accounts: [.init(id: "a", name: "Example", provider: "claude", state: .ready)]),
+                        NewSessionAccountGroup(provider: "codex", name: "Codex", accounts: [.init(id: "b", name: "Work", provider: "codex", state: .ready)])],
+                        chosenProvider: "claude", chosenAccount: nil, pick: { _, _ in }, addAccount: {})
                 }.padding(6).frame(width: width).background(DeckTokens.frame).environment(\.colorScheme, scheme)
                 let host = NSHostingView(rootView: view)
                 host.sizingOptions = []

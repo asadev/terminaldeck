@@ -48,6 +48,7 @@ extension BackendRemoteProtocol {
                 }
                 try BackendRemoteProtocol.startChoices(r, into: &message, type: "create")
                 if r["chat"] != .missing { message = message.setting("chat", .bool(try r.boolean("chat", reason: "create with an unusable Chat choice"))) }
+                try BackendRemoteProtocol.startText(r, into: &message)
             }
             if r["cols"] != .missing || r["rows"] != .missing {
                 message = message.setting("cols", .number(try r.whole("cols", 20, 500, reason: "\(type) with a size out of range")))

@@ -56,14 +56,21 @@ public struct BackendServersSSH: BackendServersSSHDialer, Sendable {
                       verifyHostKey: @escaping @Sendable (Data) throws -> Void) async throws -> any BackendServersConnection {
         try Task.checkCancellation()
         var server = saved
-        var aliasIdentities: [String] = [], aliasName: String?, trusted: [ScannedKey] = []
+        var aliasIdentities: [String] = [], aliasName: String?, trusted: [ScannedKey] = [], travelledTrust: [ScannedKey] = []
         if case .sshConfig(let alias) = credential {
             // The person's own SSH settings decide address, user, port and key
             // files at every connect. ssh reads the key files; this app never does.
             guard let home = sshHome else { throw NativeRPCError(code: "unavailable", message: "This copy of the app cannot use SSH settings.") }
-            let resolved = try await sshConfig.resolve(alias: alias, home: home)
-            server.address = resolved.hostname; server.username = resolved.user; server.port = resolved.port
-            aliasIdentities = resolved.identityFiles.filter { FileManager.default.isReadableFile(atPath: $0) }
+            // Keys travel (15 Nov): when this device's own SSH settings have no entry of their own for this name, the
+            // copy his other device sent (in the app's own folder) is used; his own entry always wins.
+            var resolved: BackendDockerMCPServerSSHConfig.Resolution?, failure: (any Error)?
+            do { resolved = try await sshConfig.resolve(alias: alias, home: home) } catch { failure = error }
+            guard let choice = Self.chooseSSHSettings(alias: alias, own: resolved, travelled: BackendServersSSHTravelledBox.shared.travelled(saved.id)) else {
+                throw failure ?? BackendServersProblem("key-unreadable", "The SSH settings for \(alias) name no key file on this Mac that Terminal Deck can use.")
+            }
+            server.address = choice.hostname; server.username = choice.user; server.port = choice.port
+            aliasIdentities = choice.identities
+            travelledTrust = choice.extraTrusted
             guard !aliasIdentities.isEmpty else {
                 throw BackendServersProblem("key-unreadable", "The SSH settings for \(alias) name no key file on this Mac that Terminal Deck can use.")
             }
@@ -71,6 +78,8 @@ public struct BackendServersSSH: BackendServersSSHDialer, Sendable {
         }
         // The person's own known_hosts counts for every server, like OpenSSH.
         if let home = sshHome { trusted = await Self.trustedHostKeys(home: home, host: server.address, port: server.port) }
+        // The known-host lines that came with a travelled copy count after his own (his own always first).
+        for key in travelledTrust where !trusted.contains(key) { trusted.append(key) }
         guard policy.mayConnect else { throw NativeRPCError(code: "unavailable", message: "Native SSH connections have not been enabled by the exclusive backend owner.") }
         guard policy.helperDispatchInstalled, policy.helperExecutable.isFileURL,
               FileManager.default.isExecutableFile(atPath: policy.helperExecutable.path) else {

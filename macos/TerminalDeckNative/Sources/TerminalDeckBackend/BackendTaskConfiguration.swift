@@ -8,6 +8,9 @@ import TerminalDeckNativeCore
 /// to the authenticated CRM integration; it is never fabricated here.
 public actor BackendTaskConfiguration {
     private let persistence: BackendTaskPersistence, instructions: BackendTaskPersistence
+    nonisolated let recordDeletes: RecordsDeleteLedger
+    private var cloudAgentsArchive: BackendCloudBrainAgentsArchive?
+    private var cloudImporting = false, cloudCaptureFailed = false
     private var agents: [NativeRPCValue] = [], connections: [NativeRPCValue] = [], loaded = false
     /// Ids of saved agents that did not read and were left out at start; nil when one of them had no readable id.
     private var unreadAgentIDs: Set<String>? = []
@@ -40,6 +43,7 @@ public actor BackendTaskConfiguration {
     public init(persistence: BackendTaskPersistence, creatorHistoryURL: URL? = nil, secrets: any BackendConnectedTasksSecrets = BackendConnectedTasksMemorySecrets(),
                 changed: @escaping @Sendable () async -> Void = {}) throws {
         self.persistence = persistence; self.changed = changed; self.secrets = secrets
+        recordDeletes = RecordsDeleteLedger(root: persistence.directory.appendingPathComponent("records-delete"))
         self.creatorHistoryURL = creatorHistoryURL ?? persistence.directory.deletingLastPathComponent().appendingPathComponent("hoot-log/actions.jsonl")
         instructions = try BackendTaskPersistence(directory: persistence.directory.appendingPathComponent("agent-instructions"), ownership: persistence.ownership)
     }
@@ -450,6 +454,7 @@ public actor BackendTaskConfiguration {
     }
     private func releaseAGSBarrier() {
         savingAGS = false
+        cloudCaptureAgents()
         let waiters = agsWaiters; agsWaiters = []
         waiters.forEach { $0.resume() }
     }
@@ -548,13 +553,51 @@ public actor BackendTaskConfiguration {
             throw NativeRPCError.invalidArguments("\(label) cannot be given \(what). Clear them, or choose a coding agent.")
         }
     }
-    public func removeAgent(_ id: String) async throws {
+    public func removeAgent(_ id: String, deletedBy actor: CloudDeleteActor? = nil) async throws {
+        let given: CloudDeleteActor
+        if let actor { given = actor } else { given = await recordDeletes.currentActor() }
+        try await removeAgentRecord(id, actor: given, notify: true)
+    }
+    /// Shared incoming/local writer. Keeper first, intent second, records last. Imports do not start work.
+    public func cloudLeanRemoveAgent(_ id: String, actor: CloudDeleteActor) async throws {
+        try await removeAgentRecord(id, actor: actor, notify: false)
+    }
+    private func removeAgentRecord(_ id: String, actor: CloudDeleteActor, notify: Bool) async throws {
         try await waitForAGS()
         try started(); try persistence.writable(); guard agents.contains(where: { $0["id"].string == id }) else { throw NativeRPCError.invalidArguments("That agent no longer exists.") }
+        guard let row = agents.first(where: { $0["id"].string == id }) else { return }
+        let shown = try view(row), entity = "agent:" + id
+        let instructionBin = try recordDeletes.binRows(kind: "agent").first { $0.item.id == "instruction:" + id + ".md" && $0.actor.group == actor.group }
+        let currentText = shown["instructions"].string ?? ""
+        let lastText = try recordDeletes.saved("instruction:" + id + ".md")?["text"].string ?? ""
+        let text = currentText.isEmpty ? (instructionBin?.value["text"].string ?? lastText) : currentText
+        // Lead decision 4 (review A6): the links this removal clears are kept with the Bin copy, so Put back restores
+        // them: who reported to it, and which connection identities named it.
+        let reports = agents.filter { $0["id"].string != id && $0["reportsTo"].string == id }.compactMap { $0["id"].string }
+        var identities: [NativeRPCValue] = []
+        for connection in connections {
+            guard let key = connection["keyId"].string else { continue }
+            for field in connection["identities"].fields ?? [] where field.value.string == id {
+                identities.append(.object([.init("keyId", .string(key)), .init("field", .string(field.key))]))
+            }
+        }
+        let payload = NativeRPCValue.object([.init("row", row), .init("text", .string(text)),
+            .init("reports", .array(reports.map(NativeRPCValue.string))), .init("identities", .array(identities))])
+        try recordDeletes.putBin(kind: "agent", entity: entity, name: row["name"].string ?? "Agent", value: payload, actor: actor)
+        if let instructionBin { try recordDeletes.takeBin(instructionBin.item.id, permanently: true) }
+        if notify {
+            try recordDeletes.saveIntent(actor.intent(place: entity, scope: .everywhere))
+            try recordDeletes.saveIntent(actor.intent(place: "instruction:" + id + ".md", scope: .everywhere))
+        }
         let before = (agents, connections); agents.removeAll { $0["id"].string == id }
         agents = BackendAGTOrg.clearReports(to: id, in: agents) // AGT: its reports become independent
         connections = connections.map { connection in var identities = connection["identities"]; for field in identities.fields ?? [] where field.value.string == id { identities = identities.removing(field.key) }; return connection.setting("identities", identities) }
-        do { try flush(); try instructions.remove(id + ".md") } catch { (agents, connections) = before; throw error }; await changed()
+        do { try flush(); try instructions.remove(id + ".md"); instructionsRead[id] = nil }
+        catch { (agents, connections) = before; try? flush(); throw error }
+        try recordDeletes.clearSaved(entity)
+        try recordDeletes.clearSaved("instruction:" + id + ".md")
+        guard notify else { return }
+        await changed()
         await retireHistory?(id)   // L4-AGENTS: its runs are kept for the totals, under a retired id
         await agentRemoved?(id)
     }
@@ -1152,7 +1195,296 @@ public actor BackendTaskConfiguration {
         if let store = agsStore, prepared != nil { await store.announceProfileTransaction() }
         await changed()
     }
+    // MARK: Cloud (lane A2). The roster is read from what was written (task-config.json and the instruction files),
+    // never from the cleaned in-memory view, and never waits for the encrypted AGS vault (findings 9, 14).
+    public func cloudAttach(_ account: CloudBrainAgentsAccount) throws {
+        if cloudAgentsArchive == nil { cloudAgentsArchive = .init(ownerDirectory: persistence.ownership == .memory ? nil : persistence.directory, namespace: "agents", domains: ["agents"]) }
+        try cloudAgentsArchive!.attach(account)
+    }
+    public func cloudDetach() { cloudAgentsArchive?.detach() }
+    /// Exact stored rows plus instruction bytes. An unreadable instruction file is a counted problem, not a failed export.
+    private func cloudStoredRecords() throws -> (records: [CloudBrainAgentsRecord], problems: [String]) {
+        if persistence.ownership == .memory {
+            let config = BackendTaskValues.object([("v", .number(1)), ("agents", .array(agents.map { $0.removing("instructionsFile") })), ("connections", .array(connections)),
+                ("agentImportSelections", importSelectionsWire), ("profileChangePlans", .array(profileChangePlans.keys.sorted().compactMap { profileChangePlans[$0] }))])
+            let files = agents.compactMap { agent -> (name: String, bytes: Data)? in
+                guard let id = agent["id"].string, let text = agent["instructions"].string, !text.isEmpty else { return nil }
+                return (id + ".md", Data(text.utf8))
+            }
+            return (try CloudBrainAgentsInstructions.records(config: config, files: files), [])
+        }
+        let config = try persistence.read("task-config.json")
+        var files: [(name: String, bytes: Data)] = [], problems: [String] = []
+        if FileManager.default.fileExists(atPath: instructions.directory.path) {
+            for name in try FileManager.default.contentsOfDirectory(atPath: instructions.directory.path).sorted() where CloudBrainAgentsInstructions.validName(name) {
+                do {
+                    let descriptor = try CloudConversationFileAccess.open(root: instructions.directory, relativePath: name)
+                    defer { Darwin.close(descriptor) }
+                    let before = try CloudConversationFileAccess.stamp(descriptor)
+                    let bytes = try CloudConversationFileAccess.read(descriptor, count: CloudBrainAgentsInstructions.exportLimit + 1)
+                    guard bytes.count <= CloudBrainAgentsInstructions.exportLimit, try CloudConversationFileAccess.stamp(descriptor) == before else { throw CloudFailure.versionChanged }
+                    files.append((name, bytes))
+                } catch { problems.append(name) }
+            }
+        }
+        let reasons = problems.isEmpty ? [] : ["\(problems.count) agent instruction file(s) could not be read and were not exported."]
+        return (try CloudBrainAgentsInstructions.records(config: config, files: files), reasons)
+    }
+    private static let cloudBlocked = ["Kept in Cloud history but not restored on another Mac: connected-task definitions (reconnect there), import folder choices and pending profile reviews.",
+        "Custom agents (custom-agents.json) and seat memory folders are not exported by this adapter."]
+    public func cloudAgentInventory() throws -> [CloudCoverage] {
+        try started()
+        let stored = try cloudStoredRecords()
+        let failed = cloudCaptureFailed ? ["A save on this Mac could not be recorded for the Cloud yet; the next save or snapshot records it."] : []
+        return [try BackendCloudBrainAgentsSupport.coverage(row: "I10", sourceID: "task-config-agents", records: stored.records,
+            blocked: Self.cloudBlocked + stored.problems + failed, attention: cloudAgentsArchive?.attention() ?? [])]
+    }
+    public func cloudAgentSnapshot(cut: CloudSnapshotCut) throws -> CloudBrainAgentsExport {
+        try started()
+        guard cloudAgentsArchive?.attached == true else { throw CloudFailure.gateClosed }
+        try cloudAgentsArchive!.capture(try cloudStoredRecords().records, sourceID: "task-config-agents", complete: true, shape: cloudShape())
+        cloudCaptureFailed = false
+        return .init(operations: try cloudAgentsArchive!.ownOperations(), coverage: try cloudAgentInventory())
+    }
+    /// Post-write hook: reads back what the save actually wrote.
+    private func cloudCaptureAgents() {
+        guard !cloudImporting, cloudAgentsArchive?.attached == true else { return }
+        do { try cloudAgentsArchive!.capture(try cloudStoredRecords().records, sourceID: "task-config-agents", complete: true, shape: cloudShape()) }
+        catch { cloudCaptureFailed = true }
+    }
+    private func cloudStoredMap() throws -> [String: NativeRPCValue] {
+        Dictionary(try cloudStoredRecords().records.map { ($0.key, try $0.persistedValue().raw) }, uniquingKeysWith: { first, _ in first })
+    }
+    private func cloudShape() -> CloudBrainAgentsShape {
+        let roster = agents, memoryMode = persistence.ownership == .memory
+        return CloudBrainAgentsShape(show: { op, payload in
+            guard let kind = payload["kind"].string, let id = payload["id"].string, op.entityId == CloudBrainTasks.entity(kind: kind, id: id) else { throw CloudFailure.invalidRequest }
+            switch kind {
+            case "agent":
+                let row = payload["record"]
+                guard row["id"].string == id else { throw CloudFailure.invalidRequest }
+                let existing = roster.first { $0["id"].string == id }
+                var local = row
+                for key in CloudBrainAgentsInstructions.machineKeys {
+                    if let existing, existing.has(key) { local = local.setting(key, existing[key]) } else { local = local.removing(key) }
+                }
+                let clean = try Self.cleanAgent(local, others: roster.filter { $0["id"].string != id })
+                let stored = clean.removing("instructionsFile")
+                return payload.setting("record", memoryMode ? stored : stored.setting("instructions", .null))
+            case "instruction":
+                let file = try CloudBrainAgentsInstructions.instructionBytes(payload)
+                // A file larger than this app reads stays in history; it is never cut to fit.
+                guard file.bytes.count <= CloudBrainAgentsInstructions.maximumBytes, String(data: file.bytes, encoding: .utf8) != nil else { return nil }
+                return payload
+            default:
+                guard CloudBrainAgentsInstructions.historyOnlyKinds.contains(kind) else { throw CloudFailure.unsupportedFormat }
+                return nil
+            }
+        })
+    }
+    /// Names of instruction files with the hashes of every Cloud version, read before the import runs.
+    private func cloudInstructionHashes(_ incoming: [CloudOperation]) -> [String: Set<String>] {
+        var result: [String: Set<String>] = [:]
+        let retained: [CloudOperation] = cloudAgentsArchive?.ledger.map { Array($0.operations.values) } ?? []
+        for op in retained + incoming where op.payload.raw["kind"].string == "instruction" {
+            if let file = try? CloudBrainAgentsInstructions.instructionBytes(op.payload.raw) { result[file.name, default: []].insert(CloudSyncBytes.hash(file.bytes)) }
+        }
+        return result
+    }
+    /// Per record, in order: name clashes and org rules refuse only that agent; a new agent whose id already has a
+    /// different instruction file here is refused rather than run with stale instructions (findings 13, 15).
+    private func cloudValidate(_ items: [CloudBrainAgentsProjection], instructionHashes: [String: Set<String>]) -> [String: String] {
+        var roster = agents, refusals: [String: String] = [:]
+        let instructionKeys = Set(items.compactMap { $0.image?["kind"].string == "instruction" ? $0.image?["id"].string : nil })
+        for item in items {
+            guard let image = item.image, image["kind"].string == "agent", let id = image["id"].string else { continue }
+            do {
+                let clean = try Self.cleanAgent(image["record"], others: roster.filter { $0["id"].string != id })
+                try BackendAGTOrg.check(clean, agents: roster.filter { $0["id"].string != id })
+                if !roster.contains(where: { $0["id"].string == id }), persistence.ownership != .memory, !instructionKeys.contains(id + ".md"),
+                   let local = try instructions.readOwnedBytes(id + ".md", maximumBytes: CloudBrainAgentsInstructions.exportLimit),
+                   !(instructionHashes[id + ".md"] ?? []).contains(CloudSyncBytes.hash(local)) {
+                    throw NativeRPCError(code: "instructions-conflict", message: "a different instructions file for this agent already exists here")
+                }
+                if let index = roster.firstIndex(where: { $0["id"].string == id }) { roster[index] = clean } else { roster.append(clean) }
+            } catch { refusals[item.key] = (error as? NativeRPCError)?.message ?? "not valid here" }
+        }
+        return refusals
+    }
+    private func cloudWrite(_ items: [CloudBrainAgentsProjection]) throws -> [String: NativeRPCValue?] {
+        var next = agents
+        var files: [(name: String, bytes: Data)] = []
+        for item in items {
+            guard let image = item.image else { continue }
+            switch image["kind"].string {
+            case "agent":
+                guard let id = image["id"].string else { continue }
+                var row = image["record"]
+                if persistence.ownership == .memory, let existing = next.first(where: { $0["id"].string == id }) { row = row.setting("instructions", existing["instructions"]) }
+                if let index = next.firstIndex(where: { $0["id"].string == id }) { next[index] = row } else { next.append(row) }
+            case "instruction":
+                let file = try CloudBrainAgentsInstructions.instructionBytes(image)
+                files.append(file)
+            default: continue
+            }
+        }
+        var undo: [(name: String, bytes: Data?)] = []
+        do {
+            // Exact file bytes precede the roster. The plan only replaces a file this Mac had not changed.
+            for file in files {
+                if persistence.ownership == .memory {
+                    let id = String(file.name.dropLast(3))
+                    if let index = next.firstIndex(where: { $0["id"].string == id }), let text = String(data: file.bytes, encoding: .utf8) { next[index] = next[index].setting("instructions", .string(text)) }
+                    continue
+                }
+                let before = try instructions.readOwnedBytes(file.name, maximumBytes: CloudBrainAgentsInstructions.exportLimit)
+                undo.append((file.name, before))
+                try instructions.writeBytes(file.name, data: file.bytes, replace: before != nil)
+                instructionsRead[String(file.name.dropLast(3))] = nil
+            }
+            let before = agents; agents = next
+            do { if agents != before { try flush() } } catch { agents = before; throw error }
+        } catch {
+            for item in undo.reversed() { if let bytes = item.bytes { try? instructions.writeBytes(item.name, data: bytes) } else { try? instructions.remove(item.name) } }
+            throw error
+        }
+        let after = try cloudStoredMap()
+        return Dictionary(items.map { ($0.key, after[$0.key]) }, uniquingKeysWith: { first, _ in first })
+    }
+    public func cloudAgentImport(_ operations: [CloudOperation]) throws -> [CloudItemResult] {
+        try started(); try savable(); try persistence.writable()
+        guard !savingAGS, agsFailure == nil else { throw CloudFailure.unavailable }
+        guard cloudAgentsArchive?.attached == true else { throw CloudFailure.gateClosed }
+        let current = try cloudStoredMap(), hashes = cloudInstructionHashes(operations)
+        cloudImporting = true
+        let results: [CloudItemResult]
+        do {
+            results = try cloudAgentsArchive!.importing(operations, current: { current[$0] }, shape: cloudShape(),
+                validate: { self.cloudValidate($0, instructionHashes: hashes) }, write: { try self.cloudWrite($0) })
+        } catch { cloudImporting = false; throw error }
+        cloudImporting = false
+        cloudCaptureAgents()
+        return results
+    }
+    public func cloudAgentRefresh() throws -> Int {
+        try started(); try savable(); try persistence.writable()
+        guard !savingAGS, agsFailure == nil else { throw CloudFailure.unavailable }
+        guard cloudAgentsArchive?.attached == true else { throw CloudFailure.gateClosed }
+        let current = try cloudStoredMap(), hashes = cloudInstructionHashes([])
+        cloudImporting = true; defer { cloudImporting = false }
+        return try cloudAgentsArchive!.refresh(current: { current[$0] }, shape: cloudShape(), validate: { self.cloudValidate($0, instructionHashes: hashes) }, write: { try self.cloudWrite($0) })
+    }
+    public func cloudAgentRetained(_ operations: [CloudOperation]) throws -> Bool { try cloudAgentsArchive?.retained(operations) ?? false }
+    public func cloudAgentVersions() throws -> [CloudOperation] { try cloudAgentsArchive?.revisions() ?? [] }
+    public func cloudAgentOwnChanges(after: String?, limit: Int) throws -> [CloudOperation] { guard let cloudAgentsArchive else { throw CloudFailure.gateClosed }; return try cloudAgentsArchive.ownChanges(after: after, limit: limit) }
+    public func cloudAgentCursor() throws -> String? { guard let cloudAgentsArchive else { throw CloudFailure.gateClosed }; return try cloudAgentsArchive.cursor() }
+    public func cloudAgentSaveCursor(_ value: String) throws { guard cloudAgentsArchive != nil else { throw CloudFailure.gateClosed }; try cloudAgentsArchive!.saveCursor(value) }
+    public func cloudAgentNotices() -> AsyncStream<Void> {
+        guard cloudAgentsArchive != nil else { return AsyncStream { $0.finish() } }
+        return cloudAgentsArchive!.notices()
+    }
+    // MARK: Cloud, lean first version (lane A2, `BackendCloudLeanAgents`). Costs nothing while Cloud is off.
+    /// Every saved agent row with its instruction text, or an error while some saved agents did not read (U1):
+    /// nothing may then count as removed.
+    public func cloudLeanRoster() async throws -> [(row: NativeRPCValue, instructions: String)] {
+        try await waitForAGS(); try started(); try savable()
+        guard unreadAgentIDs?.isEmpty == true else { throw CloudFailure.unavailable }
+        var result: [(row: NativeRPCValue, instructions: String)] = []
+        for agent in agents {
+            let shown = try view(agent)
+            result.append((row: agent.removing("instructionsFile").removing("instructions"), instructions: shown["instructions"].string ?? ""))
+        }
+        return result
+    }
+    public func cloudLeanInstructionURL(_ id: String) throws -> URL? {
+        try started()
+        return persistence.ownership == .memory ? nil : try instructions.file(id + ".md")
+    }
+    public func cloudLeanRemoveInstructions(_ id: String, previous: String, actor: CloudDeleteActor, intended: Bool = false) async throws {
+        try await waitForAGS(); try started(); try savable(); try persistence.writable()
+        guard let row = agents.first(where: { $0["id"].string == id }) else { return }
+        let entity = "instruction:" + id + ".md"
+        let current = try view(row)["instructions"].string ?? ""
+        let text = current.isEmpty ? previous : current
+        try recordDeletes.putBin(kind: "agent", entity: entity, name: (row["name"].string ?? "Agent") + " instructions",
+            value: .object([.init("row", row), .init("text", .string(text)), .init("instructionOnly", .bool(true))]), actor: actor)
+        if intended { try recordDeletes.saveIntent(actor.intent(place: entity, scope: .everywhere)) }
+        try await cloudLeanWrite(row: nil, instructionsFor: id, text: "")
+        if try recordDeletes.mark(entity) == nil { try recordDeletes.clearSaved(entity) }
+    }
+    /// Put back (lead decision 4): the "reports to" links and connection identities its removal cleared come back,
+    /// each only where nothing newer took its place (an agent now reporting elsewhere, an identity now set) and only
+    /// when the org chart still accepts it. One save, no change notice, no session, no run.
+    public func cloudLeanRestoreLinks(_ id: String, reports: [String], identities: [(keyId: String, field: String)]) async throws {
+        try await waitForAGS(); try started(); try savable(); try persistence.writable()
+        guard !savingAGS, agsFailure == nil else { throw CloudFailure.unavailable }
+        guard agents.contains(where: { $0["id"].string == id }) else { return }
+        var nextAgents = agents
+        for report in reports {
+            guard let index = nextAgents.firstIndex(where: { $0["id"].string == report }),
+                  nextAgents[index]["reportsTo"].string?.isEmpty ?? true else { continue }
+            let candidate = nextAgents[index].setting("reportsTo", .string(id))
+            guard (try? BackendAGTOrg.check(candidate, agents: nextAgents.filter { $0["id"].string != report })) != nil else { continue }
+            nextAgents[index] = candidate
+        }
+        var nextConnections = connections
+        for link in identities {
+            guard let index = nextConnections.firstIndex(where: { $0["keyId"].string == link.keyId }) else { continue }
+            var named = nextConnections[index]["identities"]
+            guard named.fields != nil || named.isNullish, named[link.field].isNullish else { continue }
+            if named.fields == nil { named = .object([]) }
+            named = named.setting(link.field, .string(id))
+            nextConnections[index] = nextConnections[index].setting("identities", named)
+        }
+        let before = (agents, connections)
+        guard nextAgents != before.0 || nextConnections != before.1 else { return }
+        agents = nextAgents; connections = nextConnections
+        do { try flush() } catch { (agents, connections) = before; throw error }
+    }
+    /// One agent row cleaned and checked exactly as a save would store it. Writes nothing.
+    public func cloudLeanClean(_ row: NativeRPCValue) throws -> NativeRPCValue {
+        try started()
+        let id = row["id"].string?.lowercased()
+        let others = agents.filter { $0["id"].string != id }
+        let clean = try Self.cleanAgent(row, others: others)
+        try BackendAGTOrg.check(clean, agents: others)
+        return clean.removing("instructionsFile")
+    }
+    /// Stores an agent row that arrived from the Cloud (already cleaned) and/or one agent's instruction text, in one
+    /// save: no change notice, no run-history retirement, no profile save, no session. An import is never an event.
+    public func cloudLeanWrite(row: NativeRPCValue?, instructionsFor agentID: String?, text: String) async throws {
+        try await waitForAGS(); try started(); try savable(); try persistence.writable()
+        guard !savingAGS, agsFailure == nil else { throw CloudFailure.unavailable }
+        var next = agents
+        if let row, let id = row["id"].string {
+            if let index = next.firstIndex(where: { $0["id"].string == id }) {
+                // Text an older save still keeps inside the row stays where it is.
+                let inline = next[index]["instructions"]
+                next[index] = row.setting("instructions", inline.isNullish ? .null : inline)
+            } else {
+                next.append(row.setting("instructions", .null))
+            }
+        }
+        if let agentID {
+            if persistence.ownership == .memory {
+                if let index = next.firstIndex(where: { $0["id"].string == agentID }) {
+                    next[index] = next[index].setting("instructions", text.isEmpty ? .null : .string(text))
+                }
+            } else {
+                // As a save does: the whole file, newline-terminated; no text means no file.
+                if text.isEmpty { try instructions.remove(agentID + ".md") } else { try instructions.writeBytes(agentID + ".md", data: Data((text + "\n").utf8)) }
+                instructionsRead[agentID] = nil
+            }
+        }
+        let before = agents
+        agents = next
+        do { if agents != before { try flush() } } catch { agents = before; throw error }
+    }
     private func started() throws { guard loaded else { throw NativeRPCError(code: "not-started", message: "Task settings have not been opened") } }
     private func savable() throws { if let configBlocked { throw NativeRPCError(code: "task-config-unreadable", message: configBlocked) } }
-    private func flush() throws { try savable(); try persistence.write("task-config.json", value: BackendTaskValues.object([("v", .number(1)), ("agents", .array(agents.map { $0.removing("instructionsFile") })), ("connections", .array(connections)), ("agentImportSelections", importSelectionsWire), ("profileChangePlans", .array(profileChangePlans.keys.sorted().compactMap { profileChangePlans[$0] }))])) }
+    private func flush() throws {
+        try savable()
+        try persistence.write("task-config.json", value: BackendTaskValues.object([("v", .number(1)), ("agents", .array(agents.map { $0.removing("instructionsFile") })), ("connections", .array(connections)), ("agentImportSelections", importSelectionsWire), ("profileChangePlans", .array(profileChangePlans.keys.sorted().compactMap { profileChangePlans[$0] }))]))
+        cloudCaptureAgents()
+    }
 }

@@ -66,6 +66,8 @@ final class IslandController: NSObject {
 
     private let model: IslandViewModel
     var expandedForChecks: Bool { model.expanded }
+    /// What the island would show now, for the Settings preview.
+    var liveFacts: NativeIslandFacts { model.facts }
     /// The drawn shape on screen (pill at rest, the grown panel when open), for the pointer monitors.
     var shapeOnScreen: CGRect? {
         guard let panel, let container, panel.isVisible else { return nil }
@@ -76,6 +78,7 @@ final class IslandController: NSObject {
     private var started = false
     private var keyMonitor: Any?
     private var nativeShown = true
+    private var tasksStarted = false
     func acceptNativeShown(_ shown: Bool) { nativeShown = shown; ensureMenuItem() }
 
     func hootPanel() -> IslandPanel { if panel == nil { makePanel() }; return panel! }
@@ -87,6 +90,9 @@ final class IslandController: NSObject {
         }
         model.acceptNativeSnapshot(value, screen: Self.islandScreen(), builtIn: builtIn,
             options: NativeFIXESIslandPreferences.shared.options)
+        model.shows = NativeFIXESIslandPreferences.shared.shows
+        // Tasks are read once and then pushed (`tasks:changed`); only when the island shows them.
+        if model.shows == .tasks, !tasksStarted { tasksStarted = true; TasksStore.shared.start() }
         NativePermissionDesk.shared.sessionsChanged(value["sessions"].elements ?? [])
         let next = value["expanded"].bool == true
         withAnimation(.spring(duration: 0.3, bounce: 0.1)) { model.expanded = next }
@@ -112,6 +118,8 @@ final class IslandController: NSObject {
                            name: NSMenu.didBeginTrackingNotification, object: nil)
         center.addObserver(self, selector: #selector(appBecameActive(_:)),
                            name: NSApplication.didBecomeActiveNotification, object: nil)
+        center.addObserver(self, selector: #selector(otherWindowBecameKey(_:)),
+                           name: NSWindow.didBecomeKeyNotification, object: nil)
 
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let isEscape = event.keyCode == 53
@@ -237,5 +245,20 @@ final class IslandController: NSObject {
 
     @objc private func appBecameActive(_ note: Notification) {
         ensureMenuItem()
+    }
+
+    /// 15 Nov (item 62): the dropped-down Hoot covered the Settings window. When another of the app's own titled windows
+    /// (Settings, a main window) comes to the front, the dropped-down Hoot closes; its own popovers and sheets do not count.
+    @objc private func otherWindowBecameKey(_ note: Notification) {
+        guard let window = note.object as? NSWindow, let panel, model.expanded,
+              Self.closesIsland(window: window, panel: panel) else { return }
+        NativeCompositionHootUI.shared.send("hoot-panel:close")
+    }
+
+    static func closesIsland(window: NSWindow, panel: NSWindow) -> Bool {
+        guard window !== panel, window.styleMask.contains(.titled), window.sheetParent !== panel else { return false }
+        var parent = window.parent
+        while let next = parent { if next === panel { return false }; parent = next.parent }
+        return true
     }
 }

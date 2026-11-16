@@ -17,7 +17,7 @@ enum NativeScreens {
     /// What the page stops mounting underneath, as it names them — told after every
     /// page `ready` (`tdNative.run('native-screens', registered)`). One entry per case
     /// below, in the same order: add the id here when you add the case.
-    static let registered: [String] = [
+    private static let baseRegistered: [String] = [
         "session",     // ("session", local id): NativeTerminalScreen — lane T
         "machine-session", // ("session", "machine <id> <session>"): NativeTerminalScreen — lane T (page stops mounting MachineSessionPane)
         "server-session",  // ("session", "server <id> <key>"): NativeTerminalScreen — lane T (page stops mounting ServerSessionPane)
@@ -39,7 +39,7 @@ enum NativeScreens {
         "staysfixed",  // ("panel", "staysfixed"): NativeSFXScreen
         "memory",      // Keep the native door while the Memory page is paused.
         "mcp",         // ("panel", "mcp"): NativeMcpScreen — lane E2
-        "overview",    // ("panel", "overview"): NativeOverviewScreen
+        "overview",    // retired 15 Nov: kept registered only so the hidden page never draws its own Overview
         "store",       // ("panel", "store"): NativeStoreScreen (with B's and E2's departments)
         "drive",       // Hoot driving the app: NativeDriveHost (page stops mounting DriveHost and answering `where`)
         "tasks",       // ("panel", "tasks"): NativeUIGTasksScreen (My Work, Goals, CRM tasks, the task popup) — lane I
@@ -73,6 +73,8 @@ enum NativeScreens {
         "join-remote",       // lane E1: JoinRemoteDialog as a sheet (NativeJoinRemoteDialog.swift; page side native-dialogs.ts)
     ]
 
+    static var registered: [String] { baseRegistered + (NativeCloudDisplayGate.shared.shows ? ["settings:cloud"] : []) }
+
     @MainActor
     static func detail(kind: String, id: String) -> AnyView? {
         if kind == "panel", id.hasPrefix("settings:") {
@@ -104,7 +106,8 @@ enum NativeScreens {
         case ("panel", "staysfixed"): return AnyView(NativeSFXScreen())
         case ("panel", "memory"): return AnyView(NativeUIGMemoryUnavailable())
         case ("panel", "mcp"): return AnyView(NativeMcpScreen()) // lane E2
-        case ("panel", "overview"): return AnyView(NativeOverviewScreen())
+        // Never selected (AppModel turns it into SHELLRoutes.overviewStandIn); drawn as the New session page if asked.
+        case ("panel", SHELLRoutes.retiredOverview): return SHELLRoutes.detail(kind: "panel", id: NativeLanding.pageID)
         case ("panel", "store"): return AnyView(NativeStoreScreen())
         case ("panel", "tasks"): return AnyView(NativeUIGTasksScreen()) // UIG; existing task state and renderers.
         case ("panel", "remote"): return AnyView(NativeMachinesScreen()) // lane E1

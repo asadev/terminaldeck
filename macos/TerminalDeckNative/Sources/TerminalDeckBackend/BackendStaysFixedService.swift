@@ -15,6 +15,8 @@ public enum BackendStaysFixedWhere {
         return nil
     }
     public static func git(_ root: String) -> Bool {
+        // CODE-PARENT: a repository above the project that is not its code (the home folder's) is not "has Git".
+        if BackendProjectCode.refusesOutright(root, bounds: .live()) { return false }
         var folder = URL(fileURLWithPath: root).standardizedFileURL
         for _ in 0..<32 {
             if FileManager.default.fileExists(atPath: folder.appendingPathComponent(".git").path) { return true }

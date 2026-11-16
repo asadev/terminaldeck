@@ -441,7 +441,7 @@ public enum ServerAdvancedText {
         case nil: return "This build did not say."
         case "none": return "Nothing is kept. You will be asked again next time."
         case "key": return "A key, sealed by this computer and never shown on any screen."
-        case "ssh-config": return "Only its name in your own SSH settings. Each time, it signs in the way those settings say, with your own key files; no key is copied here."
+        case "ssh-config": return "Only its name in your own SSH settings. Each time, it signs in the way those settings say, with your own key files. Your other devices get a sealed copy of what this server needs."
         default: return "A password, sealed by this computer and never shown on any screen."
         }
     }

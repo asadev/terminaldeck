@@ -61,7 +61,7 @@ final class PROJRegistryTests: XCTestCase, @unchecked Sendable {
         let save = try handler("project_registry.save", registry: registry)
         func args(_ logo: NativeRPCValue?) -> NativeRPCValue {
             var value = NativeRPCValue.object([.init("id", .string("terminal-deck")), .init("name", .string("Terminal Deck")),
-                                               .init("folders", .array([.string(root.appendingPathComponent("deck").path)]))])
+                                               .init("folders", .array([.string("/work/terminal-deck")]))])
             if let logo { value = value.setting("logo", logo) }
             return value
         }

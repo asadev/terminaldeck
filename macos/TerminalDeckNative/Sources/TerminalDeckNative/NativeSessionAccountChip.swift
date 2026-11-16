@@ -7,14 +7,14 @@ import TerminalDeckNativeCore
 // native confirm), a new server terminal, Settings → Accounts — through its
 // commands; these read the accounts and draw the menu.
 
-private struct ChipChevron: View {
+struct ChipChevron: View {
     var body: some View {
         Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(.secondary)
     }
 }
 
-/// `folder-chip-button account-chip-button`.
-private struct AccountChipLabel<Content: View>: View {
+/// `folder-chip-button account-chip-button`. Shared with the New session page's chips in the same bar.
+struct AccountChipLabel<Content: View>: View {
     @ViewBuilder let content: () -> Content
     var body: some View {
         HStack(spacing: 5) {
@@ -30,30 +30,7 @@ private struct AccountChipLabel<Content: View>: View {
     }
 }
 
-/// One row of an account menu: the tick, the account's colour, its agent and its login.
-struct AccountRowLine: View {
-    let current: Bool
-    let color: String?
-    let provider: String?
-    let login: String
-    var state: String?
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "checkmark").font(.caption.weight(.semibold)).opacity(current ? 1 : 0).frame(width: 12)
-            NativeCodingAIDot(token: color)
-            NativeCodingAIProviderMark(provider: provider, size: 13)
-            Text(login).lineLimit(1).truncationMode(.middle).help(login)
-            Spacer(minLength: 12)
-            if let state { Text(state).font(.caption).foregroundStyle(.secondary) }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .contentShape(.rect)
-    }
-}
-
-private struct MenuHead: View {
+struct MenuHead: View {
     let text: String
     var note: (label: String, text: String)?
     var body: some View {
@@ -91,6 +68,8 @@ struct NativeLocalAccountChip: View {
     @State private var armedUnreadable: String?
     @State private var open = false
     @State private var subscriptions: [EngineSubscription] = []
+    /// The New session page's lists (every account, API-key accounts included), shared with that page's reader and Hoot.
+    var lists: HootSharedLists = .shared
 
     private var info: TerminalSessionInfo? { session.info }
     private var agentRunning: Bool? { session.controlsState.agentRunning }
@@ -220,85 +199,56 @@ struct NativeLocalAccountChip: View {
                                                 switchedInPlace: info?.switchedInPlace == true)
                     : (unnamed.detail ?? ""))
         .popover(isPresented: $open, arrowEdge: .bottom) {
-            // Asad, 11 Oct: "this dropdown on the session should only show ready to use accounts only and add
-            // account button only and rest should be handled in settings not here". So: the account this session
-            // runs as (ticked), the other signed-in accounts of the same AI, and Add account. Renaming, signed-out
-            // logins, the machine name, where the account comes from and who uses what are in Settings › Coding AI.
-            // 13 Oct (Asad): every signed-in AI's accounts, grouped by AI: picking another AI's account hands this
-            // session over to it in the same tab, with the same conversation.
+            // 15 Nov (Asad: "api accounts are not coming dropdown for coding ai"): the New session page's own menu
+            // (`NewSessionAccountMenu`) fed by the New session page's own lists (`HootSharedLists`, the call that page
+            // and Hoot read), so every account of every AI shows, API-key accounts included, by its name only, the AI's
+            // mark once in the group title, a check for the one this session runs as, an orange dot only where one
+            // needs him; then Add account. The old list kept only logins whose sign-in read as "signed in", which an
+            // API key never does. Picking one still switches this session (or, from a shell, opens a new session).
             let shownCurrent = names ? currentId : nil
-            let ready = AccountChipRules.readyRows(rows, signIn: signIn, currentId: shownCurrent, sessionAgent: nil)
-                .filter { ["claude", "codex", "gemini"].contains($0.provider ?? "claude") }
-            let order = [sessionAgent ?? "claude"] + ["claude", "codex", "gemini"].filter { $0 != (sessionAgent ?? "claude") }
-            let groups = order.map { ai in (ai, ready.filter { ($0.provider ?? "claude") == ai }) }.filter { !$0.1.isEmpty }
-            let checking = loading || AccountChipRules.stillChecking(rows, signIn: signIn, sessionAgent: nil)
-            VStack(alignment: .leading, spacing: 2) {
+            let groups = SessionAccountMenu.groups(lists.menuGroups, sessionAgent: sessionAgent)
+            let chosenAI = groups.first { $0.accounts.contains { $0.id == shownCurrent } }?.provider ?? sessionAgent ?? "claude"
+            VStack(alignment: .leading, spacing: 0) {
                 if info?.provider == "shell" {
                     Self.shellAccountInstructions
                 }
-                ForEach(groups, id: \.0) { group in
-                    if groups.count > 1 { MenuHead(text: AccountSwitchWords.aiName(group.0)) }
-                    ForEach(group.1) { account in
-                        row(account, currentId: shownCurrent, switching: switching, blocked: blocked, from: names ? identity.label : unnamed.label)
-                    }
-                }
-                if checking {
-                    HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Checking which accounts are ready…") }
-                        .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.vertical, 2)
-                } else if ready.filter({ $0.id != shownCurrent }).isEmpty {
-                    Text(ready.isEmpty ? "No signed-in account is ready here." : "No other signed-in account.")
-                        .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.vertical, 2)
+                if lists.value == nil {
+                    HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Checking your accounts…") }
+                        .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.top, 6)
                 }
                 if let error { Text(error).font(.callout).foregroundStyle(.secondary).padding(8) }
-                Divider()
-                Button {
-                    open = false
-                    NativeAccountSwitcher.addAccount(provider: sessionAgent)
-                } label: {
-                    Label("Add account", systemImage: "plus").padding(.horizontal, 8).padding(.vertical, 4)
-                        .frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
-                }
-                .buttonStyle(.plain)
+                NewSessionAccountMenu(groups: groups, chosenProvider: chosenAI, chosenAccount: shownCurrent,
+                                      pick: { provider, accountId in
+                                          guard let accountId, let account = groups.first(where: { $0.provider == provider })?
+                                              .accounts.first(where: { $0.id == accountId }) else { return }
+                                          choose(account, currentId: shownCurrent, switching: switching, blocked: blocked,
+                                                 from: names ? identity.label : unnamed.label)
+                                      },
+                                      addAccount: { NativeAccountSwitcher.addAccount(provider: sessionAgent) },
+                                      close: { open = false })
+                    .accessibilityIdentifier("session.account.menu")
             }
-            .padding(6)
             .frame(minWidth: 260, maxWidth: 420, alignment: .leading)
-            // Only this session's AI is asked about: the others are never listed here.
-            .task { await probe(rows: snapshot.accounts.filter { ["claude", "codex", "gemini"].contains($0.provider ?? "claude") }, force: false) }
+            // Read fresh each time it opens (a key added a moment ago shows).
+            .task { lists.load() }
         }
     }
 
-    @ViewBuilder
-    private func row(_ account: CodingAIAccount, currentId: String?, switching: Bool, blocked: String?, from: String) -> some View {
-        let state = signIn[account.id]
-        let isCurrent = account.id == currentId
-        let login = NativeChatAccountNames.shared.label(account.id, fallback: account.name, provider: account.provider, signIn: state)
-        // Switching: the session's own account is the tick, not a choice. Otherwise (a shell's own agent) a pick
-        // opens a new session on that account, unless the default coding tool holds one login only.
-        let inert = switching ? isCurrent : blocked != nil
-        Button {
-            open = false
-            if switching, case .local(let id) = session.target {
-                // Chosen for this one session: a later "Switch now" on its project or role leaves it alone.
-                NativeAccountLevelsModel.markChosen(sessionID: id)
-                let title = AppModel.shared.tabs?.tabs.first(where: { $0.id == id })?.title ?? info?.title ?? ""
-                NativeAccountSwitcher.shared.ask(sessionId: id, accountId: account.id, title: title, from: from, to: login)
-            } else {
-                NativeAccountSwitcher.shared.newSession(from: session.sessionId, in: info?.cwd, accountId: account.id, provider: account.provider)
-            }
-        } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                AccountRowLine(current: isCurrent, color: account.color, provider: account.provider,
-                               login: switching ? login : "New session · \(login)",
-                               state: AccountChipRules.stateSummary(state).label)
-                if let email = CodingAIAccountLabels.accountLabel(state) ?? CodingAILogins.normalizedEmail(account.name) {
-                    Text(email).font(.caption).foregroundStyle(.secondary).padding(.leading, 8)
-                }
-            }
+    /// A pick from the menu: this session's own account does nothing; another switches this session to it (the
+    /// app's own switch, as before); from a shell it opens a new session on it, unless the default tool holds one login.
+    private func choose(_ account: NativeLandingModel.Account, currentId: String?, switching: Bool, blocked: String?, from: String) {
+        switch SessionAccountMenu.action(account.id, currentId: currentId, switching: switching, blocked: blocked) {
+        case .none:
+            return
+        case .switchHere:
+            guard case .local(let id) = session.target else { return }
+            // Chosen for this one session: a later "Switch now" on its project or role leaves it alone.
+            NativeAccountLevelsModel.markChosen(sessionID: id)
+            let title = AppModel.shared.tabs?.tabs.first(where: { $0.id == id })?.title ?? info?.title ?? ""
+            NativeAccountSwitcher.shared.ask(sessionId: id, accountId: account.id, title: title, from: from, to: account.name)
+        case .newSession:
+            NativeAccountSwitcher.shared.newSession(from: session.sessionId, in: info?.cwd, accountId: account.id, provider: account.provider)
         }
-        .buttonStyle(.plain)
-        .disabled(inert)
-        .help(!switching && blocked != nil ? AccountChipRules.blockedFoot : !switching ? "Open a new session as \(login). This shell stays open." : isCurrent ? "This session runs as \(login)." : "Use \(login) for this session.")
-        .accessibilityAddTraits(isCurrent ? .isSelected : [])
     }
 
     // MARK: Reading
@@ -314,6 +264,7 @@ struct NativeLocalAccountChip: View {
         await readSessionAccount()
         await readArmed()
         await loadAccounts()
+        if lists.value == nil { lists.load() }
     }
 
     private func loadAccounts() async {
@@ -403,24 +354,19 @@ struct NativeMachineAccountChip: View {
         .buttonStyle(.plain)
         .help(current == nil ? "" : named ? "Account: \(identity.label)." : "\(identity.label).")
         .popover(isPresented: $open, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 2) {
-                MenuHead(text: AccountChipRules.menuHead)
-                ForEach(accounts) { account in
-                    let isCurrent = account.id == current?.id
-                    let foreign = current?.provider != nil && account.provider != nil && account.provider != current?.provider
-                    Button {
-                        open = false
-                        pick(account.id)
-                    } label: {
-                        AccountRowLine(current: isCurrent, color: account.color, provider: account.provider,
-                                       login: CodingAIAccountLabels.profileLoginLabel(account.asAccount, account.signInOrNotReported))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isCurrent || foreign || busy)
-                }
-            }
-            .padding(6)
-            .frame(minWidth: 260, alignment: .leading)
+            // 15 Nov (DESIGN-FIXES H-5): the New session page's menu, names only; no Add account (that machine's
+            // accounts are added on that machine). Another AI's login, or a pick while one is running, does nothing.
+            let groups = SessionAccountMenu.machineGroups(accounts)
+            NewSessionAccountMenu(groups: groups, chosenProvider: current?.provider ?? "claude", chosenAccount: current?.id,
+                                  pick: { _, accountId in
+                                      guard let accountId, let account = accounts.first(where: { $0.id == accountId }) else { return }
+                                      let foreign = current?.provider != nil && account.provider != nil && account.provider != current?.provider
+                                      guard accountId != current?.id, !foreign, !busy else { return }
+                                      pick(accountId)
+                                  },
+                                  addAccount: nil,
+                                  close: { open = false })
+                .frame(minWidth: 260, alignment: .leading)
         }
     }
 
@@ -543,6 +489,38 @@ struct NativeServerAccountChip: View {
             signIn = ServerSignIn.decode(try await EngineBridge.shared.invoke("servers:shell:account", [shellId]))
         } catch {
             signIn = .cannot("This app could not ask that server.")
+        }
+    }
+}
+
+/// The session heading's account menus, as the New session page's menu shows them (15 Nov).
+enum SessionAccountMenu {
+    enum Action: Equatable { case none, switchHere, newSession }
+
+    /// Every account of every AI, as the New session page lists them (API-key accounts included), the session's own AI
+    /// first; AIs with no account are left out (there is nothing to switch to).
+    static func groups(_ all: [NewSessionAccountGroup], sessionAgent: String?) -> [NewSessionAccountGroup] {
+        let first = sessionAgent ?? "claude"
+        let withAccounts = all.filter { !$0.accounts.isEmpty }
+        return withAccounts.filter { $0.provider == first } + withAccounts.filter { $0.provider != first }
+    }
+
+    /// What a pick does: the session's own account nothing; with an AI in the session, a switch in place (any kind of
+    /// account, API key or subscription alike); from a shell a new session, unless the default tool holds one login.
+    static func action(_ accountId: String, currentId: String?, switching: Bool, blocked: String?) -> Action {
+        if switching { return accountId == currentId ? .none : .switchHere }
+        return blocked == nil ? .newSession : .none
+    }
+
+    /// A paired machine's accounts, grouped by AI, each by its name (never its address when it has a name).
+    static func machineGroups(_ accounts: [MachineAccount]) -> [NewSessionAccountGroup] {
+        var order: [String] = []
+        for account in accounts where !order.contains(account.provider ?? "claude") { order.append(account.provider ?? "claude") }
+        return order.map { ai in
+            NewSessionAccountGroup(provider: ai, name: NativePhoneStart.name(ai), accounts: accounts.filter { ($0.provider ?? "claude") == ai }.map { account in
+                NativeLandingModel.Account(id: account.id, name: NativePhoneStart.accountName(account.asAccount, account.signIn), provider: ai,
+                                           state: account.signIn?.state == .signedOut ? .signIn : account.signIn?.state == .signedIn ? .ready : .unknown)
+            })
         }
     }
 }

@@ -132,6 +132,71 @@ public struct BackendMcpClientConfiguration: Sendable {
         return Self.collect(claude: Self.readJSON(claudeJSONPath), settings: Self.readJSON(URL(fileURLWithPath: claudeSettingsDirectory).appendingPathComponent("settings.json").path),
             projectJSON: file.map(Self.readJSON) ?? .null, projectPath: project, claudePath: claudeJSONPath, projectFile: file, environment: environment, asSaved: asSaved)
     }
+    /// Cloud exports only raw logical MCP definitions. Unknown fields remain encrypted;
+    /// variables are not expanded and no other provider-home field is included.
+    public func cloudDefinitions(scope: String, project: String?) throws -> NativeRPCValue {
+        try cloudDefinitionsRead(scope: scope, project: project) ?? .object([])
+    }
+    /// Review fix 4: as `cloudDefinitions`, but nil when the settings file is MISSING (cannot tell what he removed).
+    /// A file that exists and is valid but has no list (or an empty one) is a real empty list; an unreadable or
+    /// invalid file throws.
+    public func cloudDefinitionsRead(scope: String, project: String?) throws -> NativeRPCValue? {
+        let path: String
+        switch scope {
+        case "user", "local": path = claudeJSONPath
+        case "project":
+            guard let project else { throw CloudFailure.invalidRequest }
+            path = URL(fileURLWithPath: project).appendingPathComponent(".mcp.json").path
+        default: throw CloudFailure.invalidRequest
+        }
+        guard let data = try BackendAccountFiles.boundedRead(URL(fileURLWithPath: path), maximum: Self.maximumConfigBytes) else { return nil }
+        let root = try NativeRPCValue.parseJSON(data, maximumBytes: Self.maximumConfigBytes)
+        guard root.fields != nil else { throw CloudFailure.invalidRequest }
+        let definitions: NativeRPCValue
+        if scope == "local" {
+            guard let project else { throw CloudFailure.invalidRequest }
+            definitions = root["projects"][project]["mcpServers"]
+        } else { definitions = root["mcpServers"] }
+        if definitions == .missing { return .object([]) }
+        guard definitions.fields != nil else { throw CloudFailure.invalidRequest }
+        return definitions
+    }
+    /// Add-only import into a person's own project file `<project>/.mcp.json`.
+    /// User and local servers live in Claude Code's `~/.claude.json`, which this
+    /// app never writes: those go through `claude mcp add-json`
+    /// (BackendCloudSecretsClaudeMCP). Unknown fields, variables and every
+    /// unrelated entry are preserved; an existing name is never replaced. The
+    /// file is re-read immediately before the atomic replace; if it changed,
+    /// the merge reruns on the new content (3 attempts), then the item waits.
+    public func cloudMergeProjectDefinition(name: String, definition: CloudValue, project: String,
+                                            requireWriter: @Sendable () throws -> Void,
+                                            beforeReplace: () throws -> Void = {}) throws -> CloudApplyStatus {
+        try requireWriter()
+        guard !name.isEmpty, name.utf8.count <= 512, !name.contains(where: \.isNewline), definition.raw.fields != nil,
+              project.hasPrefix("/") else { throw CloudFailure.invalidRequest }
+        let path = URL(fileURLWithPath: project).appendingPathComponent(".mcp.json")
+        let lease = try BackendCloudSecretsFolderLock(folder: path.deletingLastPathComponent())
+        defer { withExtendedLifetime(lease) {} }
+        // Under our folder lock: remove copies a crashed earlier attempt left.
+        BackendCloudSecretsProjectFile.sweep(path)
+        for _ in 0..<3 {
+            let before = try BackendAccountFiles.boundedRead(path, maximum: Self.maximumConfigBytes)
+            let root = try before.map { try NativeRPCValue.parseJSON($0, maximumBytes: Self.maximumConfigBytes) } ?? .object([])
+            guard root.fields != nil else { throw CloudFailure.invalidRequest }
+            var definitions = root["mcpServers"]
+            if definitions == .missing { definitions = .object([]) }
+            guard definitions.fields != nil else { throw CloudFailure.invalidRequest }
+            if definitions[name] != .missing {
+                return try CloudSecretsCanonical.encode(CloudValue(definitions[name])) == CloudSecretsCanonical.encode(definition) ? .alreadyPresent : .keptBoth
+            }
+            let replacement = try root.setting("mcpServers", definitions.setting(name, definition.raw)).encodedJSON(pretty: true)
+            guard replacement.count <= Self.maximumConfigBytes else { throw CloudFailure.invalidRequest }
+            guard try BackendCloudSecretsProjectFile.replace(path, expected: before, with: replacement, beforeReplace: beforeReplace) else { continue }
+            guard try CloudSecretsCanonical.encode(CloudValue(cloudDefinitions(scope: "project", project: project)[name])) == CloudSecretsCanonical.encode(definition) else { continue }
+            return .applied
+        }
+        throw BackendCloudSecretsWaiting(reason: "This project's .mcp.json kept changing while the MCP server was being added. It will be tried again.")
+    }
     public func find(id: NativeRPCValue, project: String?) throws -> NativeRPCValue {
         guard let name = id.string, !name.isEmpty else { throw BackendMcpClientValue.error("mcp: a server id is required") }
         guard let server = load(project: project).first(where: { $0["id"].string == name }) else { throw BackendMcpClientValue.error("mcp: no configured server with id \(name)") }

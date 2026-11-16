@@ -10,7 +10,10 @@ struct AGTDirectoryTests {
         object([("id", .string(id)), ("name", .string(id.capitalized)), ("provider", .string("claude"))] + pairs)
     }
     private func memory() async throws -> BackendTaskConfiguration {
-        let config = try BackendTaskConfiguration(persistence: .init(directory: URL(fileURLWithPath: "/AGT-memory"), ownership: .memory))
+        // The records delete rule (87941cff8) keeps a removed agent's Bin copy on disk beside the records
+        // (`records-delete`), even for an in-memory store, so the folder must be writable: a scratch folder, not "/".
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("AGT-memory-" + UUID().uuidString)
+        let config = try BackendTaskConfiguration(persistence: .init(directory: folder, ownership: .memory))
         try await config.start()
         return config
     }

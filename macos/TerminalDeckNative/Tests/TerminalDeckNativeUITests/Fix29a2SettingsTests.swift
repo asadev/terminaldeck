@@ -104,10 +104,16 @@ final class Fix29a2SettingsTests: XCTestCase {
         let output = package.deletingLastPathComponent().appendingPathComponent("night/codex/fix-29a2-evidence")
         let power = try XCTUnwrap(LidAwakeState.decode(["supported": true, "known": true, "on": true, "idleBlocked": true,
             "battery": ["present": false]]))
-        // The complete explanation needs multiple lines at the actual settings column width.
+        // Owner, 15 Nov (DESIGN.md TEXT RULE item 28, 22ab40a6d): no sentence under the title; the row is one 44 pt
+        // row and the COMPLETE explanation (and the lid caution) lives in its info button, never cut.
         let row = NSHostingView(rootView: NativeMacAwakeSetting(fixtureState: power).frame(width: 560))
         row.layoutSubtreeIfNeeded()
-        XCTAssertGreaterThan(row.fittingSize.height, 70)
+        XCTAssertGreaterThanOrEqual(row.fittingSize.height, 44)
+        XCTAssertLessThan(row.fittingSize.height, 70, "one row: the explanation is not drawn under the title")
+        let settings = try String(contentsOf: package.appendingPathComponent("Sources/TerminalDeckNative/NativePowerSettings.swift"), encoding: .utf8)
+        XCTAssertTrue(settings.contains("[PowerWords.detail, PowerWords.caution(hasLid: state?.hasLid ?? true), state?.warning]"))
+        XCTAssertTrue(settings.contains("DeckSettingsRow(PowerWords.title, info: info"))
+        XCTAssertTrue(PowerWords.detail.hasSuffix("before sign-in or opening the app."), "the whole explanation, not a shortened one")
         for dark in [false, true] {
             let general = NativeSettingsShell(selection: .constant("general")) { _ in NativeGeneralSettings(fixtureState: power) }
             try render(general, name: "general-wrapped", dark: dark, output: output)
