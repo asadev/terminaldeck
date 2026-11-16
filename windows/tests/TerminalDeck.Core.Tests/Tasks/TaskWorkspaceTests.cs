@@ -28,7 +28,7 @@ public sealed class TaskWorkspaceTests
     {
       // Git writes its object files read-only; Windows refuses to delete those until the flag is cleared.
       foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)) File.SetAttributes(file, FileAttributes.Normal);
-      Directory.Delete(root, recursive: true);
+      TerminalDeck.Tests.TestFolder.Delete(root);
     }
   }
 }

@@ -106,7 +106,7 @@ public sealed class ReviewFixWindowsTests
       if (child is not null) { if (!child.HasExited) child.Kill(); child.Dispose(); }
       try { using var worker = OwnedWorker(root, row); if (!worker.HasExited) { worker.Kill(); await worker.WaitForExitAsync(); } } catch (ArgumentException) { }
       await new WindowsCredentialStore(root).DeleteAsync($"{Brand.Name}/{root.NamespaceId}/keeper/auth-v2");
-      Directory.Delete(root.DirectoryPath, true);
+      TerminalDeck.Tests.TestFolder.Delete(root.DirectoryPath);
     }
   }
 
@@ -136,7 +136,7 @@ public sealed class ReviewFixWindowsTests
       // Wait for the supervisor's service handles as well as its exit signal
       // before deleting the owned fixture. Never ignore a retained service lock.
       await WaitForKeeperLocksAsync(root);
-      supervisor?.Dispose(); await new WindowsCredentialStore(root).DeleteAsync($"{Brand.Name}/{root.NamespaceId}/keeper/auth-v2"); Directory.Delete(root.DirectoryPath, true);
+      supervisor?.Dispose(); await new WindowsCredentialStore(root).DeleteAsync($"{Brand.Name}/{root.NamespaceId}/keeper/auth-v2"); TerminalDeck.Tests.TestFolder.Delete(root.DirectoryPath);
     }
   }
 
@@ -199,7 +199,7 @@ public sealed class ReviewFixWindowsTests
     {
       if (chat is not null && !core.Get(chat.Definition.Id).Ended) try { await processes.QuitAsync(chat.CreationKey, CancellationToken.None); } catch (IOException) { }
       serving.Cancel(); await server; await core.DisposeAsync();
-      await new WindowsCredentialStore(root).DeleteAsync($"{Brand.Name}/{root.NamespaceId}/keeper/auth-v2"); Directory.Delete(root.DirectoryPath, true);
+      await new WindowsCredentialStore(root).DeleteAsync($"{Brand.Name}/{root.NamespaceId}/keeper/auth-v2"); TerminalDeck.Tests.TestFolder.Delete(root.DirectoryPath);
     }
   }
   private sealed class SyntheticAccount : IAccountProvider

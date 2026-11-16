@@ -108,6 +108,6 @@ public sealed class GeminiRefreshTests
       File.WriteAllText(Path.Combine(Home, ".gemini", "oauth_creds.json"), JsonSerializer.Serialize(new { access_token = "synthetic-expired", refresh_token = "synthetic-refresh", expiry_date = 1 }));
       File.WriteAllText(Path.Combine(Home, ".gemini", "google_accounts.json"), "{\"active\":\"fixture@example.invalid\"}");
     }
-    public void Dispose() => Directory.Delete(Root.DirectoryPath, true);
+    public void Dispose() => TerminalDeck.Tests.TestFolder.Delete(Root.DirectoryPath);
   }
 }

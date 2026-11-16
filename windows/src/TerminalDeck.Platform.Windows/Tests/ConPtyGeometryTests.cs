@@ -33,6 +33,6 @@ public sealed class ConPtyGeometryTests
       await terminal.FinishAsync(stop.Token); await drain.WaitAsync(stop.Token);
       Assert.True(terminal.RootExited); Assert.Equal(0, terminal.ActiveProcessCount);
     }
-    finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
+    finally { TerminalDeck.Tests.TestFolder.Delete(directory); }
   }
 }
