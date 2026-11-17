@@ -286,21 +286,23 @@ public sealed partial class AppRuntime : IAsyncDisposable
       var mode = a.TryGetProperty("mode", out var selectedMode) ? selectedMode.GetString()! : provider == "shell" ? "terminal" : "chat";
       if (provider == "shell" && mode == "chat") throw new McpRefusal("PowerShell uses the terminal view. Choose terminal mode.");
       if (provider != "shell" && account is null) throw new McpRefusal("Choose an account first.");
+      var permission = SessionStartPermission.Parse(a, provider);
       var special = a.TryGetProperty("brief", out _) || a.TryGetProperty("resume", out _) || a.TryGetProperty("conversation", out _) || a.TryGetProperty("job", out _) || a.TryGetProperty("differ", out _);
       if (provider != "shell" && !special)
       {
-        var run = await projectTools.StartAsync(new(null, a.TryGetProperty("projectId", out var project) ? project.GetString() : null, folder, provider, account!.Id, mode, Title: a.TryGetProperty("title", out var title) ? title.GetString() : null), c, ct);
+        var run = await projectTools.StartAsync(new(null, a.TryGetProperty("projectId", out var project) ? project.GetString() : null, folder, provider, account!.Id, mode, Title: a.TryGetProperty("title", out var title) ? title.GetString() : null, Permission: permission), c, ct);
         await RefreshSessionsAsync(); return run;
       }
       if (mode != "chat" && account is not null) account = await Accounts.RequireSignedInAsync(account.Id, ct);
       var definition = await SessionLaunch.PrepareAsync(a, account, ct);
+      if (permission is not null) definition = definition with { Permission = SessionStartPermission.TerminalValue(permission) };
       if (definition.Cwd != folder || definition.Provider != provider || account is not null && (definition.AccountId != account.Id || definition.AccountHome != account.HomeId)) throw new McpRefusal("The launch does not match this folder and account.");
       var projectId = Projects.Resolve(a.TryGetProperty("projectId", out var binding) ? binding.GetString() : null, folder); c.Require("projects", projectId);
       if (provider == "shell" && definition.ServerId is null) definition = definition with { Shell = General.Read().TerminalShell };
       await c.EnsureCurrentAsync(ct);
       if (mode == "chat")
       {
-        var chat = await Chats.CreateAsync(new(definition.Id, provider, folder, definition.Title, account!.Id, account.HomeId, new(), PermissionMode: General.NewChatPermission(provider)), definition.ConversationId, ct);
+        var chat = await Chats.CreateAsync(new(definition.Id, provider, folder, definition.Title, account!.Id, account.HomeId, new(), PermissionMode: permission ?? General.NewChatPermission(provider)), definition.ConversationId, ct);
         Projects.BindSession(chat.Definition.Id, projectId); ConnectChatTools(chat.Definition.Id);
         if (definition.InitialPrompt is { Length: > 0 } prompt) await Chats.SendAsync(chat.Definition.Id, definition.Id, prompt, cancellationToken: ct);
         Projects.BindSession(chat.Definition.Id, projectId); c.NoteSessionStarted(chat.Definition.Id); await RefreshSessionsAsync(); return ChatMcpTools.View(chat);
