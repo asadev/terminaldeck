@@ -113,6 +113,6 @@ jobs:
       - name: Windows update, installed-data and session-control regressions
         shell: pwsh
         run: |
-          dotnet test windows/tests/TerminalDeck.Core.Tests/TerminalDeck.Core.Tests.csproj -c Release -nologo -v minimal --filter 'FullyQualifiedName~UpdatePackagePathTests|FullyQualifiedName~RichChatDocumentTests|FullyQualifiedName~InstalledPackageRootTests|FullyQualifiedName~StableChannelTests|FullyQualifiedName~NewSessionPermissionTests|FullyQualifiedName~SessionStartPermissionMcpTests|FullyQualifiedName~TerminalControlsTests'
+          dotnet test windows/tests/TerminalDeck.Core.Tests/TerminalDeck.Core.Tests.csproj -c Release -nologo -v minimal --filter 'FullyQualifiedName~UpdatePackagePathTests|FullyQualifiedName~RichChatDocumentTests|FullyQualifiedName~InstalledPackageRootTests|FullyQualifiedName~LegacyPackageAccountHomesTests|FullyQualifiedName~StableChannelTests|FullyQualifiedName~NewSessionPermissionTests|FullyQualifiedName~SessionStartPermissionMcpTests|FullyQualifiedName~TerminalControlsTests'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet test windows/src/TerminalDeck.App/Views/Windows/Tests/TerminalDeck.Shell.Tests.csproj -c Release -nologo -v minimal
