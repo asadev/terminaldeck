@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using TerminalDeck.App.Views.Chat;
 using TerminalDeck.Core.Accounts;
@@ -25,6 +26,26 @@ public sealed class IdleSendTests
     Assert.Null(model.Error); Assert.Null(model.Snapshot.Problem); Assert.Empty(model.Pending); Assert.Empty(model.Draft);
     Assert.Single(fixture.Worker.Writes); Assert.Equal("next request", fixture.Worker.Writes.Single().Text);
     Assert.True(model.Snapshot.Busy);
+  }
+  [Fact] public async Task ADelayedIdleWatchCallbackCannotReplaceTheNewlySentBusySnapshot()
+  {
+    await using var fixture = new Fixture(false, false);
+    var callbacks = new ConcurrentQueue<Action>();
+    var enqueued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    await using var model = new ChatViewModel(fixture.Chats, fixture.Record.Definition.Id, action =>
+    {
+      callbacks.Enqueue(action);
+      enqueued.TrySetResult();
+    });
+    // Hold the initial idle watch callback until after SendAsync applies its result.
+    await enqueued.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    Assert.True(callbacks.TryDequeue(out var initialWatch));
+    model.Draft = "next request"; await model.SendAsync();
+    var sent = fixture.Chats.Get(model.Id);
+    Assert.True(sent.Busy); Assert.Same(sent, model.Snapshot);
+    initialWatch!();
+    Assert.Same(sent, model.Snapshot); Assert.True(model.Snapshot.Busy);
+    Assert.Single(fixture.Worker.Writes); Assert.Empty(model.Draft); Assert.Empty(model.Pending);
   }
   [Fact] public async Task RealActiveTurnHoldsUntilCompletionAndThenDrainsOnce()
   {

@@ -1,11 +1,57 @@
 using System.Text.Json;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using TerminalDeck.App.Shell;
 
 namespace TerminalDeck.App.Views.Chat;
 
 public sealed partial class ChatPage
 {
+  private bool CanBranchMessages() => ChatBranchActions.Invoke is not null && !Model.Snapshot.Busy && !Model.Snapshot.Stopping
+    && !Model.Snapshot.Messages.Any(m => m.State is TerminalDeck.Core.Chats.ChatMessageState.Queued or TerminalDeck.Core.Chats.ChatMessageState.Dispatching || TerminalDeck.Core.Chats.ChatSessions.Unconfirmed(Model.Snapshot, m));
+
+  private FrameworkElement MessageActions(TerminalDeck.Core.Chats.ChatRow row)
+  {
+    var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2,
+      HorizontalAlignment = row.Kind == "user" ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+      Margin = new Thickness(row.Kind == "assistant" ? 36 : 0, 0, 0, 0) };
+    var recorded = Model.Snapshot.Events.FirstOrDefault(e => e.Id == row.Id && e.Kind is "user" or "message" or "textDelta");
+    if (recorded is { At: var at } && at != default)
+    {
+      var time = Words(at.ToLocalTime().ToString("t"), 10);
+      time.VerticalAlignment = VerticalAlignment.Center; time.Margin = new Thickness(0, 0, 6, 0);
+      time.SetResourceReference(TextBlock.ForegroundProperty, "DeckSecondaryInkBrush");
+      ToolTipService.SetToolTip(time, at.ToLocalTime().ToString("F"));
+      AutomationProperties.SetName(time, at.ToLocalTime().ToString("F"));
+      actions.Children.Add(time);
+    }
+    else if (row.Kind == "user")
+    {
+      // Older or failed-before-dispatch records may have no event time. Do not invent one.
+      var unknownTime = Words("—", 10); unknownTime.VerticalAlignment = VerticalAlignment.Center;
+      AutomationProperties.SetName(unknownTime, "Message time unavailable");
+      ToolTipService.SetToolTip(unknownTime, "Message time unavailable");
+      unknownTime.SetResourceReference(TextBlock.ForegroundProperty, "DeckSecondaryInkBrush");
+      unknownTime.Margin = new Thickness(0, 0, 6, 0); actions.Children.Add(unknownTime);
+    }
+    actions.Children.Add(ChatAppearance.MessageAction("\uE8C8", "Copy message", () =>
+    {
+      CopyText(Model.Rows.FirstOrDefault(r => r.Id == row.Id && r.Kind == row.Kind)?.Text ?? row.Text);
+      return Task.CompletedTask;
+    }));
+    var rewind = ChatAppearance.MessageAction("\uE7A7", "Rewind to this message", () => BranchMessageAsync(row, true));
+    var fork = ChatAppearance.MessageAction("branch", "Fork from this message", () => BranchMessageAsync(row, false));
+    rewind.IsEnabled = fork.IsEnabled = recorded is not null && CanBranchMessages();
+    if (!rewind.IsEnabled)
+    {
+      var reason = recorded is null ? "Rewind and Fork need a message recorded in the conversation history." : "Finish this answer and queued messages before rewinding or forking.";
+      ToolTipService.SetToolTip(rewind, reason); ToolTipService.SetToolTip(fork, reason);
+    }
+    actions.Children.Add(rewind); actions.Children.Add(fork);
+    return actions;
+  }
+
   private async Task BranchMessageAsync(TerminalDeck.Core.Chats.ChatRow row, bool rewind)
   {
     if (Model.Snapshot.Busy || Model.Snapshot.Stopping) return;

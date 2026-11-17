@@ -1,5 +1,7 @@
 using TerminalDeck.Core.Projects;
 using TerminalDeck.Core.Storage;
+using TerminalDeck.Core.Chats;
+using TerminalDeck.Core.Mcp;
 
 namespace TerminalDeck.Core.Sessions;
 
@@ -32,7 +34,11 @@ public static class OpensOn
 
 // What the page starts. Mode is "chat" or "terminal". A null model or effort means the app-wide
 // "New sessions start with" choice (Settings > Coding AIs), so nothing stale is pinned.
-public sealed record NewSessionStart(string ProjectId, string? AgentId, string Provider, string? AccountId, string? Model, string? Effort, string Mode);
+public sealed record NewSessionStart(string ProjectId, string? AgentId, string Provider, string? AccountId, string? Model, string? Effort, string Mode)
+{
+  // An explicit choice for this start; null follows the agent, project or app default.
+  public AiPermissionMode? Permission { get; init; }
+}
 
 public sealed record NewSessionAgent(string Id, string Name, string ProjectId, string Provider, bool Lead = false);
 
@@ -70,7 +76,8 @@ public static class NewSessionPresets
     var sameAi = last is not null && last.Provider == provider;
     var account = Account(world, provider, sameAi ? last!.AccountId : null);
     var mode = !CanChat(provider) ? "terminal" : sameAi && last!.Mode == "terminal" ? "terminal" : "chat";
-    return new(project, agent?.Id, provider, account, sameAi ? last!.Model : null, sameAi ? last!.Effort : null, mode);
+    return new(project, agent?.Id, provider, account, sameAi ? last!.Model : null, sameAi ? last!.Effort : null, mode)
+    { Permission = sameAi && last!.Permission is { } permission && ChatPermissionModes.Supported(provider).Contains(permission) ? permission : null };
   }
 
   // Picking a project keeps the AI; an agent of another project is let go.
@@ -78,16 +85,16 @@ public static class NewSessionPresets
   {
     var project = Exists(world, projectId) ? projectId : ProjectIdentity.IndependentId;
     var agent = current.AgentId is { } id ? AgentsFor(project, world).FirstOrDefault(a => a.Id == id) : null;
-    return current with { ProjectId = project, AgentId = agent?.Id };
+    return current with { ProjectId = project, AgentId = agent?.Id, Permission = agent?.Id == current.AgentId ? current.Permission : null };
   }
 
   // An agent brings its own AI; "No agent" keeps the AI that was showing.
   public static NewSessionStart WithAgent(NewSessionStart current, string? agentId, NewSessionWorld world)
   {
     var agent = agentId is null ? null : AgentsFor(current.ProjectId, world).FirstOrDefault(a => a.Id == agentId);
-    if (agent is null) return current with { AgentId = null };
+    if (agent is null) return current with { AgentId = null, Permission = current.AgentId is null ? current.Permission : null };
     var next = agent.Provider == current.Provider ? current : WithProvider(current, agent.Provider, world);
-    return next with { AgentId = agent.Id };
+    return next with { AgentId = agent.Id, Permission = agent.Id == current.AgentId ? next.Permission : null };
   }
 
   // Picking another AI (or one of its accounts) picks that AI: its account, default model and
@@ -103,12 +110,19 @@ public static class NewSessionPresets
       AccountId = Account(world, provider, accountId ?? (same ? current.AccountId : null)),
       Model = same ? current.Model : null,
       Effort = same ? current.Effort : null,
+      Permission = same && current.Permission is { } permission && ChatPermissionModes.Supported(provider).Contains(permission) ? permission : null,
       Mode = CanChat(provider) ? current.Mode : "terminal"
     };
   }
 
   public static NewSessionStart WithMode(NewSessionStart current, string mode) =>
     current with { Mode = mode == "terminal" || !CanChat(current.Provider) ? "terminal" : "chat" };
+
+  public static NewSessionStart WithPermission(NewSessionStart current, AiPermissionMode mode)
+  {
+    ChatPermissionModes.Validate(current.Provider, mode);
+    return current with { Permission = mode };
+  }
 
   private static bool Exists(NewSessionWorld world, string projectId) => projectId == ProjectIdentity.IndependentId || world.ProjectIds.Contains(projectId);
   private static string? Account(NewSessionWorld world, string provider, string? wanted)

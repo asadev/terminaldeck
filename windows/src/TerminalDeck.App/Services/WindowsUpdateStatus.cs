@@ -61,13 +61,21 @@ internal static class WindowsUpdateStatus
     var kept = Path.Combine(updatesFolder, "TerminalDeck-" + release.Version + "-x64.msix");
     if (File.Exists(kept))
     {
-      try { GitHubReleaseChannel.VerifyFile(kept, release); GitHubReleaseChannel.VerifyPackage(kept, release); return kept; }
+      try { return VerifiedPhysicalFile(kept, release); }
       catch (GitHubReleaseChannel.RefusedException) { File.Delete(kept); }
     }
     using var client = GitHubReleaseChannel.NewClient();
     var progress = new Progress<double>(percent => { DownloadPercent = Math.Min(100, Math.Floor(percent)); Changed?.Invoke(); });
-    try { return await GitHubReleaseChannel.DownloadAsync(client, release, updatesFolder, progress, CancellationToken.None); }
+    try { return VerifiedPhysicalFile(await GitHubReleaseChannel.DownloadAsync(client, release, updatesFolder, progress, CancellationToken.None), release); }
     finally { DownloadPercent = null; Changed?.Invoke(); }
+  }
+
+  private static string VerifiedPhysicalFile(string downloaded, GitHubReleaseChannel.WindowsRelease release)
+  {
+    var physical = UpdatePackagePath.PhysicalFile(downloaded);
+    GitHubReleaseChannel.VerifyFile(physical, release);
+    GitHubReleaseChannel.VerifyPackage(physical, release);
+    return physical;
   }
 
   internal static async Task<string> RestartToUpdateAsync(string updatesFolder, Func<Task> handOver, Func<Task> settleSignIns, Func<Task> resume)

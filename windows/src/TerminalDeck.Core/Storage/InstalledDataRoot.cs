@@ -6,6 +6,25 @@ namespace TerminalDeck.Core.Storage;
 // or copied: keeper, sessions and credentials retain their existing namespace.
 public sealed record InstalledDataRoot(string MachineName, string DirectoryPath)
 {
+  public const string PackageFamilyName = "TerminalDeck_6wvt5fg33ztg8";
+  public static string PackageLocalCache(string userProfile) => Path.GetFullPath(Path.Combine(userProfile, "AppData", "Local", "Packages", PackageFamilyName, "LocalCache"));
+  public static string NamespacePath(string path, string userProfile)
+  {
+    var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+    foreach (var name in new[] { "TerminalDeck", "TerminalDeckStable" })
+      if (string.Equals(full, Path.Combine(PackageLocalCache(userProfile), "Local", name), StringComparison.OrdinalIgnoreCase))
+        return Path.GetFullPath(Path.Combine(userProfile, "AppData", "Local", name));
+    return full;
+  }
+  public static bool IsInstalledPath(string path, string userProfile)
+  {
+    var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+    foreach (var name in new[] { "TerminalDeck", "TerminalDeckStable" })
+      foreach (var root in new[] { Path.GetFullPath(Path.Combine(userProfile, "AppData", "Local", name)), Path.Combine(PackageLocalCache(userProfile), "Local", name) })
+        if (string.Equals(full, root, StringComparison.OrdinalIgnoreCase) || full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return true;
+    return false;
+  }
+
   public static AppDataRoot Resolve(string localAppData, string machineName)
   {
     var standard = Path.Combine(localAppData, "TerminalDeck");

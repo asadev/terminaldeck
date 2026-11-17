@@ -309,6 +309,7 @@ public sealed class ProjectsAgentsMcp(IProjects projects, IAgents agents, IProje
     var choice = p.Preferences.WhoUsesWhat.FirstOrDefault(c => c.Use == (request.Mode == "chat" ? "chats" : "sessions"));
     var helperTemplate = request.Helper && agent is not null ? agents.Templates().Single(t => t.Category == agents.SeatOf(agent.Id).Category) : null;
     var provider = helperTemplate?.HelperAI ?? agent?.Provider ?? request.Provider ?? choice?.Provider ?? throw new McpRefusal("Choose an AI.");
+    if (request.Permission is { } permission) TerminalDeck.Core.Sessions.SessionStartPermission.Validate(provider, permission);
     if (accounts is null) throw new McpRefusal("The account service is not connected.");
     var accountId = request.AccountId ?? (agent?.Provider == provider ? agent.AccountId : null) ?? (choice?.Provider == provider ? choice.AccountId : null) ?? accounts.Preferred(provider, folder, CallerAccount(context))?.Id;
     if (accountId is null) throw new McpRefusal("Choose an account for this AI."); context.Require("accounts", accounts.Get(accountId).Id);
@@ -330,7 +331,8 @@ public sealed class ProjectsAgentsMcp(IProjects projects, IAgents agents, IProje
     _ = Required(differ, "reason");
     if (differ.EnumerateObject().Any(p => p.Name is not ("agentId" or "reason"))) throw new McpRefusal("Use the saved agent's model, effort and instructions here. Change its profile to change those choices.");
     if (args.TryGetProperty("resume", out _) || args.TryGetProperty("conversation", out _) || args.TryGetProperty("brief", out _)) throw new McpRefusal("Start an agent's new session without resume or a separate brief.");
-    return await StartAsync(new(id, S(args, "projectId"), Required(args, "cwd"), AccountId: S(args, "account"), Mode: S(args, "mode") ?? "chat", Job: S(args, "title") ?? S(args, "job") ?? ""), context, ct);
+    var permission = TerminalDeck.Core.Sessions.SessionStartPermission.Parse(args, agents.Get(id).Provider);
+    return await StartAsync(new(id, S(args, "projectId"), Required(args, "cwd"), AccountId: S(args, "account"), Mode: S(args, "mode") ?? "chat", Job: S(args, "title") ?? S(args, "job") ?? "", Permission: permission), context, ct);
   };
   private async ValueTask<JsonElement> SaveAgentAsync(SavedAgent original, JsonElement patch, McpCallContext c, CancellationToken ct, bool create = false)
   {

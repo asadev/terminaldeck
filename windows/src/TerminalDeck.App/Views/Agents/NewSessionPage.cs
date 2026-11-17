@@ -61,7 +61,7 @@ internal sealed class NewSessionPage : Grid
   private readonly Border modeSwitch = new() { CornerRadius = new CornerRadius(8), Padding = new Thickness(2), BorderThickness = new Thickness(1), VerticalAlignment = VerticalAlignment.Center };
   private readonly ToggleButton chatMode = new() { Content = "Chat" };
   private readonly ToggleButton terminalMode = new() { Content = "Terminal" };
-  private readonly Notices.CompactNotice problem = new() { Severity = InfoBarSeverity.Error, IsClosable = true };
+  private readonly Notices.CompactNotice problem = new() { Severity = InfoBarSeverity.Error, IsClosable = true, OverlayRow = 1 };
   private readonly List<NewSessionFile> files = [];
   private IReadOnlyList<NewSessionFile> sending = [];
   private NewSessionStart choices;
@@ -131,8 +131,8 @@ internal sealed class NewSessionPage : Grid
     box.Stop.Visibility = Visibility.Collapsed;
     box.Model.Click += async (_, _) => await ShowModelsAsync();
     box.Effort.Click += (_, _) => ShowEffort();
-    // "Before it changes files" is shown, not chosen, on this page: what shows is what starts.
-    box.Permission.IsHitTestVisible = false; box.Permission.IsTabStop = false;
+    box.Permission.Click += (_, _) => ShowPermissions();
+    AutomationProperties.SetAutomationId(box.Permission, "newSession.permission");
     box.Send.Click += async (_, _) => await SendAsync();
     frame.Children.Add(box.Assemble((Style)frame.Resources["ComposerGlass"], null));
     // Under the box: the same small quiet chips as the project and the account (15 Nov), not bare words.
@@ -210,6 +210,7 @@ internal sealed class NewSessionPage : Grid
     {
       box.Permission.Content = Chip(ChatPermissionModes.Label(mode));
       AutomationProperties.SetName(box.Permission, "Before it changes files: " + ChatPermissionModes.Label(mode) + ", " + ChatPermissionModes.Explain(mode));
+      ToolTipService.SetToolTip(box.Permission, "Before it changes files: " + ChatPermissionModes.Explain(mode));
     }
     var (model, effort, owned) = services.ModelAndEffort(choices);
     box.Model.Visibility = NewSessionPresets.CanChat(provider) ? Visibility.Visible : Visibility.Collapsed;
@@ -380,6 +381,20 @@ internal sealed class NewSessionPage : Grid
       if (request == modelRead && choices.Provider == provider) Fill(live);
     }
     catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException or OperationCanceledException) { }
+  }
+
+  private void ShowPermissions()
+  {
+    var menu = new MenuFlyout();
+    var current = services.StartPermission(choices);
+    foreach (var mode in ChatPermissionModes.Supported(choices.Provider))
+    {
+      var item = new ToggleMenuFlyoutItem { Text = ChatPermissionModes.Label(mode), IsChecked = mode == current };
+      AutomationProperties.SetName(item, ChatPermissionModes.Label(mode) + ": " + ChatPermissionModes.Explain(mode));
+      item.Click += (_, _) => { choices = NewSessionPresets.WithPermission(choices, mode); Show(); };
+      menu.Items.Add(item);
+    }
+    if (menu.Items.Count > 0) menu.ShowAt(box.Permission);
   }
 
   private void ShowEffort()

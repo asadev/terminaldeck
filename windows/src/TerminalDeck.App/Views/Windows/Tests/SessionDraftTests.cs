@@ -8,7 +8,10 @@ public sealed class SessionDraftTests
   [InlineData("shell", false, null, null, "")]
   [InlineData("SHELL", true, "old@example.test", "Old account", "")]
   [InlineData("codex", false, "old@example.test", "Work", "Not signed in")]
-  [InlineData("codex", true, "work@example.test", "Work", "work@example.test")]
+  [InlineData("codex", true, "work@example.test", "Work", "Work")]
+  [InlineData("claude", true, "personal@example.test", "Imza Premium", "Imza Premium")]
+  [InlineData("claude", true, "fallback@example.test", "", "fallback@example.test")]
+  [InlineData("claude", true, "fallback@example.test", "   ", "fallback@example.test")]
   [InlineData("claude", true, null, "Work", "Work")]
   public void AccountChipUsesSignInIdentityAndNeverLeaksOntoShells(string provider, bool signedIn, string? email, string? name, string expected) =>
     Assert.Equal(expected, WorkspaceText.AccountIdentity(provider, signedIn, email, name));

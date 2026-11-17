@@ -99,10 +99,15 @@ public sealed partial class ShellWindow
   }
 
   // "Before it changes files": the mode this start really uses (the agent's or project's own, else
-  // Settings > General's mode for new chats). Shown, not chosen, on the page; sent by name.
+  // Settings > General's mode for new chats). His explicit pick on this page wins for this start.
   private AiPermissionMode? PagePermission(NewSessionStart start)
   {
     if (!NewSessionPresets.CanChat(start.Provider)) return null;
+    if (start.Permission is { } chosen)
+    {
+      ChatPermissionModes.Validate(start.Provider, chosen);
+      return chosen;
+    }
     var agent = start.AgentId is { } id ? Runtime.Agents.List().FirstOrDefault(a => a.Id == id) : null;
     var project = Runtime.Projects.List().FirstOrDefault(p => p.Id == start.ProjectId);
     var projectDefault = project is not null && project.Preferences.Text("defaultPermission") is "ask" or "plan" or "auto" ? project.Preferences.Text("defaultPermission") : null;

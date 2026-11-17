@@ -3,17 +3,24 @@ using System.Text;
 
 namespace TerminalDeck.Core.Storage;
 
-// Resolving a root performs no IO. Developer launches must name a scratch root.
+// Constructing a root performs no IO. Developer launches must name a scratch root.
 public sealed class AppDataRoot
 {
   public string DirectoryPath { get; }
   public string NamespaceId { get; }
 
-  private AppDataRoot(string path)
+  private AppDataRoot(string path, string? userProfile = null)
   {
     DirectoryPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-    var identity = OperatingSystem.IsWindows() ? DirectoryPath.ToUpperInvariant() : DirectoryPath;
+    var namespacePath = InstalledDataRoot.NamespacePath(DirectoryPath, userProfile ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+    var identity = OperatingSystem.IsWindows() ? namespacePath.ToUpperInvariant() : namespacePath;
     NamespaceId = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..24];
+  }
+
+  internal static AppDataRoot Installed(string path, string userProfile)
+  {
+    _ = Explicit(path);
+    return new AppDataRoot(path, userProfile);
   }
 
   public static AppDataRoot Explicit(string path)
@@ -23,7 +30,7 @@ public sealed class AppDataRoot
     return new AppDataRoot(path);
   }
 
-  public static AppDataRoot FromArguments(string[] args, bool development = false)
+  public static AppDataRoot FromArguments(string[] args, bool development = false, string? packageLocalCache = null)
   {
     string? value = null;
     for (var i = 0; i < args.Length; i++)
@@ -41,7 +48,7 @@ public sealed class AppDataRoot
       else throw new ArgumentException("This scaffold only accepts --user-data-dir.");
     }
     if (StableChannel.IsStable(AppContext.BaseDirectory))
-      return StableChannel.Resolve(value, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+      return StableChannel.Resolve(value, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), packageLocalCache);
     if (value is not null) return Explicit(value);
     if (development) throw new ArgumentException("This development run needs --user-data-dir with a separate scratch folder.");
     return InstalledDataRoot.Resolve(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Environment.MachineName);

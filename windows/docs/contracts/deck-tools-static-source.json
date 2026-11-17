@@ -1640,6 +1640,11 @@
             "type": "string",
             "description": "Login to run as, by name or id; omit for the default. It also decides the agent when provider is left out."
           },
+          "permission": {
+            "type": "string",
+            "enum": ["Ask", "Plan", "Auto", "AcceptEdits", "Bypass"],
+            "description": "Permission for this new session, overriding its saved defaults. Use a supported permissionModes id from sessions.new_choices; shells have no permission modes. Omit to keep defaults."
+          },
           "resume": {
             "type": "boolean",
             "description": "Continue the folder's most recent conversation."
@@ -1662,7 +1667,7 @@
           },
           "differ": {
             "type": "object",
-            "description": "Only to differ from the playbook: {model, effort, permission (ask|plan|auto), instructions, reason}. reason is required. Bypass only comes from the playbook."
+            "description": "Only to differ from the playbook: {model, effort, permission (ask|plan|auto), instructions, reason}. reason is required. The separate top-level permission applies only to this session."
           },
           "mode": {
             "type": "string",
