@@ -89,6 +89,16 @@ struct LinkPipelineTests {
         let feed: AsyncStream<(Data, PeerLane)>.Continuation
         let stream: AsyncStream<(Data, PeerLane)>
         var reader: Task<Void, Never>?
+        // link.keep (LINK-KEEP-CONTRACT.md), the phone's side as the contract asks it.
+        var keep = false
+        func setKeep(_ on: Bool) { keep = on }
+        /// td.ctl messages from the host handled on this link; what this side handed to its link, in order.
+        var gotOnLink = 0
+        var sentOnLink: [String] = []
+        /// This side's `link.back` went / the host's came; app messages held in between.
+        var backSent = false, backDone = false, relinked = false
+        var backHeld: [String] = []
+        var hostBacks = 0, backsDone = 0
         init(toHost: Pipe, forge: Bool, only: Bool) {
             self.toHost = toHost; self.forge = forge; self.only = only
             (stream, feed) = AsyncStream<(Data, PeerLane)>.makeStream()
@@ -100,8 +110,10 @@ struct LinkPipelineTests {
         /// Every message out: link-only, the relay carries only the hello and the signalling; the rest waits for the
         /// move and then goes on `td.ctl`. Old (`only` false): the relay until this side moved (and `ping` always).
         func send(_ text: String) async {
+            if keep, backSent, !backDone, !text.hasPrefix(#"{"t":"ping""#), !text.hasPrefix(#"{"t":"link."#) { backHeld.append(text); return }
+            if keep, relinked, !moved { await toHost.carry(text); return }
             if moved, only || !text.hasPrefix(#"{"t":"ping""#) {
-                if let link, link.send(Data(text.utf8), lane: .control) { return }
+                if let link, link.send(Data(text.utf8), lane: .control) { if keep { sentOnLink.append(text) }; return }
                 ended = ended ?? "a send on the link was refused"
                 return
             }
@@ -116,10 +128,17 @@ struct LinkPipelineTests {
             viaRelay += 1
             switch value["t"].string {
             case "link.peer": await signal(value)
+            case "link.back":
+                hostBacks += 1
+                await moveBack()
+                let got = Int(value["got"].number ?? 0)
+                let resend = Array(sentOnLink.dropFirst(got)) + backHeld
+                sentOnLink = []; backHeld = []; backDone = true; backsDone += 1
+                for text in resend { await toHost.carry(text) }
             case "link.moved":
                 hostMoved = true
                 let waiting = held; held = []
-                for data in waiting { await linked(data) }
+                for data in waiting { if keep { gotOnLink += 1 }; await linked(data) }
             default:
                 if !["welcome", "device.access", "error"].contains(value["t"].string ?? "") { relayApp += 1; relayAppTypes.append(value["t"].string ?? "?") }
                 if value["t"].string == "error" { refusal = value["message"].string }
@@ -130,8 +149,19 @@ struct LinkPipelineTests {
         var lanes: [Int32: Int] = [:]
         func fromLink(_ data: Data, _ lane: PeerLane) async {
             lanes[lane.rawValue, default: 0] += 1
-            if lane == .control, !hostMoved, !only { held.append(data); return }
+            if lane == .control, !hostMoved, !only || relinked { held.append(data); return }
+            if keep, backSent { return }
+            if lane == .control { gotOnLink += 1 }
             await linked(data)
+        }
+
+        /// link.keep: this side ends the link (once) and says how much of the host's it handled.
+        func moveBack() async {
+            guard keep, !backSent else { return }
+            backSent = true; backDone = false; relinked = true
+            moved = false; hostMoved = false; held = []
+            link?.close(); link = nil
+            await toHost.carry(#"{"t":"link.back","got":"# + String(gotOnLink) + "}")
         }
 
         private func linked(_ data: Data) async {
@@ -235,12 +265,13 @@ struct LinkPipelineTests {
             if let beforeMarker { await toHost.carry(beforeMarker) }
             await toHost.carry(BackendRemoteLinkPath.movedText)
             moved = true
+            if keep { backSent = false; backDone = false; gotOnLink = 0; sentOnLink = [] }
             movedAt = V.now()
             let queued = waiting; waiting = []
             for text in queued where link?.send(Data(text.utf8), lane: .control) != true { ended = ended ?? "a queued send was refused" }
         }
 
-        private func closed(_ why: String) { ended = ended ?? why }
+        private func closed(_ why: String) { ended = ended ?? why; if keep, moved { Task { await moveBack() } } }
 
         /// Joins, gap-checks, decodes and acks (contract §6), with the viewers' rules as the iPhone, Android and web apply
         /// them: a late frame is stale; after a gap deltas are dropped until a keyframe, which is asked at once (at most 4
@@ -363,7 +394,8 @@ struct LinkPipelineTests {
     /// A host with a sealed-looking connection (a channel binding) and a dc2 client on the simulated relay.
     func start(link: (servers: [BackendPhonePeerServer], policy: String)?, oneWay: Double = LinkPipelineTests.relayOneWay,
                forge: Bool = false, video: Bool = false, access: BackendINT2PhoneAccessLevel? = .full,
-               slowApply: Int = 0, only: Bool = true, welcome: Bool = true, key: Bool = false, grace: Int? = nil) async throws -> Harness {
+               slowApply: Int = 0, only: Bool = true, welcome: Bool = true, key: Bool = false, grace: Int? = nil, keep: Bool = false,
+               slowBackMs: Int = 0) async throws -> Harness {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("LINK-" + UUID().uuidString)
         let trust = BackendRemoteTrustStore(directory: dir.appendingPathComponent("remote"))
         try await trust.open()
@@ -404,9 +436,13 @@ struct LinkPipelineTests {
         try await host.start()
         let toClient = Pipe(oneWay: oneWay), toHost = Pipe(oneWay: oneWay)
         let client = Client(toHost: toHost, forge: forge, only: only)
+        await client.setKeep(keep)
         let wireClosed = Flag()
         let timer = clock.scheduled.value() + 1
-        var wire = BackendRemoteHostWire(address: "fixture", peerPublicKey: publicKey, send: { text in await toClient.carry(text) },
+        var wire = BackendRemoteHostWire(address: "fixture", peerPublicKey: publicKey, send: { text in
+                                             // link.keep crossing: the host's own `link.back` is slow to leave.
+                                             if slowBackMs > 0, text.hasPrefix(#"{"t":"link.back""#) { try? await Task.sleep(for: .milliseconds(slowBackMs)) }
+                                             await toClient.carry(text) },
                                          close: { _, _ in await wireClosed.set(); await toClient.shut(); await toHost.shut() })
         wire.channelBinding = Self.binding
         let id = try #require(await host.accept(wire))
@@ -415,6 +451,7 @@ struct LinkPipelineTests {
         await toHost.set { [host] text in if let taken = await host.take(id, text: text), !taken.alongside { await taken.answered.value } }
         let capabilities: [NativeRPCValue] = [.string("device.access")]
             + (link != nil ? [.string(BackendRemoteHost.linkCapability)] + (only ? [.string(BackendRemoteHost.linkOnlyCapability)] : []) : [])
+            + (keep ? [.string(BackendRemoteHost.linkKeepCapability)] : [])
         let hello = NativeRPCValue.object([.init("t", .string("hello")), .init("protocol", .number(1)), .init("token", .string(device.credential)),
             .init("device", .object([.init("name", .string("Phone")), .init("platform", .string("ios"))])), .init("capabilities", .array(capabilities))])
         await client.send(String(decoding: try hello.encodedJSON(), as: UTF8.self))

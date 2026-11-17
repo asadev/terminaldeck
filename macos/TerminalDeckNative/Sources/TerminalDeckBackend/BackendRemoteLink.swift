@@ -173,6 +173,30 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
     private var waitingBytes = 0
     private var relayGone = false
     private var failure: (@Sendable (String) -> Void)?
+    // link.keep (17 Nov, LINK-KEEP-CONTRACT.md): the move back from a link to the relay without loss or repeat.
+    /// Both sides claimed `link.keep`: a link that ends hands its connection back to the relay.
+    private var keep = false
+    /// The td.ctl messages handed to the current link's channel, in the order handed (the newest `mostSentBytes`).
+    private var sent: [String] = []
+    private var sentBytes = 0
+    /// How many handed messages were trimmed from the front of `sent` (message number = sentBase + index + 1).
+    private var sentBase = 0
+    /// Between this side's `link.back` and the other side's: app messages wait in `waiting`, in order.
+    private var returning = false
+    /// What the ended link never took: its outbox's contents, then messages refused by the channel or the stopped outbox.
+    private var leftover: [String] = []
+    /// Something meant for the link was thrown away: the move back cannot be made safely (the connection closes).
+    private var backBroken = false
+    static let mostSentBytes = 8 * 1024 * 1024
+    /// The other side's `link.back` came: written through the connection's one ordered writer (never sent anywhere), so
+    /// the resend lands exactly between what was written before and after it, like `link.moved`.
+    static let backDonePrefix = "\u{1}link.back.done:"
+    static func backText(got: Int) -> String { #"{"t":"link.back","got":"# + String(got) + "}" }
+    var keeps: Bool {
+        get { lock.withLock { keep } }
+        set { lock.withLock { keep = newValue } }
+    }
+    var isReturning: Bool { lock.withLock { returning } }
     /// 15 Nov hidden off switch for the phone-link outbox (no screen shows it): while `outboxOffKey` is YES in the
     /// app's own defaults, every link that starts after that sends the plain way, as 0220ze did (straight onto the
     /// channel, nothing queued here, nothing dropped). Read at each link start, so a phone reconnect is enough.
@@ -211,8 +235,16 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
     var isSlow: Bool { lock.withLock { outbox }?.isSlow ?? false }
 
     func attach(_ link: (any BackendLinkConnection)?, failure: (@Sendable (String) -> Void)?) {
+        let keeping = lock.withLock { () -> Bool in
+            if link != nil { sent = []; sentBytes = 0; sentBase = 0; leftover = []; backBroken = false }
+            return keep
+        }
         let made = outboxOff() ? nil : link.map { link in
-            BackendRemoteLinkOutbox(send: { link.send($0, lane: .control) }, queued: { link.queued(.control) },
+            BackendRemoteLinkOutbox(send: { [weak self] data in
+                    let ok = link.send(data, lane: .control)
+                    if ok, keeping { self?.handed(data) }
+                    return ok
+                }, queued: { link.queued(.control) },
                 failed: { why in failure?(why) },
                 resync: { [weak self] session in
                     guard let self else { return }
@@ -227,6 +259,7 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
                 log: { BackendRemoteRelayClient.note($0) },
                 label: { [weak self] in self?.deviceName ?? "a device" })
         }
+        made?.keepOnFailure = keeping
         if let link, let made {
             // The channel's own "queue is low" notice tops it up (off its callback thread: a send from inside it could
             // call back in); the outbox's slow timer is only the safety net.
@@ -257,6 +290,20 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
     }
 
     func write(_ text: String) async throws {
+        if text.hasPrefix(Self.backDonePrefix) {
+            try await finishBack(peerGot: Int(text.dropFirst(Self.backDonePrefix.count)) ?? -1)
+            return
+        }
+        if text.hasPrefix(#"{"t":"link.back""#) { if !relayIsGone { try await relay(text) }; return }
+        let held = lock.withLock { () -> Bool in
+            guard returning else { return false }
+            let type = Self.type(of: text) ?? ""
+            if ["link.peer", "ping", "pong"].contains(type) { return false }
+            waiting.append(text); waitingBytes += text.utf8.count
+            if waitingBytes > Self.mostWaitingBytes { backBroken = true }
+            return true
+        }
+        if held { return }
         if text == Self.movedText {
             if !relayIsGone { try? await relay(text) }
             // Everything that waited for the move goes first, in order (§11.2).
@@ -309,14 +356,24 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
 
     private func sendOnLink(_ text: String, _ link: (any BackendLinkConnection)?, _ failure: (@Sendable (String) -> Void)?) throws {
         // Through this link's outbox (answers first, the channel never handed more than it takes; 14 Nov phone link).
+        let keeping = keeps
         if let link, let outbox = lock.withLock({ (self.link as AnyObject?) === (link as AnyObject) ? outbox : nil }) {
-            guard outbox.put(text) else { throw NativeRPCError(code: "unavailable", message: "The direct link ended.") }
-            return
-        }
-        guard let link, link.send(Data(text.utf8), lane: .control) else {
-            failure?("A message could not go on the direct link.")
+            if outbox.put(text) { return }
+            if keeping { lock.withLock { leftover.append(text) }; return }
             throw NativeRPCError(code: "unavailable", message: "The direct link ended.")
         }
+        if let link, link.send(Data(text.utf8), lane: .control) {
+            if keeping { handed(Data(text.utf8)) }
+            return
+        }
+        if keeping, link != nil || lock.withLock({ returning }) {
+            // The link refused it (or is already gone): it goes over the relay with the move back.
+            lock.withLock { leftover.append(text) }
+            failure?("A message could not go on the direct link.")
+            return
+        }
+        failure?("A message could not go on the direct link.")
+        throw NativeRPCError(code: "unavailable", message: "The direct link ended.")
     }
 
     /// Video (contract §6): nil before the move (no link to carry it), true when it went on `lane`, false when it was
@@ -331,6 +388,47 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
     func video() -> BackendLinkVideo? {
         guard let link = lock.withLock({ moved ? link : nil }) else { return nil }
         return BackendLinkVideo(reliableOnly: link.overTCP, queuedMoving: link.queued(.moving), queuedStill: link.queued(.still))
+    }
+
+    /// One td.ctl message handed to the channel (link.keep).
+    private func handed(_ data: Data) {
+        let text = String(decoding: data, as: UTF8.self)
+        lock.withLock {
+            sent.append(text); sentBytes += text.utf8.count
+            while sentBytes > Self.mostSentBytes, !sent.isEmpty { sentBytes -= sent.removeFirst().utf8.count; sentBase += 1 }
+        }
+    }
+    /// Tests: how many td.ctl messages went to the current link's channel.
+    var handedCount: Int { lock.withLock { sentBase + sent.count } }
+
+    /// link.keep: the link ended. It is let go; from now on app messages wait (in `waiting`, after anything that
+    /// already waited for a move) until the other side's `link.back`, and the relay carries everything afterwards.
+    /// The outbox's contents are kept to go over the relay. Returns the link to close.
+    func beginBack() -> (any BackendLinkConnection)? {
+        let (link, box) = lock.withLock { () -> ((any BackendLinkConnection)?, BackendRemoteLinkOutbox?) in
+            defer { self.link = nil; failure = nil; outbox = nil; returning = true; moved = false; mode = .wire }
+            return (self.link, outbox)
+        }
+        if let box {
+            let left = box.takeAll()
+            lock.withLock {
+                if let left { leftover.insert(contentsOf: left.map { String(decoding: $0, as: UTF8.self) }, at: 0) } else { backBroken = true }
+            }
+        }
+        return link
+    }
+
+    /// The other side's `link.back` (it handled the first `peerGot` of this side's td.ctl messages): every later one,
+    /// what the link never took, then what waited, all over the relay, in that order. Throws when that cannot be done
+    /// exactly (the connection then closes, as without link.keep).
+    private func finishBack(peerGot: Int) async throws {
+        let out = lock.withLock { () -> [String]? in
+            defer { sent = []; sentBytes = 0; sentBase = 0; leftover = []; waiting = []; waitingBytes = 0; returning = false }
+            guard returning, !backBroken, peerGot >= sentBase, peerGot <= sentBase + sent.count else { return nil }
+            return Array(sent[(peerGot - sentBase)...]) + leftover + waiting
+        }
+        guard let out, !relayIsGone else { throw NativeRPCError(code: "unavailable", message: "The direct link ended.") }
+        for text in out { try await relay(text) }
     }
 
     func detach() -> (any BackendLinkConnection)? {
@@ -375,6 +473,27 @@ struct BackendRemoteLinkState: Sendable {
     /// The device whose TURN login was made ready at this connection's sealed handshake (before its hello, which may
     /// still be refused): the connection closing withdraws it like any other (Reviewer 27 #2).
     var prewarmed: String?
+    // link.keep (LINK-KEEP-CONTRACT.md)
+    /// Both sides claimed `link.keep`.
+    var keep = false
+    /// td.ctl messages from the client on the current link handed to `take` (this side's `got`).
+    var got = 0
+    /// This side sent its `link.back` and waits for the client's (with its deadline).
+    var backWaiting = false
+    var backDeadline: Task<Void, Never>?
+    /// The client's `link.back` being handled (a ping right behind it is answered after it).
+    var backTask: Task<Void, Never>?
+    /// The client's `link.back` came before this side had ended the link (its count, used once this side's is out).
+    var clientBack: Int?
+    /// The client's `link.peer answer` for the current link came over the relay (set in `take`, in arrival order).
+    /// Its `link.moved` for this link can only come after it (one ordered relay), so one that comes before is a late
+    /// marker of a link that already ended and is ignored (cross-check 17 Nov, "late link.moved").
+    var answered = false
+    /// Fresh offers made since the last link opened (the wait between them grows).
+    var relinks = 0
+    /// This connection's link is a fresh one after a move back: the client's link messages wait for its `link.moved`.
+    var relinked = false
+    var relinkTask: Task<Void, Never>?
     init(path: BackendRemoteLinkPath) { self.path = path }
 }
 
@@ -383,6 +502,13 @@ extension BackendRemoteHost {
     public static let linkCapability = "link.dc2"
     /// §11 "link only" (m5-direct-only): the relay carries no data, only the meeting (hello, signalling).
     public static let linkOnlyCapability = "link.only"
+    /// link.keep (17 Nov, LINK-KEEP-CONTRACT.md): a link that ends hands the connection back to the relay (no loss, no
+    /// repeat: `link.back` with a count, both ways) and a fresh link is offered. Only when both sides claim it.
+    public static let linkKeepCapability = "link.keep"
+    /// How long this side waits for the client's `link.back` after sending its own.
+    static let linkBackMs = 10_000
+    /// The waits before each fresh offer after a move back (then the last one again).
+    static let relinkWaitsMs = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
     /// Phones and the web reach this Mac only over a link now (§11.5); Mac guests keep their relay connection.
     static func linkClientPlatform(_ platform: String?) -> Bool {
         let name = (platform ?? "").lowercased()
@@ -416,6 +542,8 @@ extension BackendRemoteHost {
               live[id]?.link.token == nil else { return }
         linkEligible.insert(device)
         let token = UUID()
+        live[id]?.link.got = 0; live[id]?.link.candidates = 0; live[id]?.link.clientMoved = false
+        live[id]?.link.clientBack = nil; live[id]?.link.answered = false
         let (stream, feed) = AsyncStream<(Data, BackendLinkLane)>.makeStream()
         let inbox = BackendRemoteLinkInbox()
         live[id]?.link.token = token
@@ -489,6 +617,7 @@ extension BackendRemoteHost {
         guard linkCurrent(id, token), let row = live[id], let connection = row.link.connection, !row.link.open else { return }
         live[id]?.link.open = true
         live[id]?.link.openedAt = clock()
+        live[id]?.link.relinks = 0
         row.link.path.deviceName = row.device?.name ?? "a device"
         live[id]?.link.route = route
         row.link.path.attach(connection, failure: { [weak self] why in Task { await self?.linkEnded(id, token, why: why, tell: true) } })
@@ -511,14 +640,25 @@ extension BackendRemoteHost {
         guard linkCurrent(id, token), let row = live[id] else { return }
         let moved = row.link.path.hasMoved || row.link.clientMoved
         let linkOnly = row.link.path.currentMode != .wire
-        let connection = row.link.path.detach() ?? row.link.connection
+        let keepBack = row.link.keep && !row.link.path.relayIsGone && moved
+        let connection = (keepBack ? row.link.path.beginBack() : row.link.path.detach()) ?? row.link.connection
         live[id]?.link.connection = nil; live[id]?.link.open = false; live[id]?.link.token = nil
         row.link.task?.cancel()
         row.link.feed?.finish(); live[id]?.link.feed = nil
         for waiter in row.link.waiters.values { waiter.resume(returning: false) }
         live[id]?.link.waiters = [:]
         connection?.close()
-        BackendRemoteRelayClient.note("link: ended \(why)")
+        BackendRemoteRelayClient.note("link: ended for \(row.device?.name ?? "a device"): \(why)")
+        // A client's `link.back` kept for a move back that is not made must not be left for a later link.
+        if !keepBack { live[id]?.link.clientBack = nil }
+        // link.keep: after a move the connection goes back to the relay instead of closing; a fresh link that never
+        // opened just leaves it there. The first link after the welcome that never opened keeps today's rule.
+        if row.link.keep, !row.link.path.relayIsGone, moved || row.link.relinked {
+            if moved { await linkMoveBack(id); return }
+            if tell, let signal = try? BackendRemoteServerMessage(.linkPeer, fields: [.init("op", .string("end"))]) { try? await linkSignal(id, signal) }
+            linkScheduleRelink(id)
+            return
+        }
         if moved {
             await disconnect(id, code: 1001, reason: "The direct link ended.")
             return
@@ -527,12 +667,79 @@ extension BackendRemoteHost {
         if linkOnly { await disconnect(id, code: 1001, reason: Self.unreachable) }
     }
 
+    /// link.keep: this side's `link.back` with its count, then the wait for the client's (the link is already let go
+    /// by `beginBack`, called from `linkEnded`'s detach below).
+    private func linkMoveBack(_ id: UUID) async {
+        guard let row = live[id] else { return }
+        live[id]?.link.backWaiting = true
+        do { try await row.writer.send(BackendRemoteLinkPath.backText(got: row.link.got)) }
+        catch { await disconnect(id, code: 1001, reason: "The direct link ended."); return }
+        // The client's `link.back` may have crossed ours and finished the move back while ours was being sent.
+        guard live[id]?.link.backWaiting == true else { return }
+        if let got = live[id]?.link.clientBack { await linkBackDone(id, peerGot: got); return }
+        live[id]?.link.backDeadline?.cancel()
+        live[id]?.link.backDeadline = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.linkBackMs)); guard !Task.isCancelled else { return }
+            await self?.linkBackExpired(id)
+        }
+    }
+    private func linkBackExpired(_ id: UUID) async {
+        guard live[id]?.link.backWaiting == true else { return }
+        BackendRemoteRelayClient.note("link: \(live[id]?.device?.name ?? "a device") never answered the move back")
+        await disconnect(id, code: 1001, reason: "The direct link ended.")
+    }
+
+    /// The client's `link.back` came over the relay (handled in `take`, ahead of every queue).
+    func linkClientBack(_ id: UUID, got: Int) async {
+        guard let row = live[id], row.link.keep else { return }
+        if let token = row.link.token {
+            // The client ended the link first: this side ends it too (and sends its own `link.back`).
+            live[id]?.link.clientBack = got
+            await linkEnded(id, token, why: "The device moved back to the relay.", tell: false)
+            return
+        }
+        if row.link.backWaiting { await linkBackDone(id, peerGot: got) }
+    }
+
+    private func linkBackDone(_ id: UUID, peerGot: Int) async {
+        guard let row = live[id], row.link.backWaiting else { return }
+        live[id]?.link.backWaiting = false; live[id]?.link.clientBack = nil
+        row.link.backDeadline?.cancel(); live[id]?.link.backDeadline = nil
+        do { try await row.writer.send(BackendRemoteLinkPath.backDonePrefix + String(peerGot)) }
+        catch {
+            BackendRemoteRelayClient.note("link: the move back for \(row.device?.name ?? "a device") could not be made exactly; closing")
+            await disconnect(id, code: 1001, reason: "The direct link ended.")
+            return
+        }
+        BackendRemoteRelayClient.note("link: \(row.device?.name ?? "a device") carries on over the relay")
+        linkScheduleRelink(id)
+    }
+
+    /// A fresh offer after a growing wait (1 s, 2 s, 4 s ... 30 s; back to 1 s once a link opens).
+    private func linkScheduleRelink(_ id: UUID) {
+        guard let row = live[id], row.link.keep, row.link.token == nil else { return }
+        let wait = Self.relinkWaitsMs[min(row.link.relinks, Self.relinkWaitsMs.count - 1)]
+        live[id]?.link.relinks += 1
+        row.link.relinkTask?.cancel()
+        live[id]?.link.relinkTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(wait)); guard !Task.isCancelled else { return }
+            await self?.linkRelink(id)
+        }
+    }
+    private func linkRelink(_ id: UUID) {
+        guard let row = live[id], row.link.keep, row.link.token == nil, !row.link.backWaiting, !row.link.path.relayIsGone else { return }
+        live[id]?.link.relinked = true
+        startLink(id)
+    }
+
     /// Why a link-only connection closed before its link opened (§11.3).
     static let unreachable = "This device can't be reached directly."
 
     /// The client's `link.moved` came over the relay (handled in `take`, in arrival order).
     func linkClientMoved(_ id: UUID) {
-        guard live[id]?.link.token != nil else { return }
+        guard let row = live[id], row.link.token != nil else { return }
+        // link.keep: a marker before this link's answer belongs to a link that already ended.
+        if row.link.keep && !row.link.answered { return }
         live[id]?.link.clientMoved = true
         let waiters = live[id]?.link.waiters ?? [:]
         live[id]?.link.waiters = [:]
@@ -541,7 +748,8 @@ extension BackendRemoteHost {
 
     private func linkWaitForClient(_ id: UUID, _ token: UUID) async -> Bool {
         // A link-only client sends nothing app-level on the relay: nothing to order against, nothing to hold (§11.2).
-        if live[id]?.link.clientMoved == true || live[id]?.link.clientOnly == true { return true }
+        // link.keep: on a fresh link after a move back the client sent app messages on the relay, so its marker counts.
+        if live[id]?.link.clientMoved == true || live[id]?.link.clientOnly == true && live[id]?.link.relinked != true { return true }
         guard linkCurrent(id, token) else { return false }
         let ticket = UUID()
         let moved = await withCheckedContinuation { (waiter: CheckedContinuation<Bool, Never>) in
@@ -587,6 +795,9 @@ extension BackendRemoteHost {
         }
         // The next message is read at once (m5-direct-only: an attach or a key never waits behind a slow answer here;
         // order is kept by the pipeline's numbering), unless this connection already has many unanswered.
+        // link.keep: counted only when handed on (a message read after the link ended is resent by the client).
+        guard linkCurrent(id, token) else { return }
+        live[id]?.link.got += 1
         if let taken = take(id, text: text, viaLink: true), !taken.alongside, backlogged(id) { await taken.answered.value }
     }
 
@@ -623,6 +834,7 @@ extension BackendRemoteHost {
     func linkClosed(_ row: Connection) {
         let connection = row.link.path.detach() ?? row.link.connection
         row.link.task?.cancel(); row.link.reader?.cancel(); row.link.feed?.finish()
+        row.link.backDeadline?.cancel(); row.link.relinkTask?.cancel()
         for waiter in row.link.waiters.values { waiter.resume(returning: false) }
         connection?.close()
         // Its last connection closed: withdraw the login this run handed it (only that login, if still current — R1).
@@ -774,6 +986,7 @@ extension BackendRemoteProtocol {
     static func parseLink(_ r: BackendRemoteReader) throws -> NativeRPCValue? {
         switch r.type {
         case "link.moved": return r.base
+        case "link.back": return r.base.setting("got", .number(try r.whole("got", 0, 1_000_000_000, reason: "link.back with an unusable count")))
         case "link.peer":
             let op = try r.named("op", allowed: ["answer", "cand", "end"], reason: "link.peer with an unusable op")
             var m = r.base.setting("op", .string(op))

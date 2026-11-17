@@ -138,6 +138,16 @@ public actor BackendRemoteHost {
     /// themselves (an attach, then its keys) but never wait behind another frame (measured on the phones: an attach
     /// waited 157 ms behind `sims.list` and 349 ms behind `account.read`; a key waits the same way).
     public static let terminalLane: Set<String> = ["attach", "take", "detach", "input", "resize"]
+    /// connect-fix (17 Nov: the chat model list took 2.2-3.7 s and held every request behind it up to 6.7 s): frames
+    /// answered on the side. Each still waits for the frame running alone when it arrives (so a setting written before
+    /// it is seen), but nothing waits for it: its answer carries its request's rid and the phone matches it by that,
+    /// and it changes nothing another frame could read.
+    public static let sideLane: Set<String> = ["chats.choices"]
+    /// connect-fix (17 Nov: direct-link setup waited up to 6 s behind other requests): the link's own signalling runs
+    /// in a lane of its own, in order among itself (an answer before its candidates), never behind another frame. It
+    /// touches only the link's state, which no other frame reads, and it never answers the phone with a reply.
+    /// (`link.moved` is handled before any queue already, in `take`.)
+    public static let linkLane: Set<String> = ["link.peer"]
     /// A connection with more frames than this unanswered makes its reader wait (relay and link alike).
     static let mostUnanswered = 32
     /// One connection's frames in arrival order: the reads running alongside each other, the last frame that runs
@@ -151,6 +161,10 @@ public actor BackendRemoteHost {
         var input: Task<Void, Never>?
         /// The newest frame of the terminal lane (m5-direct-only).
         var terminal: Task<Void, Never>?
+        /// The newest frame of the link lane (connect-fix).
+        var link: Task<Void, Never>?
+        /// Side-lane frames still running (connect-fix), bounded like the reads.
+        var side: [Int: Task<Void, Never>] = [:]
         var finished: Set<Int> = []
         /// Every frame numbered below this has finished.
         var settled = 0
@@ -753,14 +767,35 @@ public actor BackendRemoteHost {
                 // §11.4: a link-only client's late candidates (and its end) may come on the link itself.
                 guard row.link.clientOnly, message.type == "link.peer" else { return (Task {}, true) }
             } else if message.type == "link.moved" { linkClientMoved(id); return (Task {}, true) }
+            else if message.type == "link.peer", message["op"].string == "answer", row.link.token != nil {
+                row.link.answered = true; live[id] = row   // then on to the link lane as before
+            }
+            else if message.type == "link.back" {
+                // link.keep: ahead of every queue; a ping right behind it is answered after it (on the relay).
+                guard row.link.keep else { return (Task {}, true) }
+                let got = Int(message["got"].number ?? -1)
+                let before = row.link.backTask
+                let task = Task { [weak self] in await before?.value; await self?.linkClientBack(id, got: got) }
+                live[id]?.link.backTask = task
+                return (task, true)
+            }
         }
         // §11.1: once a phone or the web is on link-only terms, the relay carries nothing but the hello and signalling.
         // (A phone without a link — its access is off — may still ping on the relay: it has nothing else.)
         if !viaLink, case .message(let message) = parsed, row.link.path.currentMode != .wire, !Self.relayCarries(message.type),
            row.link.clientOnly || row.link.path.currentMode == .noLink,
-           !(message.type == "ping" && row.link.path.currentMode == .noLink) {
+           !(message.type == "ping" && (row.link.path.currentMode == .noLink || row.link.keep)) {
             BackendRemoteRelayClient.note("link: dropped a \(message.type) that came over the relay (\(row.device?.name ?? "a device"))")
             return (Task {}, true)
+        }
+        // connect-fix (17 Nov): the heartbeat's answer never waits behind the request queue (it waited behind the frame
+        // running alone, as every read does). The pong still goes through the connection's one ordered writer.
+        if case .message(let message) = parsed, message.type == "ping", row.device != nil {
+            let before = row.link.backTask
+            return (Task { [weak self] in
+                await before?.value
+                try? await self?.send(id, .init(.pong, fields: []))
+            }, true)
         }
         // A sign-in must never join an application queue. Refusals retain only the request ID, not the password.
         if case .message(let message) = parsed, message.type == "sims.unlock", row.pipeline.next != row.pipeline.settled {
@@ -776,18 +811,33 @@ public actor BackendRemoteHost {
             return nil
         }()
         var alongside = false
-        if case .message(let message) = parsed, Self.inputLane.contains(message.type) || Self.terminalLane.contains(message.type) {
+        if case .message(let message) = parsed,
+           Self.inputLane.contains(message.type) || Self.terminalLane.contains(message.type) || Self.linkLane.contains(message.type) {
             let number = row.pipeline.next
             row.pipeline.next += 1
-            let terminal = Self.terminalLane.contains(message.type)
-            let before = terminal ? row.pipeline.terminal : row.pipeline.input
+            let terminal = Self.terminalLane.contains(message.type), link = Self.linkLane.contains(message.type)
+            let before = link ? row.pipeline.link : terminal ? row.pipeline.terminal : row.pipeline.input
             let task = Task { [weak self] in
                 await before?.value
                 guard let self, !Task.isCancelled else { return }
                 await Self.$ticket.withValue(Ticket(connection: id, number: number)) { await self.answer(id, parsed) }
                 await self.finished(id, number)
             }
-            if terminal { row.pipeline.terminal = task } else { row.pipeline.input = task }
+            if link { row.pipeline.link = task } else if terminal { row.pipeline.terminal = task } else { row.pipeline.input = task }
+            live[id] = row
+            return (task, true)
+        }
+        if case .message(let message) = parsed, Self.sideLane.contains(message.type), row.pipeline.side.count < Self.mostReadsAlongside {
+            let number = row.pipeline.next
+            row.pipeline.next += 1
+            let before = row.pipeline.alone
+            let task = Task { [weak self] in
+                await before?.value
+                guard let self, !Task.isCancelled else { return }
+                await Self.$ticket.withValue(Ticket(connection: id, number: number)) { await self.answer(id, parsed) }
+                await self.finished(id, number)
+            }
+            row.pipeline.side[number] = task
             live[id] = row
             return (task, true)
         }
@@ -820,7 +870,7 @@ public actor BackendRemoteHost {
         return (task, alongside)
     }
     /// What a client may send on the relay to a connection on link-only terms (§11.1).
-    static func relayCarries(_ type: String) -> Bool { ["hello", "enroll", "link.peer", "link.moved"].contains(type) }
+    static func relayCarries(_ type: String) -> Bool { ["hello", "enroll", "link.peer", "link.moved", "link.back"].contains(type) }
 
     /// The reader waits for an answer only while this connection has many frames unanswered (the pipeline keeps the
     /// order either way).
@@ -833,6 +883,7 @@ public actor BackendRemoteHost {
     private func finished(_ id: UUID, _ number: Int) async {
         guard var row = live[id] else { return }
         row.pipeline.reads[number] = nil
+        row.pipeline.side[number] = nil
         row.pipeline.finished.insert(number)
         var release: [String] = []
         while row.pipeline.finished.remove(row.pipeline.settled) != nil {
@@ -901,14 +952,14 @@ public actor BackendRemoteHost {
             // chose it since. A phone that shows pictures (27 Oct) attaches without a size and never takes it.
             watchSizes()
             let openedAt = clock()
-            defer { BackendRemoteRelayClient.note("open: attach \(sessionID.prefix(8)) answered in \(Int(clock() - openedAt)) ms") }
+            defer { BackendRemoteRelayClient.note("open: attach \(sessionID.prefix(8)) answered in \(Int(clock() - openedAt)) ms (\(live[id]?.device?.name ?? "a device"))") }
             if let cols = message["cols"].number, let rows = message["rows"].number {
                 let size = BackendTerminalSize(cols: Int(cols), rows: Int(rows))
                 claim(id, sessionID, size)
                 if try pushViewerSizes(sessionID, joining: id, user: id, keep: message["keep"].bool == true) {
                     let settleAt = clock()
                     await settle(sessionID)
-                    BackendRemoteRelayClient.note("open: attach \(sessionID.prefix(8)) settle \(Int(clock() - settleAt)) ms")
+                    BackendRemoteRelayClient.note("open: attach \(sessionID.prefix(8)) settle \(Int(clock() - settleAt)) ms (\(live[id]?.device?.name ?? "a device"))")
                     // Another device leaving meanwhile forgets the sizes of sessions not yet attached: asked again.
                     claim(id, sessionID, size)
                 }
@@ -1128,14 +1179,17 @@ public actor BackendRemoteHost {
         // said link-only gets link-only terms (and hears `link.only` even without a link, so it knows this Mac is new).
         let link = linkWanted(id, access: context.phoneAccess)
         let only = row.wire.channelBinding != nil && live[id]?.capabilities.contains(Self.linkOnlyCapability) == true
+        // link.keep: only with a link, and only when the client claimed it.
+        let keep = link && live[id]?.capabilities.contains(Self.linkKeepCapability) == true
         if let at = fields.firstIndex(where: { $0.key == "capabilities" }), link || only {
-            let extra = (link ? [Self.linkCapability] : []) + (only ? [Self.linkOnlyCapability] : [])
+            let extra = (link ? [Self.linkCapability] : []) + (only ? [Self.linkOnlyCapability] : []) + (keep ? [Self.linkKeepCapability] : [])
             fields[at] = .init("capabilities", .array(capabilities(context).map(NativeRPCValue.string) + extra.map(NativeRPCValue.string)))
         }
         // The mode first: from the welcome on, only the relay's own frames may cross it (§11.1).
         let phoneOrWeb = row.wire.channelBinding != nil && (live[id]?.capabilities.contains(Self.linkCapability) == true || Self.linkClientPlatform(live[id]?.platform))
         if link {
             live[id]?.link.clientOnly = only
+            live[id]?.link.keep = keep; row.link.path.keeps = keep
             row.link.path.set(.link(clientOnly: only))
         } else if phoneOrWeb {
             row.link.path.set(.noLink)
@@ -1627,6 +1681,8 @@ public actor BackendRemoteHost {
         row.pipeline.alone?.cancel()
         row.pipeline.input?.cancel()
         row.pipeline.terminal?.cancel()
+        row.pipeline.link?.cancel()
+        for side in row.pipeline.side.values { side.cancel() }
         row.timer?.cancel(); await row.writer.close()
         linkClosed(row)
         // Remove first: transport close may synchronously notify closed again.

@@ -21,12 +21,14 @@ extension NativeCompositionProduction {
         #if DEBUG
         // Dev copy only (never in the shipped app): deliver ONE mention from the shell without a chat message,
         // to check delivery → the agent wakes → its answer → the answered signal.
-        // Object: JSON {"text": …, "mentions": [{kind,id,name}], "out": "/path/result.json"}.
-        HootMentionFeeds.door = DistributedNotificationCenter.default().addObserver(forName: Notification.Name("TerminalDeckDevMention"), object: nil, queue: .main) { note in
-            guard let text = note.object as? String, let ask = try? NativeRPCValue.parseJSON(Data(text.utf8)), let out = ask["out"].string else { return }
+        // Object: JSON {"token": …, "text": …, "mentions": [{kind,id,name}], "out": "<dev-out>/result.json"}.
+        // Locked like every other dev door (DevReload): this launch's secret, and an answer file inside dev-out only.
+        HootMentionFeeds.door = DistributedNotificationCenter.default().addObserver(forName: HootMentionDevDoor.name, object: nil, queue: .main) { note in
+            guard let door = HootMentionDevDoor.ask(note.object as? String) else { return }
+            let ask = door.wire, out = door.out
             Task {
                 var lines: [NativeRPCValue] = []
-                func save() { try? NativeRPCValue.array(lines).encodedJSON(pretty: true).write(to: URL(fileURLWithPath: out), options: .atomic) }
+                func save() { try? NativeRPCValue.array(lines).encodedJSON(pretty: true).write(to: out, options: .atomic) }
                 let receipts = await delivery.deliver(text: ask["text"].string ?? "", context: .object([.init("mentions", ask["mentions"])]))
                 lines.append(.object([.init("receipts", .array(receipts.map(\.wireValue)))])); save()
                 let wanted = Set(receipts.map(\.receiptID))
@@ -44,6 +46,20 @@ extension NativeCompositionProduction {
         }
     }
 }
+
+#if DEBUG
+/// The mention dev door's lock (17 Nov, Security): the same as DevReload's doors. A request without this launch's
+/// secret (TD_DEV_INVOKE_TOKEN) is ignored, and the answer file may only lie inside the dev copy's `dev-out` folder.
+/// No secret at launch (every installed app): the door stays shut.
+enum HootMentionDevDoor {
+    static let name = Notification.Name("TerminalDeckDevMention")
+    static func ask(_ text: String?, token: String = DevReload.launchToken, folder: URL? = DevReload.outFolder) -> (wire: NativeRPCValue, out: URL)? {
+        guard let text, let ask = DevReload.request(text, token: token), let out = DevReload.output(ask["out"], folder: folder),
+              let wire = try? NativeRPCValue.parseJSON(Data(text.utf8)) else { return nil }
+        return (wire, out)
+    }
+}
+#endif
 
 private enum HootMentionFeeds {
     private static let lock = NSLock()

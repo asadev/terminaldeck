@@ -155,6 +155,23 @@ public actor BackendRemoteRelayClient {
     /// an untied dial), so a refused or stale token can never keep pairing out.
     private var dialedWithToken: String?
     private var refusedToken: String?
+    /// connect-fix (17 Nov): right after a start, the first dial waits up to this long for the account token, so a
+    /// start costs the phones one relay connection instead of two (untied, then tied again a moment later).
+    static let firstDialTokenWaitMs = 2_000
+    private var firstDialWait: Task<Void, Never>?
+    /// connect-fix (17 Nov): only the relay's own answer to the token refuses it (its Worker answers 403 to a host dial
+    /// whose token does not verify). A network error, a timeout or a reset leaves the token as it is, so the Mac never
+    /// rejoins untied (which refused every phone signing in by account for minutes) because the network blinked.
+    static func relayRefusedToken(httpStatus: Int?) -> Bool { httpStatus == 403 }
+    /// connect-fix (17 Nov): the WebSocket close code and the relay's short reason, added to a drop's socket error, so
+    /// a close by the relay or Cloudflare can be told apart from a reset. Numbers and the short reason only.
+    static func withCloseCode(_ why: String, code: Int, reason: Data?) -> String {
+        guard code != URLSessionWebSocketTask.CloseCode.invalid.rawValue, !why.hasPrefix("The relay closed the connection") else { return why }
+        let words = reason.flatMap { String(data: $0, encoding: .utf8) }.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        return why + " (close code \(code)\(words.isEmpty ? "" : ": " + String(words.prefix(120))))"
+    }
+    /// Tests: whether a start is still waiting for the account token before its first dial.
+    func waitingForToken() -> Bool { firstDialWait != nil }
     public init(url: String, identity: BackendRemoteHostIdentity, trust: BackendRemoteTrustStore, host: BackendRemoteHost, mcp: MCPHandler? = nil) throws {
         self.url = try Self.target(url); self.identity = identity; self.trust = trust; self.host = host; self.mcp = mcp; beaconOffer = nil
     }
@@ -187,10 +204,19 @@ public actor BackendRemoteRelayClient {
         stopped = false
         Self.live.add(self)
         watchNetwork()
-        dial()
+        // connect-fix (17 Nov): a start before the account token is ready waits briefly for it (it ends at once when
+        // the token arrives, `reachTokenChanged`), so phones see one connection per start, tied from the first dial.
+        if beaconOffer == nil, host != nil, BackendReachRelayLink.shared.token == nil, Self.firstDialTokenWaitMs > 0 {
+            firstDialWait = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(Self.firstDialTokenWaitMs)); guard !Task.isCancelled else { return }
+                await self?.firstDialDue()
+            }
+        } else { dial() }
     }
+    private func firstDialDue() { firstDialWait = nil; dial() }
     public func stop() async {
         stopped = true; retry?.cancel(); retry = nil
+        firstDialWait?.cancel(); firstDialWait = nil
         pathMonitor?.cancel(); pathMonitor = nil
         Self.live.remove(self)
         await drop("The relay was stopped.", retrying: false)
@@ -315,6 +341,7 @@ public actor BackendRemoteRelayClient {
     }
     private func dial() {
         guard !stopped, socket == nil else { return }
+        firstDialWait?.cancel(); firstDialWait = nil
         generation = UUID(); let epoch = generation
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         components.path = BackendRelayPacketCodec.hostPath; components.query = nil; components.fragment = nil
@@ -322,9 +349,8 @@ public actor BackendRemoteRelayClient {
         request.setValue(BackendRemoteTrustStorage.base64URL(identity.hostSecret), forHTTPHeaderField: BackendRelayPacketCodec.secretHeader)
         // Reach by account: the room is tied to the account only with a token that still has a minute left.
         dialedWithToken = nil
-        if beaconOffer == nil, host != nil, let held = BackendReachRelayLink.shared.token, held.token != refusedToken,
-           held.expiresAtMs - Date().timeIntervalSince1970 * 1000 > 60_000 {
-            request.setValue("Bearer " + held.token, forHTTPHeaderField: "authorization"); dialedWithToken = held.token
+        if let held = tokenToDial() {
+            request.setValue("Bearer " + held, forHTTPHeaderField: "authorization"); dialedWithToken = held
         }
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil; config.urlCredentialStorage = nil
@@ -365,6 +391,14 @@ public actor BackendRemoteRelayClient {
         // The internet switch for keys is still enforced per request on this Mac (answerRelay → keys.internet()).
         // 15 Nov: [1] only while "Let AI apps use this Mac" is on (BackendRelayMCPServing), so the relay itself answers
         // 404 while it is off; re-said on every connection and on every change (mcpServingChanged).
+        // connect-fix (17 Nov): re-tie on the next good connection. A link that opened untied while a usable account
+        // token is held (it arrived during the dial, or the dial that carried it failed) dials again tied at once,
+        // instead of waiting for the next token change (`reachTokenChanged`).
+        if dialedWithToken == nil, tokenToDial() != nil {
+            Self.note("reach: tying this Mac's relay room to the account.")
+            await drop("Tying this Mac's relay room to the account.")
+            return
+        }
         mcpTeller = BackendRelayServingTeller()
         await mcpServingChanged()
         if host != nil { await BackendRCVRelayLink.shared.opened { [weak self] type, channel, payload in
@@ -380,6 +414,12 @@ public actor BackendRemoteRelayClient {
                 }
             }
         }
+    }
+    /// The account token a dial carries now: held, not refused by the relay, with a minute left (nil: dial untied).
+    private func tokenToDial() -> String? {
+        guard beaconOffer == nil, host != nil, let held = BackendReachRelayLink.shared.token, held.token != refusedToken,
+              held.expiresAtMs - Date().timeIntervalSince1970 * 1000 > 60_000 else { return nil }
+        return held.token
     }
     private func connectExpired(_ epoch: UUID) async { if epoch == generation && !connected { await drop("The relay did not finish connecting.") } }
     private func failed(_ epoch: UUID, why: String) async { if epoch == generation && !stopped { await drop(why) } }
@@ -397,7 +437,7 @@ public actor BackendRemoteRelayClient {
     }
     private func packet(_ data: Data, epoch: UUID) async {
         guard epoch == generation, let packet = BackendRelayPacketCodec.decodeBoundedHostPacket(data) else { return }
-        if !connected { await opened(epoch) }
+        if !connected { await opened(epoch); guard epoch == generation else { return } }
         switch packet.type {
         case 1:
             guard channels[packet.channel] == nil else { return }
@@ -500,6 +540,8 @@ public actor BackendRemoteRelayClient {
     /// should not be, is dialed again; a tied link only keeps the fresh token for its next dial.
     func reachTokenChanged() async {
         guard !stopped, beaconOffer == nil, host != nil else { return }
+        // A start still waiting for the token dials now that it is here.
+        if firstDialWait != nil { if BackendReachRelayLink.shared.token != nil { dial() }; return }
         let wanted = BackendReachRelayLink.shared.token != nil
         if wanted == (dialedWithToken != nil) { return }
         refusedToken = nil
@@ -592,11 +634,15 @@ public actor BackendRemoteRelayClient {
         try await socket.send(.data(data))
     }
     private func drop(_ why: String, retrying: Bool = true) async {
-        // A link dialed with a reach token that never opened: the next dial goes untied, so pairing keeps working
-        // whatever the relay thinks of the token. Presence ties the room again with a fresh one.
-        if let token = dialedWithToken, !connected {
+        var why = why
+        let status = (socket?.response as? HTTPURLResponse)?.statusCode
+        if let socket { why = Self.withCloseCode(why, code: socket.closeCode.rawValue, reason: socket.closeReason) }
+        // A link dialed with a reach token that the relay refused (its 403): the next dial goes untied, so pairing
+        // keeps working whatever the relay thinks of the token. Presence ties the room again with a fresh one.
+        // connect-fix (17 Nov): only the relay's refusal counts; a dial that failed on the network keeps the token.
+        if let token = dialedWithToken, !connected, Self.relayRefusedToken(httpStatus: status) {
             refusedToken = token; dialedWithToken = nil
-            Self.note("reach: the relay did not take this Mac's account token; connecting untied.")
+            Self.note("reach: the relay did not take this Mac's account token (HTTP \(status ?? 0)); connecting untied.")
         }
         generation = UUID(); connected = false
         connectDeadline?.cancel(); connectDeadline = nil; pongDeadline?.cancel(); pongDeadline = nil; heartbeat?.cancel(); heartbeat = nil; receiver?.cancel(); receiver = nil

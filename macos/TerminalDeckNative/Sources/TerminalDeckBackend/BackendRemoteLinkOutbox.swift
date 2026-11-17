@@ -87,6 +87,10 @@ final class BackendRemoteLinkOutbox: @unchecked Sendable {
     private let failed: @Sendable (String) -> Void
     private let resync: @Sendable (String) -> Void
     private let listsLost: @Sendable () -> Void
+    /// link.keep (17 Nov): a failed hand to the channel keeps what waits (the frame included) for `takeAll`, so the
+    /// connection can carry it over the relay; `droppedAll` says something waiting was thrown away instead.
+    var keepOnFailure = false
+    private var droppedAll = false
 
     init(send: @escaping @Sendable (Data) -> Bool, queued: @escaping @Sendable () -> UInt64,
          now: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 * 1_000 },
@@ -155,7 +159,7 @@ final class BackendRemoteLinkOutbox: @unchecked Sendable {
             }
             total += entry.data.count
             if total > Self.mostWaitingBytes {
-                lost = stopAll(); over = true
+                lost = stopAll(); over = true; droppedAll = true
                 return true
             }
             if entry.live, let session = entry.session {
@@ -256,7 +260,13 @@ final class BackendRemoteLinkOutbox: @unchecked Sendable {
                     }
                 } else { break }
                 total -= next.data.count
-                if !send(next.data) { lost = stopAll(); failedNow = true }
+                if !send(next.data) {
+                    if keepOnFailure {
+                        if next.answer { answers.insert(next, at: 0) } else { stream.insert(next, at: 0) }
+                        total += next.data.count; stopped = true
+                    } else { lost = stopAll(); droppedAll = true }
+                    failedNow = true
+                }
             }
             noteSlow()
             let more = !stopped && (!answers.isEmpty || !stream.isEmpty)
@@ -297,9 +307,20 @@ final class BackendRemoteLinkOutbox: @unchecked Sendable {
     /// link, and the phone asks again on the next one). An unasked list among it is reported lost, so the host does not
     /// count it as delivered (`listsLost`).
     func stop() {
-        let lost = lock.withLock { stopped ? false : stopAll() }
+        let lost = lock.withLock { () -> Bool in
+            let waited = !answers.isEmpty || !stream.isEmpty
+            return stopped && !waited ? false : stopAll()
+        }
         if lost { listsLost() }
     }
     /// Bytes waiting here.
     var waitingBytes: Int { lock.withLock { total } }
+    /// link.keep: stops and hands back everything that waits, in the order it would have gone (answers, then the
+    /// stream); nil when something waiting was already thrown away (then the connection cannot carry on safely).
+    func takeAll() -> [Data]? {
+        lock.withLock { () -> [Data]? in
+            defer { stopped = true; answers = []; stream = []; total = 0; backlog = [:] }
+            return droppedAll ? nil : (answers + stream).map(\.data)
+        }
+    }
 }

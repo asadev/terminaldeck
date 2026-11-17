@@ -10,6 +10,15 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.22.2] — 2026-11-17
+
+- Connecting is quicker: after a short gap in the connection, the app and your phones connect again straight away instead of waiting a long time.
+- A phone is no longer turned away after one failed attempt to reach your Mac; the next try goes through.
+- Your Mac answers a phone's request to set up a direct link at once, instead of after other work.
+- The connection to a phone is kept when the direct link drops, and your Mac answers a phone's "are you there" at once.
+- Security: a developer-only way for other programs on the Mac to send text into Terminal Deck is closed in the public app.
+- The Mac app is now built optimized: smaller and faster to start.
+
 ## [0.22.1] — 2026-11-16
 
 - WhatsApp agents: connect your WhatsApp agents as profiles, choose where each is received (Hoot, an agent or a session), a switch for sending, approvals by 1 / 2; an agent follows a session that moves to another Mac.
