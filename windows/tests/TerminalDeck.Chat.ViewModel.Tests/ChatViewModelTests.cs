@@ -196,6 +196,11 @@ public class ChatWatchProxy : DispatchProxy
   {
     var number = Interlocked.Increment(ref Watches); yield return Record;
     if (number == 1) { await BreakFirstWatch.Task.WaitAsync(ct); throw new IOException("Synthetic broken connection."); }
-    await foreach (var record in Updates.Reader.ReadAllAsync(ct)) yield return record;
+    await foreach (var record in Updates.Reader.ReadAllAsync(ct))
+    {
+      // Match ChatSessions: Get returns the saved record before its watch notification.
+      Record = record;
+      yield return record;
+    }
   }
 }

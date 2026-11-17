@@ -34,7 +34,7 @@ public partial class App : Application
   private void PrepareRecovery(AppDataRoot root)
   {
     var production = Path.GetFullPath(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TerminalDeck"));
-    if (DevelopmentRun && (string.Equals(root.DirectoryPath, StableChannel.Root(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)).DirectoryPath, StringComparison.OrdinalIgnoreCase) || string.Equals(root.DirectoryPath, production, StringComparison.OrdinalIgnoreCase) || root.DirectoryPath.StartsWith(production + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+    if (DevelopmentRun && (InstalledDataRoot.IsInstalledPath(root.DirectoryPath, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)) || string.Equals(root.DirectoryPath, StableChannel.Root(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)).DirectoryPath, StringComparison.OrdinalIgnoreCase) || string.Equals(root.DirectoryPath, production, StringComparison.OrdinalIgnoreCase) || root.DirectoryPath.StartsWith(production + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
       throw new ArgumentException("Choose a separate scratch folder.");
     UiRecovery.Initialize(root.DirectoryPath, message =>
     {
@@ -53,12 +53,13 @@ public partial class App : Application
     try
     {
       var command = Environment.GetCommandLineArgs().Skip(1).Where(a => a != "--start-minimized").ToArray();
-      if (command.Length > 0) PrepareRecovery(AppDataRoot.FromArguments(command, DevelopmentRun));
+      var packageLocalCache = Services.WindowsPackageData.LocalCache();
+      if (command.Length > 0) PrepareRecovery(AppDataRoot.FromArguments(command, DevelopmentRun, packageLocalCache));
       var activation = Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().GetActivatedEventArgs();
       // Shares use the same root previously selected by an explicit launch.
       var root = DevelopmentRun && activation.Kind == Microsoft.Windows.AppLifecycle.ExtendedActivationKind.ShareTarget && !command.Any(a => a.StartsWith("--user-data-dir", StringComparison.Ordinal))
         ? TerminalDeck.Platform.Windows.Integration.PreviewShareRoot.Resolve()
-        : AppDataRoot.FromArguments(command, DevelopmentRun);
+        : AppDataRoot.FromArguments(command, DevelopmentRun, packageLocalCache);
       PrepareRecovery(root);
       if (Environment.GetEnvironmentVariable("TD_CRASH_DIAGNOSTICS") == "1")
       {

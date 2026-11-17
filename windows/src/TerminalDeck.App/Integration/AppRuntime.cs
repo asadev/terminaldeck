@@ -96,7 +96,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
   public async Task InitializeAsync()
   {
     foreach (var provider in new[] { "claude", "codex", "gemini" })
-      await Accounts.EnsureDefaultAsync(provider, StableChannel.IsStable(AppContext.BaseDirectory));
+      await Accounts.EnsureDefaultAsync(provider, StableChannel.IsStable(AppContext.BaseDirectory) && !StableChannel.IsLegacyRoot(Root, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)));
     foreach (var account in Accounts.List())
       try { await Accounts.RefreshAsync(account.Id); } catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException) { }
     _ = Accounts.WarmModelsAsync();

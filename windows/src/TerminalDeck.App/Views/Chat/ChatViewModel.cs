@@ -12,6 +12,7 @@ public sealed partial class ChatViewModel : INotifyPropertyChanged, IAsyncDispos
   private readonly AccountService? accountModels;
   private Task<IReadOnlyList<ProviderModel>>? modelRead;
   private readonly Action<Action> dispatch;
+  private readonly object refreshGate = new();
   private readonly CancellationTokenSource lifetime = new();
   private Task watching;
   private readonly ChatDraftBuffer draftBuffer;
@@ -69,25 +70,34 @@ public sealed partial class ChatViewModel : INotifyPropertyChanged, IAsyncDispos
     draftBuffer = ChatDraftWorkspace.Open(id); draftChanged = () => dispatch(() => Changed(nameof(Draft))); draftBuffer.Changed += draftChanged;
     sideChanged = () => dispatch(() => Changed(nameof(SideQuestion))); draftBuffer.SideQuestion.Changed += sideChanged;
     controlRequested = control => dispatch(() => { if (!lifetime.IsCancellationRequested) ControlRequested?.Invoke(control); }); draftBuffer.ControlRequested += controlRequested;
-    Snapshot = chats.Get(id); AvailableModels = accountModels?.CachedModels(Snapshot.Definition.AccountId)?.Models ?? []; Refresh(Snapshot); watching = WatchAsync(); _ = ModelsAsync();
+    Snapshot = chats.Get(id); AvailableModels = accountModels?.CachedModels(Snapshot.Definition.AccountId)?.Models ?? []; Refresh(); watching = WatchAsync(); _ = ModelsAsync();
   }
   private async Task WatchAsync()
   {
-    try { await foreach (var chat in chats.WatchAsync(Id, lifetime.Token)) dispatch(() => Refresh(chat)); }
+    try { await foreach (var _ in chats.WatchAsync(Id, lifetime.Token)) dispatch(Refresh); }
     catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
     catch (IOException) { dispatch(() => { Error = "This chat needs to reconnect. Your messages are kept."; Changed(nameof(Error)); }); }
   }
-  private void Refresh(ChatRecord chat)
-  { var accountChanged = Snapshot.Definition.AccountId != chat.Definition.AccountId;
-    Snapshot = chat;
-    if (accountChanged) { AvailableModels = []; _ = ModelsAsync(); }
-    if (unconfirmedSend is { } attempt && chat.Messages.Any(m => m.ClientId == attempt.ClientId)) Acknowledge(attempt);
-    Rows = ChatProjection.Rows(chat); ApplyPendingPermission(); Changed(nameof(Snapshot)); Changed(nameof(Rows)); Changed(nameof(Pending)); Changed(nameof(AccountName)); }
+  private void Refresh()
+  {
+    // A queued watch callback may run after a send has already refreshed the page.
+    // Read the current saved record at application time, never replay the older notification.
+    lock (refreshGate)
+    {
+      if (lifetime.IsCancellationRequested) return;
+      var chat = chats.Get(Id);
+      var accountChanged = Snapshot.Definition.AccountId != chat.Definition.AccountId;
+      Snapshot = chat;
+      if (accountChanged) { AvailableModels = []; _ = ModelsAsync(); }
+      if (unconfirmedSend is { } attempt && chat.Messages.Any(m => m.ClientId == attempt.ClientId)) Acknowledge(attempt);
+      Rows = ChatProjection.Rows(chat); ApplyPendingPermission(); Changed(nameof(Snapshot)); Changed(nameof(Rows)); Changed(nameof(Pending)); Changed(nameof(AccountName));
+    }
+  }
   private void Changed([CallerMemberName] string? property = null) => PropertyChanged?.Invoke(this, new(property));
   public async Task RunAsync(Func<ValueTask> action)
   {
     Error = null; Changed(nameof(Error));
-    try { await action(); Refresh(chats.Get(Id)); }
+    try { await action(); Refresh(); }
     catch (SignInRequiredException)
     { Error = ChatErrors.NotSignedIn(Snapshot.Definition.Provider); Changed(nameof(Error)); }
     catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException or TimeoutException)
