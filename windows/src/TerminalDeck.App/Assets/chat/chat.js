@@ -4,6 +4,8 @@
   const root = document.getElementById('body')
   const frames = new Map()
   const send = value => window.chrome.webview.postMessage({ token: config.token, ...value })
+  // String documents have an opaque origin, where randomUUID is unavailable.
+  const newId = () => Array.from(crypto.getRandomValues(new Uint32Array(4)), word => word.toString(16).padStart(8, '0')).join('')
   const decode = text => new TextDecoder().decode(Uint8Array.from(atob(text), c => c.charCodeAt(0)))
   function theme(value) {
     const changed = config.theme.dark !== value.dark
@@ -17,13 +19,26 @@
   }
   document.documentElement.style.setProperty('--max-visual-height', config.maxVisualHeight + 'px')
   theme(config.theme)
-  const resize = () => send({ type: 'size', height: Math.ceil(root.getBoundingClientRect().height) })
+  const resize = () => {
+    let width
+    if (config.fitContent) {
+      const previous = root.style.width
+      root.style.width = 'max-content'
+      width = Math.ceil(root.getBoundingClientRect().width)
+      root.style.width = previous
+    }
+    send({ type: 'size', height: Math.ceil(root.getBoundingClientRect().height), width })
+  }
   // Measured on DOM changes and timers too: a page that is not on screen (a hidden window, a background
   // check) paints no frame, so a ResizeObserver alone can leave the box at its starting height.
   let resizing = 0
   const soon = () => { if (!resizing) resizing = setTimeout(() => { resizing = 0; resize() }, 30) }
   new ResizeObserver(resize).observe(root)
-  new MutationObserver(soon).observe(root, { subtree: true, childList: true, attributes: true, characterData: true })
+  // Measuring a hugging bubble temporarily changes this root's width. Ignore
+  // that style mutation so measurement cannot schedule itself forever.
+  new MutationObserver(records => {
+    if (records.some(record => record.type !== 'attributes' || record.target !== root || record.attributeName !== 'style')) soon()
+  }).observe(root, { subtree: true, childList: true, attributes: true, characterData: true })
   window.addEventListener('load', soon)
   if (document.fonts) document.fonts.ready.then(soon)
   window.chrome.webview.addEventListener('message', event => {
@@ -47,7 +62,7 @@
   // whether or not the window is on screen. The host still caps it at the visual maximum.
   const bootstrap = `<script>(()=>{let p=0,l=-1;const m=()=>{p=0;const h=document.documentElement.scrollHeight;if(h!==l){l=h;parent.postMessage({deckSize:h},'*')}};const s=()=>{if(!p)p=setTimeout(m,30)};new ResizeObserver(s).observe(document.documentElement);new MutationObserver(s).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});addEventListener('load',s);document.addEventListener('load',s,true);if(document.fonts)document.fonts.ready.then(s);for(const d of [0,150,500,1200,2500,5000])setTimeout(s,d)})();document.addEventListener('click',e=>{const a=e.target.closest('a');if(a){e.preventDefault();parent.postMessage({jsonrpc:'2.0',id:'link-'+Date.now(),method:'ui/open-link',params:{url:a.href}},'*')}});addEventListener('message',e=>{if(e.source!==parent)return;const p=e.data;if(p.method==='ui/notifications/host-context-changed'){for(const [k,v]of Object.entries(p.params.styles.variables))document.documentElement.style.setProperty(k.startsWith('--')?k:'--'+k,v);document.documentElement.style.colorScheme=p.params.theme}});</script>`
   function drawing(host, source, app = null) {
-    const id = crypto.randomUUID()
+    const id = newId()
     const frame = document.createElement('iframe')
     frame.setAttribute('sandbox', 'allow-scripts')
     frame.setAttribute('referrerpolicy', 'no-referrer')
@@ -110,7 +125,7 @@
         const clean = DOMPurify.sanitize(source, { USE_PROFILES: { svg: true, svgFilters: true }, FORBID_TAGS: ['foreignObject', 'script'], FORBID_ATTR: ['href', 'xlink:href'] })
         const img = document.createElement('img'); img.alt = 'SVG drawing'; img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(clean); host.append(img)
       } else {
-        try { const result = await mermaid.render('diagram-' + crypto.randomUUID(), source); host.innerHTML = DOMPurify.sanitize(result.svg, { USE_PROFILES: { svg: true, svgFilters: true } }) }
+        try { const result = await mermaid.render('diagram-' + newId(), source); host.innerHTML = DOMPurify.sanitize(result.svg, { USE_PROFILES: { svg: true, svgFilters: true } }) }
         catch { const error = document.createElement('p'); error.className = 'error'; error.textContent = 'This diagram could not be drawn. Its source is under Code.'; host.append(error) }
       }
     }

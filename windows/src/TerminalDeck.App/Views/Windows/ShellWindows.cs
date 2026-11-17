@@ -99,6 +99,7 @@ public sealed partial class ShellWindow
       ? ShellProjectPicture(project, 14) : null;
     surface.AccountBadge = WindowAccountBadge;
     surface.UsageMeter = WindowUsageMeter;
+    surface.TerminalControls = WindowTerminalControls;
     surface.DeploymentStrip = tab => new Quality.DeploymentStrip(Runtime.Deployments, session: tab.Subject);
     surface.BeginManualSplit = LeaveSwarm;
     surface.DragOutside = id =>

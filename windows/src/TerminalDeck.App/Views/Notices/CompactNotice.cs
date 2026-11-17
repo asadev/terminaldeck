@@ -17,6 +17,7 @@ public sealed class CompactNotice : Grid
   private Grid? host;
   private readonly List<(FrameworkElement Element, long Token)> visibilityWatches = [];
   private FrameworkElement? scope;
+  private int? overlayRow;
   private string message = "";
   private bool open;
   private bool closable = true;
@@ -24,6 +25,9 @@ public sealed class CompactNotice : Grid
   private UIElement? action;
   private InfoBarSeverity severity;
   public FrameworkElement? Scope { get => scope; set { if (scope == value) return; RemoveCard(); scope = value; Refresh(); } }
+  // Conversation notices end inside the transcript row, above the composer and its controls.
+  // Other callers keep the existing whole-surface overlay.
+  public int? OverlayRow { get => overlayRow; set { if (overlayRow == value) return; RemoveCard(); overlayRow = value; Refresh(); } }
   public bool AutoDismiss { get => autoDismiss; set { autoDismiss = value; RestartTimer(); } }
   public bool IsClosable { get => closable; set { closable = value; dismiss.Visibility = value ? Visibility.Visible : Visibility.Collapsed; } }
   public string Message { get => message; set { if (message == value) return; message = value; words.Text = value; Refresh(); RestartTimer(); } }
@@ -87,7 +91,8 @@ public sealed class CompactNotice : Grid
         parent = VisualTreeHelper.GetParent(parent);
       }
       if (host is null) return;
-      SetRowSpan(card, Math.Max(1, host.RowDefinitions.Count)); SetColumnSpan(card, Math.Max(1, host.ColumnDefinitions.Count));
+      SetRow(card, overlayRow is { } row ? Math.Clamp(row, 0, Math.Max(0, host.RowDefinitions.Count - 1)) : 0);
+      SetRowSpan(card, overlayRow is null ? Math.Max(1, host.RowDefinitions.Count) : 1); SetColumnSpan(card, Math.Max(1, host.ColumnDefinitions.Count));
       Canvas.SetZIndex(card, 1000); host.Children.Add(card); host.SizeChanged += HostSizeChanged; FitCard(); ApplyTheme();
       DependencyObject? ancestor = this;
       while (ancestor is FrameworkElement element && ancestor != host)

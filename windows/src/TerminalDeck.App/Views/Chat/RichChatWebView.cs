@@ -19,6 +19,7 @@ internal sealed class RichChatWebView : Grid
   private readonly string dataDirectory;
   private readonly ChatMcpAppContent? app;
   private readonly Func<JsonElement, Task<JsonElement>>? rpc;
+  private readonly bool fitContent;
   private readonly Dictionary<string, int> frames = [];
   private readonly string token = Guid.NewGuid().ToString("N");
   private WebView2? web;
@@ -26,9 +27,9 @@ internal sealed class RichChatWebView : Grid
   private int generation;
   private readonly TextBlock pending = new() { Text = "Drawing message…", Opacity = 0.6, FontSize = 12 };
   internal RichChatWebView(string html, Action<string> copy, Action<string> error, string? dataDirectory = null,
-    ChatMcpAppContent? app = null, Func<JsonElement, Task<JsonElement>>? rpc = null)
+    ChatMcpAppContent? app = null, Func<JsonElement, Task<JsonElement>>? rpc = null, bool fitContent = false)
   {
-    this.html = html; this.copy = copy; this.error = error; this.app = app; this.rpc = rpc;
+    this.html = html; this.copy = copy; this.error = error; this.app = app; this.rpc = rpc; this.fitContent = fitContent;
     this.dataDirectory = dataDirectory ?? Path.Combine(Path.GetTempPath(), "deck-chat-preview");
     MinHeight = 40; HorizontalAlignment = HorizontalAlignment.Stretch;
     Children.Add(pending);
@@ -83,6 +84,7 @@ internal sealed class RichChatWebView : Grid
       await view.EnsureCoreWebView2Async(environment, controller);
       if (generation != ownGeneration) { view.Close(); return; }
       var core = view.CoreWebView2;
+      var documentSource = "";
       core.Settings.AreHostObjectsAllowed = false;
       core.Settings.AreDevToolsEnabled = false;
       core.Settings.AreDefaultContextMenusEnabled = false;
@@ -93,7 +95,7 @@ internal sealed class RichChatWebView : Grid
       ColorScheme(core);
       core.SetVirtualHostNameToFolderMapping("rich-chat.deck.invalid", Path.Combine(AppContext.BaseDirectory, "Assets", "chat"), CoreWebView2HostResourceAccessKind.Allow);
       core.NavigationCompleted += (_, args) => { if (args.IsSuccess && app is null) Post(new { type = "content", html }); };
-      core.NavigationStarting += (_, args) => args.Cancel = args.Uri != "about:blank";
+      core.NavigationStarting += (_, args) => args.Cancel = !RichChatDocument.AllowsNavigation(args.Uri, documentSource);
       core.FrameNavigationStarting += (_, args) => args.Cancel = args.Uri is not ("about:srcdoc" or "about:blank");
       core.NewWindowRequested += (_, args) => args.Handled = true;
       core.PermissionRequested += (_, args) => args.State = CoreWebView2PermissionState.Deny;
@@ -110,7 +112,7 @@ internal sealed class RichChatWebView : Grid
       };
       core.WebMessageReceived += async (_, args) =>
       {
-        if (generation != ownGeneration || args.Source != "about:blank") return;
+        if (generation != ownGeneration || !RichChatDocument.IsMessageSource(args.Source, documentSource)) return;
         try
         {
           using var document = JsonDocument.Parse(args.WebMessageAsJson);
@@ -119,6 +121,7 @@ internal sealed class RichChatWebView : Grid
           switch (ChatLineProtocol.S(message, "type"))
           {
             case "size":
+              if (fitContent && message.TryGetProperty("width", out var preferred) && preferred.TryGetDouble(out var width) && double.IsFinite(width)) Width = Math.Clamp(width + 2, 40, 520);
               if (message.TryGetProperty("height", out var size) && size.TryGetDouble(out var height) && double.IsFinite(height)) view.Height = Math.Clamp(height + 2, 40, 30000);
               pending.Visibility = Visibility.Collapsed; break;
             case "copy": copy(ChatLineProtocol.S(message, "text")); break;
@@ -132,10 +135,12 @@ internal sealed class RichChatWebView : Grid
         }
         catch (Exception ex) when (ex is not OutOfMemoryException) { error("This message action could not finish. " + ex.Message); }
       };
-      var payload = JsonSerializer.Serialize(new { html, app, token, theme = Theme(), maxVisualHeight = Math.Max(160, (XamlRoot?.Size.Height ?? 680) * 0.7) }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+      var payload = JsonSerializer.Serialize(new { html, app, token, fitContent, theme = Theme(), maxVisualHeight = Math.Max(160, (XamlRoot?.Size.Height ?? 680) * 0.7) }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
       var csp = "default-src 'none'; script-src 'unsafe-inline' " + AssetsOrigin + " https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'unsafe-inline' " + AssetsOrigin + " https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; img-src https: http: data: blob:; font-src data: " + AssetsOrigin + "; frame-src about: blob:; connect-src 'none'; base-uri 'none'; object-src 'none'; form-action 'none'";
-      view.NavigateToString("<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"" + csp + "\"><meta name=\"referrer\" content=\"no-referrer\"><link rel=\"stylesheet\" href=\"" + AssetsOrigin + "/chat.css\"><link rel=\"stylesheet\" href=\"" + AssetsOrigin + "/katex/dist/katex.min.css\"><link id=\"code-theme\" rel=\"stylesheet\" href=\"" + AssetsOrigin + "/cdn-assets/styles/github.min.css\"><script id=\"payload\" type=\"application/json\">" + payload + "</script><main id=\"body\"></main>" +
-        string.Join("", new[] { "dompurify/dist/purify.min.js", "cdn-assets/highlight.min.js", "katex/dist/katex.min.js", "mermaid/dist/mermaid.min.js", "chat.js" }.Select(file => "<script src=\"" + AssetsOrigin + "/" + file + "\"></script>")));
+      var documentHtml = "<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"" + csp + "\"><meta name=\"referrer\" content=\"no-referrer\"><link rel=\"stylesheet\" href=\"" + AssetsOrigin + "/chat.css\"><link rel=\"stylesheet\" href=\"" + AssetsOrigin + "/katex/dist/katex.min.css\"><link id=\"code-theme\" rel=\"stylesheet\" href=\"" + AssetsOrigin + "/cdn-assets/styles/github.min.css\"><script id=\"payload\" type=\"application/json\">" + payload + "</script><main id=\"body\"></main>" +
+        string.Join("", new[] { "dompurify/dist/purify.min.js", "cdn-assets/highlight.min.js", "katex/dist/katex.min.js", "mermaid/dist/mermaid.min.js", "chat.js" }.Select(file => "<script src=\"" + AssetsOrigin + "/" + file + "\"></script>"));
+      documentSource = RichChatDocument.Source(documentHtml);
+      core.Navigate(documentSource);
     }
     catch (Exception ex) when (ex is not OutOfMemoryException)
     { pending.Text = "This message could not be drawn. Use Copy to read its source."; error("The chat renderer could not start. " + ex.Message); }

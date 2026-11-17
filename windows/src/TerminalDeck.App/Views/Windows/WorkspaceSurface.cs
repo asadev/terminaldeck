@@ -17,6 +17,7 @@ internal sealed partial class WorkspaceSurface : Grid
   public Func<WorkspaceTab, FrameworkElement>? UsageReport { get; set; }
   // The header's usage meter (context strip + plan ring, hover cards), first in the controls as on the Mac.
   public Func<WorkspaceTab, FrameworkElement?>? UsageMeter { get; set; }
+  public Func<WorkspaceTab, FrameworkElement?>? TerminalControls { get; set; }
   public Func<WorkspaceTab, FrameworkElement?>? DeploymentStrip { get; set; }
   public Action<WorkspaceTab>? OpenDevice { get; set; }
   public Func<bool>? IsModalOpen { get; set; }
@@ -611,6 +612,7 @@ internal sealed partial class WorkspaceSurface : Grid
           if (tab.Kind is "chat" or "terminal")
             location.Children.Add(new TerminalDeck.App.Views.WhatsApp.WhatsAppChip(TerminalDeck.Core.WhatsApp.WhatsAppReceiver.Session(tab.Subject, tab.Title), separated: location.Children.Count > 0));
           if (UsageMeter?.Invoke(tab) is { } meter) controls.Children.Add(meter);
+          if (TerminalControls?.Invoke(tab) is { } terminalControls) controls.Children.Add(terminalControls);
           identity.SizeChanged += (_, _) =>
           {
             chip.MaxWidth = Math.Max(24, Math.Min(150, identity.ActualWidth * 0.45));

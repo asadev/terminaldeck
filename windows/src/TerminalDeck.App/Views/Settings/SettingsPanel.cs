@@ -346,9 +346,7 @@ public sealed partial class SettingsPanel : Grid
     return new Border { CornerRadius = new CornerRadius(6), Child = picture };
   }
 
-  private static FrameworkElement AboutPage() => Page(GroupRows([SettingRow(TerminalDeck.Core.Brand.Name, "",
-    // The installed package's version, the same build General and Windows show (never the 1.0.0 assembly stamp).
-    StateText(Services.WindowsUpdateStatus.Version()))]));
+  private FrameworkElement AboutPage() => AboutDetailsPage();
 
   // One scroll area fills the right side (its bar at the window's edge); the column is centred.
   internal static FrameworkElement Page(FrameworkElement content)

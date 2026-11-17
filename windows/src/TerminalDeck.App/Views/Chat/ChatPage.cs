@@ -213,6 +213,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
       var rowKey = row.Kind + ":" + row.Id;
       var message = row.Kind == "user" ? Model.Snapshot.Messages.FirstOrDefault(m => m.ClientId == row.ClientId) : null;
       var mediaKey = message is null ? "" : message.State + ":" + ChatSessions.Unconfirmed(Model.Snapshot, message) + ":" + string.Join(',', message.Media.Select(m => m.Id));
+      if (row.Kind is "user" or "assistant") mediaKey += ":branch:" + CanBranchMessages();
       var query = searchBar.Visibility == Visibility.Visible ? searchBox.Text : "";
       void AddRow(FrameworkElement element)
       { desired.Add(element); messageElements[rowKey] = element; rowCache[rowKey] = new(row, query, Model.Snapshot.Stopping, mediaKey, element); }
@@ -235,7 +236,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
       if (searchBar.Visibility == Visibility.Visible && searchBox.Text.Length > 0) content.Children.Add(SearchText(row.Text));
       else if (row.Kind is "assistant" or "user")
       {
-        var rich = (RichChatWebView)ChatMarkdownView.Render(row.Text, CopyText, ShowLinkError, Model.Snapshot.Definition.Cwd, Model.DataDirectory);
+        var rich = (RichChatWebView)ChatMarkdownView.Render(row.Text, CopyText, ShowLinkError, Model.Snapshot.Definition.Cwd, Model.DataDirectory, fitContent: row.Kind == "user");
         richMessages[rowKey] = rich; content.Children.Add(rich);
       }
       else content.Children.Add(Words(row.Text));
@@ -244,17 +245,6 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
         message = Model.Snapshot.Messages.FirstOrDefault(m => m.ClientId == client);
         foreach (var image in message?.Media ?? []) content.Children.Add(ImagePreview(image));
         if (message?.State == ChatMessageState.Uncertain) content.Children.Add(Words(ChatSessions.Unconfirmed(Model.Snapshot, message) ? "Delivery is being checked. This message will not be sent twice." : "Kept without resending. Delivery remains uncertain.", 12));
-      }
-      if (row.Kind is "user" or "assistant")
-      {
-        var copy = Button("Copy", () => { CopyText(Model.Rows.FirstOrDefault(r => r.Id == row.Id && r.Kind == row.Kind)?.Text ?? row.Text); return Task.CompletedTask; }); copy.MinHeight = 28; copy.FontSize = 11;
-        var at = Model.Snapshot.Events.FirstOrDefault(e => e.Id == row.Id)?.At;
-        if (at is { } time && time != default) ToolTipService.SetToolTip(content, time.ToLocalTime().ToString("F"));
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        actions.Children.Add(copy);
-        actions.Children.Add(Button("Rewind", () => BranchMessageAsync(row, true)));
-        actions.Children.Add(Button("Fork", () => BranchMessageAsync(row, false)));
-        content.Children.Add(actions);
       }
       if (row.Kind == "approval")
       {
@@ -285,6 +275,13 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
       }
       if (row.Kind == "user") foreach (var words in content.Children.OfType<TextBlock>()) words.Style = (Style)Resources["UserText"];
       FrameworkElement card = row.Kind == "assistant" ? ChatAppearance.Reply(content, Model.Snapshot.Definition.Provider) : Card(content, row.Kind == "user");
+      if (row.Kind is "user" or "assistant")
+      {
+        var messageFrame = new StackPanel { Spacing = 4, HorizontalAlignment = HorizontalAlignment.Stretch };
+        messageFrame.Children.Add(card);
+        messageFrame.Children.Add(MessageActions(row));
+        card = messageFrame;
+      }
       AutomationProperties.SetName(card, row.Kind + ": " + row.Text); AddRow(card);
     }
     RenderPending();
@@ -351,6 +348,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     var width = Math.Max(0, Math.Min(688, messages.Width));
     if (double.IsNaN(width)) return;
     foreach (var row in messages.Children.OfType<FrameworkElement>()) row.MaxWidth = row is Border && row.HorizontalAlignment == HorizontalAlignment.Right ? Math.Min(520, width) : width;
+    foreach (var (key, rich) in richMessages) if (key.StartsWith("user:", StringComparison.Ordinal)) rich.MaxWidth = Math.Max(40, Math.Min(520, width) - 28);
     foreach (var row in pending.Children.OfType<FrameworkElement>()) row.MaxWidth = Math.Min(520, width);
   }
   private void RenderPending()
@@ -414,7 +412,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     else if (Model.Error is not null) actions.Children.Add(Button("Dismiss", () => { Model.ClearError(); return Task.CompletedTask; }));
     else actions.Children.Add(Button("Retry", () => Model.RetryAsync()));
     // A "Dismiss" action already clears the error; never show a second close control.
-    var notice = new Notices.CompactNotice { Message = text, Severity = InfoBarSeverity.Error, ActionButton = actions.Children.Count > 0 ? actions : null, Scope = this, IsOpen = true, IsClosable = !actions.Children.OfType<Button>().Any(b => Equals(b.Content, "Dismiss")) };
+    var notice = new Notices.CompactNotice { Message = text, Severity = InfoBarSeverity.Error, ActionButton = actions.Children.Count > 0 ? actions : null, Scope = this, OverlayRow = 1, IsOpen = true, IsClosable = !actions.Children.OfType<Button>().Any(b => Equals(b.Content, "Dismiss")) };
     AutomationProperties.SetAutomationId(notice, "chat.error"); problem.Children.Add(notice);
   }
   private FrameworkElement ImagePreview(ChatMedia media)
@@ -432,7 +430,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
           problem.Children.Clear();
-          problem.Children.Add(new Notices.CompactNotice { Message = ex.Message, Severity = InfoBarSeverity.Error, Scope = this, IsOpen = true, IsClosable = true });
+          problem.Children.Add(new Notices.CompactNotice { Message = ex.Message, Severity = InfoBarSeverity.Error, Scope = this, OverlayRow = 1, IsOpen = true, IsClosable = true });
         }
       };
       return document;

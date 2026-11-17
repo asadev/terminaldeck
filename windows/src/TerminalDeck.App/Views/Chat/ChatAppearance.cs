@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Markup;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using TerminalDeck.App.Shell;
 
 namespace TerminalDeck.App.Views.Chat;
 
@@ -26,6 +27,20 @@ internal static class ChatAppearance
     button.Padding = new Thickness(0); button.CornerRadius = new CornerRadius(16);
     button.Content = new DeckIcon { FontFamily = TerminalDeck.App.Views.DeckFonts.Icons, Glyph = glyph, FontSize = 14 };
     AutomationProperties.SetName(button, label); ToolTipService.SetToolTip(button, label);
+  }
+  public static Button MessageAction(string glyph, string label, Func<Task> run)
+  {
+    var button = new Button();
+    IconButton(button, glyph, label);
+    button.Width = button.Height = button.MinWidth = button.MinHeight = 26;
+    button.CornerRadius = new CornerRadius(6);
+    if (button.Content is DeckIcon icon)
+    {
+      icon.FontSize = 12;
+      icon.SetResourceReference(Control.ForegroundProperty, "DeckSecondaryInkBrush");
+    }
+    button.Click += async (_, _) => await run();
+    return button;
   }
   public static Expander ToolStep(string text, string details, bool working, bool failed = false)
   {
