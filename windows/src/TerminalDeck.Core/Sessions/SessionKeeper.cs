@@ -387,6 +387,17 @@ public sealed class SessionKeeper
   // conversation (before 2 Nov): find it once, so this update resumes it too.
   private SessionRecord CatchUpHandedOver(SessionRecord row)
   {
+    // A previous package could not see a known Claude transcript because its
+    // CLI home was resolved under virtualized app state. Recheck that exact
+    // conversation after the home repair; never replay its original brief.
+    if (!row.HasStarted && !row.Resume && row.Definition.Provider == "claude" && row.Definition.Purpose is null &&
+        row.Definition.ConversationId is not null && row.ReplayPrefix.Contains("[Terminal Deck was updated.", StringComparison.Ordinal) &&
+        conversationFiles?.CanResume(row.Definition) == true)
+    {
+      var resumed = row with { Resume = true };
+      Commit(resumed, "status");
+      return resumed;
+    }
     if (row.HasStarted || row.Resume || row.Definition.ConversationId is not null || row.Definition.Purpose is not null ||
         row.Definition.Provider is not ("claude" or "codex") || !row.ReplayPrefix.Contains("[Terminal Deck was updated.", StringComparison.Ordinal)) return row;
     var found = FollowConversation(row, null);
