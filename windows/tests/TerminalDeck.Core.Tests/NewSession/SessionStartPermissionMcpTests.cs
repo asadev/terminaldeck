@@ -68,7 +68,7 @@ public sealed class SessionStartPermissionMcpTests
     public List<AgentLaunchPlan> Plans { get; } = [];
     public FakePermission Permissions { get; } = new();
     public McpDoor Door { get; private set; } = null!;
-    public string Caller { get; private set; } = "";
+    public Guid Caller { get; private set; }
 
     public static async Task<Fixture> CreateAsync(string provider)
     {
