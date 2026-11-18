@@ -211,6 +211,7 @@ public sealed partial class SettingsPane
       parts.Children.Add(part);
     }
     return DirectionPage([
+      ("New sessions start with", "Shared with Coding AIs. Used when an agent or task has no explicit choice; running sessions keep their choices.", AgentLaunchDefaultRows()),
       ("Defaults", null, new[] {
         SettingsPanel.SettingRow("Helper AI", "The coding AI used when a hand asks for help.", helper),
         SettingsPanel.SettingRow("Helper model", "Model name used for new helpers. Empty means the AI's default.", DirectionAction("Edit…", () => EditTemplateTextAsync(category, "Helper model", t => t.HelperModel, (t, value) => t with { HelperModel = value }, 160))),
@@ -226,6 +227,84 @@ public sealed partial class SettingsPane
         SettingsPanel.SettingRow("Checklist", "Checks a hand follows before finishing its work.", DirectionAction("Edit…", () => EditTemplateTextAsync(category, "Checklist", t => t.Checklist, (t, value) => t with { Checklist = value }, 20000)))
       })
     ], chooser);
+  }
+
+  private FrameworkElement[] AgentLaunchDefaultRows()
+  {
+    var rows = new List<FrameworkElement>();
+    foreach (var provider in new[] { "claude", "codex", "gemini" })
+    {
+      var saved = TerminalDeck.Core.Settings.LaunchDefaults.For(provider, runtime.General.Read());
+      var preferred = runtime.Accounts.Preferred(provider);
+      var models = TerminalDeck.Core.Accounts.ModelCatalog.Merge(provider, runtime.Accounts.InstantModels(provider, preferred?.Id).Models, saved.Model).ToList();
+      var model = new ComboBox { Header = "Model", MinWidth = 160 };
+      foreach (var choice in models)
+      {
+        var item = new ComboBoxItem { Content = choice.Name, Tag = choice.Id };
+        model.Items.Add(item); if (choice.Id == saved.Model) model.SelectedItem = item;
+      }
+      var effort = new ComboBox { Header = "Effort", MinWidth = 100 };
+      void ReadEfforts(string? wanted)
+      {
+        var id = (model.SelectedItem as ComboBoxItem)?.Tag as string;
+        var levels = TerminalDeck.Core.Accounts.ModelEfforts.For(provider, models.FirstOrDefault(m => m.Id == id));
+        effort.ItemsSource = levels;
+        effort.SelectedItem = wanted;
+        if (effort.SelectedIndex < 0) effort.SelectedItem = TerminalDeck.Core.Accounts.ModelCatalog.TopEffort(provider);
+        if (effort.SelectedIndex < 0 && levels.Count > 0) effort.SelectedIndex = 0;
+      }
+      ReadEfforts(saved.Effort);
+      var saving = false;
+      async Task Save()
+      {
+        if (saving || model.SelectedItem is not ComboBoxItem { Tag: string id }) return;
+        saving = true;
+        try { await DirectionRunAsync(() => { runtime.General.Save(TerminalDeck.Core.Settings.LaunchDefaults.With(runtime.General.Read(), provider, id, effort.SelectedItem as string)); return Task.CompletedTask; }); }
+        finally { saving = false; }
+      }
+      model.SelectionChanged += async (_, _) => { if (saving) return; saving = true; try { ReadEfforts(effort.SelectedItem as string); } finally { saving = false; } await Save(); };
+      effort.SelectionChanged += async (_, _) => await Save();
+      AutomationProperties.SetAutomationId(model, "agents.launchModel." + provider);
+      AutomationProperties.SetAutomationId(effort, "agents.launchEffort." + provider);
+      AutomationProperties.SetName(model, AgentSeats.ProviderName(provider) + " default model");
+      AutomationProperties.SetName(effort, AgentSeats.ProviderName(provider) + " default effort");
+      var controls = new StackPanel { Spacing = 8 };
+      controls.Children.Add(model);
+      if (provider != "gemini") controls.Children.Add(effort);
+      var modes = TerminalDeck.Core.Chats.ChatPermissionModes.Supported(provider);
+      var permission = new ComboBox { Header = "Before it changes files", MinWidth = 160 };
+      permission.Items.Add("Use global default");
+      foreach (var mode in modes) permission.Items.Add(TerminalDeck.Core.Chats.ChatPermissionModes.Label(mode));
+      void ReadPermission()
+      {
+        var explicitChoice = runtime.General.Read().LaunchPermissions?.FirstOrDefault(p => p.Provider == provider);
+        permission.SelectedIndex = explicitChoice is null ? 0 : modes.ToList().IndexOf(explicitChoice.PermissionMode) + 1;
+      }
+      ReadPermission();
+      var changingPermission = false;
+      permission.SelectionChanged += async (_, _) =>
+      {
+        if (changingPermission || permission.SelectedIndex < 0) return;
+        changingPermission = true; permission.IsEnabled = false;
+        try
+        {
+          TerminalDeck.Core.Mcp.AiPermissionMode? selected = permission.SelectedIndex == 0 ? null : modes[permission.SelectedIndex - 1];
+          var effective = TerminalDeck.Core.Settings.LaunchPermissions.For(provider, TerminalDeck.Core.Settings.LaunchPermissions.With(runtime.General.Read(), provider, selected));
+          if (effective == TerminalDeck.Core.Mcp.AiPermissionMode.Bypass && runtime.General.NewChatPermission(provider) != effective)
+          {
+            var confirm = new ContentDialog { XamlRoot = DialogRoot, RequestedTheme = ActualTheme, Title = "Allow Bypass permissions?", Content = "New sessions skip the coding AI's permission questions. Saved app access and server confirmations still apply.", PrimaryButtonText = "Allow Bypass", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close };
+            if (await confirm.ShowAsync() != ContentDialogResult.Primary) return;
+          }
+          await DirectionRunAsync(() => { runtime.General.Save(TerminalDeck.Core.Settings.LaunchPermissions.With(runtime.General.Read(), provider, selected)); return Task.CompletedTask; });
+        }
+        finally { ReadPermission(); permission.IsEnabled = true; changingPermission = false; }
+      };
+      AutomationProperties.SetAutomationId(permission, "agents.launchPermission." + provider);
+      AutomationProperties.SetName(permission, AgentSeats.ProviderName(provider) + " default permission");
+      controls.Children.Add(permission);
+      rows.Add(SettingsPanel.SettingRow(AgentSeats.ProviderName(provider), "Choices for new sessions without their own choice. The global permission default is set in General.", controls));
+    }
+    return rows.ToArray();
   }
 
   // Coding AIs > Custom terminal CLIs, a second page of this window (15 Nov), not its own window.

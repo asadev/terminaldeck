@@ -97,12 +97,25 @@ public sealed partial class HootService : IHoot, IAsyncDisposable
     try
     {
       RequireIdle();
-      if (state.ChatId is { } id && state.Settings is { } prior &&
-          prior.Provider == settings.Provider && prior.AccountId == settings.AccountId &&
-          prior.Folder == settings.Folder && prior.PermissionMode == settings.PermissionMode)
+      if (state.ChatId is { } conversation && state.Settings is { } previous &&
+          previous.Provider == settings.Provider && previous.Folder == settings.Folder)
       {
-        if (prior.Options != settings.Options) await chats.SetOptionsAsync(id, settings.Options, cancellationToken);
-        Save(state with { Settings = settings with { RefreshMinutes = 0, RefreshAfterTurns = 0 }, Problem = null });
+        var effectiveOptions = settings.Options == previous.Options ? chats.Get(conversation).Definition.Options : settings.Options;
+        // Reuse the chat's transactional switch instead of discarding its provider
+        // conversation whenever the person chooses another account for the same AI.
+        try
+        {
+          if (previous.AccountId != settings.AccountId) await chats.SetAccountAsync(conversation, settings.AccountId, cancellationToken);
+          if (chats.Get(conversation).Definition.Options != effectiveOptions) await chats.SetOptionsAsync(conversation, effectiveOptions, cancellationToken);
+          if (chats.Get(conversation).Definition.PermissionMode != settings.PermissionMode) await chats.SetPermissionAsync(conversation, settings.PermissionMode, cancellationToken);
+        }
+        catch
+        {
+          var actual = chats.Get(conversation).Definition;
+          Save(state with { Settings = previous with { AccountId = actual.AccountId, Options = actual.Options, PermissionMode = actual.PermissionMode } });
+          throw;
+        }
+        Save(state with { Settings = settings with { Options = effectiveOptions, RefreshMinutes = 0, RefreshAfterTurns = 0 }, Problem = null });
         return;
       }
       await RetireAsync(cancellationToken);

@@ -53,8 +53,10 @@ public sealed class AccountSwitchCoordinator
     await gate.WaitAsync(cancellationToken);
     try
     {
-      if (journal.Entries.Any(e => e.State == SwitchState.Pending && e.Plan.Before.SessionId == sessionId))
-        throw new InvalidOperationException("This session has an unfinished account switch. Recover it first.");
+      var pending = journal.Entries.Where(e => e.State == SwitchState.Pending && e.Plan.Before.SessionId == sessionId).ToArray();
+      foreach (var entry in pending) await CompleteAsync(entry.Plan, cancellationToken);
+      if (pending.LastOrDefault() is { Plan: var recovered } && recovered.After.AccountId == accounts.Get(destination).Id &&
+          await runtime.ReadAsync(sessionId, cancellationToken) == recovered.After) return recovered;
       var plan = await PlanAsync(sessionId, destination, cancellationToken);
       Save(new(plan, SwitchState.Pending));
       await CompleteAsync(plan, cancellationToken);

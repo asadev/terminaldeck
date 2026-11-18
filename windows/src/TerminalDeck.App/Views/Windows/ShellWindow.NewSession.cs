@@ -136,7 +136,7 @@ public sealed partial class ShellWindow
       var current = await Runtime.Accounts.RefreshAsync(accountId, ct);
       if (!current.SignedIn)
       {
-        await Runtime.Accounts.SignInAsync(current.Id, folder, ct);
+        await RenewCodingAccountAsync(current.Id, folder, ct);
         current = await Runtime.Accounts.RefreshAsync(current.Id, ct);
         if (!current.SignedIn) throw new InvalidOperationException("Not signed in. Your message and choices are kept here.");
       }

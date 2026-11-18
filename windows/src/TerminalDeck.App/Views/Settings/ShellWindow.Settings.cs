@@ -25,7 +25,7 @@ public sealed partial class ShellWindow
   {
     settingsAppearance = new(dataRoot, "appearance");
     InitializeSettingsGeometry();
-    Runtime.Accounts.Changed += () => DispatcherQueue.TryEnqueueHandled(RenderWindows);
+    Runtime.Accounts.Changed += () => DispatcherQueue.TryEnqueueHandled(() => { RenderWindows(); hootPage?.RefreshAccountLabels(); });
     try { Root.RequestedTheme = ParseSettingsTheme(settingsAppearance.Load()?.Theme ?? "system"); }
     catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or ArgumentException)
     { Model.Notice = "The saved appearance could not be read. Choose it again in Settings."; }

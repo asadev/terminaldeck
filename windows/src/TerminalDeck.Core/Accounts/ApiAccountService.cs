@@ -43,12 +43,15 @@ public sealed class ApiAccountService(AccountService accounts, AccountCredential
     string? key = null;
     if (connection.RequiresKey)
     {
-      var bytes = connection.CredentialReference is null ? null : await credentials.ReadAsync(connection.CredentialReference, ct);
-      if (bytes is null) return Store(row, connection with { CheckState = "needs-key", CheckDetail = null, CheckedAt = DateTimeOffset.UtcNow });
+      byte[]? bytes;
+      try { bytes = connection.CredentialReference is null ? null : await credentials.ReadAsync(connection.CredentialReference, ct); }
+      catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
+      { return await StoreAsync(row, connection with { CheckState = "unreadable", CheckDetail = null, CheckedAt = DateTimeOffset.UtcNow }, ct); }
+      if (bytes is null) return await StoreAsync(row, connection with { CheckState = "needs-key", CheckDetail = null, CheckedAt = DateTimeOffset.UtcNow }, ct);
       key = Encoding.UTF8.GetString(bytes);
     }
     var (state, detail) = await ApiKeyCheck.RunAsync(row.Provider, connection, key, client, ct);
-    return Store(row, connection with { CheckState = state, CheckDetail = detail, CheckedAt = DateTimeOffset.UtcNow });
+    return await StoreAsync(row, connection with { CheckState = state, CheckDetail = detail, CheckedAt = DateTimeOffset.UtcNow }, ct);
   }
 
   /// Keys travel: a Remove pressed in the app (or asked by an AI tool) goes EVERYWHERE through the saved passwords'
@@ -83,6 +86,7 @@ public sealed class ApiAccountService(AccountService accounts, AccountCredential
     "no-access" => "No access" + (connection.CheckDetail is { Length: > 0 } a ? ": " + a : ""),
     "unavailable" => "Couldn’t check" + (connection.CheckDetail is { Length: > 0 } u ? ": " + u : ""),
     "needs-key" => "Needs key",
+    "unreadable" => "Windows could not open the saved key. Edit API key to replace it.",
     _ => connection.Configured ? "Not checked" : "Needs key"
   };
 
@@ -96,7 +100,15 @@ public sealed class ApiAccountService(AccountService accounts, AccountCredential
     if (oldReference is not null && oldReference != connection.CredentialReference) await credentials.DeleteAsync(oldReference, ct);
     return await accounts.SetApiStateAsync(row.Id, connection.Configured, connection.CredentialReference, ct);
   }
-  private ApiConnection Store(AccountProfile row, ApiConnection connection) { ApiAccountFiles.Write(root, row.HomeId, connection); return connection; }
+  public static bool CanUse(ApiConnection? connection) => connection is { Configured: true } && connection.CheckState is not ("invalid" or "no-access" or "needs-key" or "unreadable");
+  private async ValueTask<ApiConnection> StoreAsync(AccountProfile row, ApiConnection connection, CancellationToken ct)
+  {
+    ApiAccountFiles.Write(root, row.HomeId, connection);
+    // Pickers, session starts and MCP must agree with the result shown in Settings.
+    // A network outage is not a revoked key; only a definite refusal blocks use.
+    await accounts.SetApiStateAsync(row.Id, CanUse(connection), connection.CredentialReference, ct);
+    return connection;
+  }
   private static ApiConnection Connection(ApiAccountDraft draft) => new(draft.Kind, Blank(draft.BaseUrl), Blank(draft.WorkspaceId), Blank(draft.Model));
   private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
   private static void Guard(string name, ApiAccountDraft draft, string? key)

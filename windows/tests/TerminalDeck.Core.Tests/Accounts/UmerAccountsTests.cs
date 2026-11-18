@@ -93,7 +93,10 @@ public sealed class UmerAccountsTests : IDisposable
     var api = new ApiAccountService(accounts, new AccountCredentials(new TestSecretStore(), root), root, new HttpClient(new Answer(code)));
     var row = await api.AddAsync("codex", "OpenAI", new(ApiKinds.OpenAi), "sk-proj-abcdefgh");
     Assert.StartsWith(expected, ApiAccountService.Status(await api.CheckAsync(row.Id)));
-    Assert.NotNull(api.Read(row.Id)!.CredentialReference); Assert.True(accounts.Get(row.Id).SignedIn);
+    Assert.NotNull(api.Read(row.Id)!.CredentialReference);
+    Assert.Equal(code == HttpStatusCode.InternalServerError, accounts.Get(row.Id).SignedIn);
+    if (code != HttpStatusCode.InternalServerError)
+      await Assert.ThrowsAsync<ApiAccountUnavailableException>(async () => await accounts.RequireSignedInAsync(row.Id));
   }
   [Fact] public void CodexCompatibleServerUsesItsOwnProviderAndLocalNeedsNoKey()
   {

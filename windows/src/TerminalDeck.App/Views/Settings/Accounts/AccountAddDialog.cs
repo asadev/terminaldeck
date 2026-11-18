@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Automation;
 using TerminalDeck.Core.Accounts;
 
 namespace TerminalDeck.App.Views;
@@ -17,10 +18,15 @@ public sealed partial class SettingsPane
     var connection = new ComboBox { Header = "Connection", ItemsSource = new[] { "Sign in (subscription)", "API key" }, SelectedIndex = 0, HorizontalAlignment = HorizontalAlignment.Stretch };
     var name = new TextBox { Header = "Account name", MaxLength = 80, PlaceholderText = "Work, Personal, Team…" };
     var note = Description("");
-    var error = new Notices.CompactNotice { Severity = InfoBarSeverity.Error };
+    var error = new Notices.CompactNotice { Severity = InfoBarSeverity.Error, AutoDismiss = false };
     var stack = new StackPanel { Spacing = 16 };
     foreach (var control in new UIElement[] { provider, connection, name, note, error }) stack.Children.Add(control);
     var dialog = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = "Add account", Content = stack, PrimaryButtonText = "Sign in", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Primary, IsPrimaryButtonEnabled = false };
+    AutomationProperties.SetAutomationId(dialog, "accounts.add.dialog");
+    AutomationProperties.SetAutomationId(provider, "accounts.add.provider");
+    AutomationProperties.SetAutomationId(connection, "accounts.add.connection");
+    AutomationProperties.SetAutomationId(name, "accounts.add.name");
+    AutomationProperties.SetAutomationId(error, "accounts.add.outcome");
     void Update()
     {
       var ai = providers[Math.Max(0, provider.SelectedIndex)]; var api = connection.SelectedIndex == 1;
@@ -32,9 +38,11 @@ public sealed partial class SettingsPane
     }
     provider.SelectionChanged += (_, _) => Update(); connection.SelectionChanged += (_, _) => Update();
     name.TextChanged += (_, _) => dialog.IsPrimaryButtonEnabled = !string.IsNullOrWhiteSpace(name.Text) && !name.Text.Any(char.IsControl);
-    AccountProfile? created = null; var wantsApi = false;
+    AccountProfile? created = null; var wantsApi = false; var adding = false;
     dialog.PrimaryButtonClick += async (_, args) =>
     {
+      if (adding) { args.Cancel = true; return; }
+      adding = true; dialog.IsPrimaryButtonEnabled = false;
       var deferral = args.GetDeferral();
       try
       {
@@ -42,7 +50,7 @@ public sealed partial class SettingsPane
         if (!wantsApi) created = await runtime.Accounts.CreateAsync(providers[provider.SelectedIndex], name.Text);
       }
       catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException) { args.Cancel = true; error.Text = "The account could not be added. Choose a short account name and try again."; }
-      finally { deferral.Complete(); }
+      finally { adding = false; dialog.IsPrimaryButtonEnabled = !string.IsNullOrWhiteSpace(name.Text); deferral.Complete(); }
     };
     AutoName = ""; Update();
     AddAccountDialogForProof = dialog;
@@ -74,7 +82,7 @@ public sealed partial class SettingsPane
     var baseUrl = new TextBox { Header = "Base URL · optional", Text = existing?.BaseUrl ?? "", PlaceholderText = providerId == "codex" ? "https://… or http://localhost:…/v1" : "https://…" };
     var workspace = new TextBox { Header = "Workspace ID · optional", Text = existing?.WorkspaceId ?? "", Visibility = providerId == "claude" ? Visibility.Visible : Visibility.Collapsed };
     var modelBox = new TextBox { Header = "Model · optional", Text = existing?.Model ?? "", PlaceholderText = ModelCatalog.Top(providerId)?.Id ?? "" };
-    var error = new Notices.CompactNotice { Severity = InfoBarSeverity.Error };
+    var error = new Notices.CompactNotice { Severity = InfoBarSeverity.Error, AutoDismiss = false };
     var form = new StackPanel { Spacing = 14 };
     foreach (var control in new UIElement[] { Description("For " + AccountMcp.AgentName(providerId) + ". The key is stored in Windows Credential Manager and only given to this account’s own sessions."), kind, key, baseUrl, workspace, modelBox, error }) form.Children.Add(control);
     void Update()
@@ -86,27 +94,60 @@ public sealed partial class SettingsPane
     kind.SelectionChanged += (_, _) => Update(); Update();
     var dialog = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = accountId is null ? "Add API account" : "Edit API connection and key", Content = new ScrollViewer { Content = form, MaxHeight = 480 },
       PrimaryButtonText = accountId is null ? "Add account" : "Save", SecondaryButtonText = "Save and check key", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Primary };
+    AutomationProperties.SetAutomationId(dialog, "accounts.api.dialog");
+    AutomationProperties.SetAutomationId(kind, "accounts.api.kind");
+    AutomationProperties.SetAutomationId(key, "accounts.api.key");
+    AutomationProperties.SetAutomationId(baseUrl, "accounts.api.baseUrl");
+    AutomationProperties.SetAutomationId(workspace, "accounts.api.workspace");
+    AutomationProperties.SetAutomationId(modelBox, "accounts.api.model");
+    AutomationProperties.SetAutomationId(error, "accounts.api.outcome");
     var check = false;
-    async Task<bool> SaveAsync()
+    var savedAny = false;
+    var submitting = false;
+    async Task SaveAsync()
     {
       var draft = new ApiAccountDraft(kinds[Math.Max(0, kind.SelectedIndex)].Kind, baseUrl.Text, workspace.Text, modelBox.Text);
       var secret = key.Visibility == Visibility.Visible ? key.Password : null;
       var saved = accountId is null ? await runtime.ApiAccounts.AddAsync(providerId, newName ?? NextName(providerId, true), draft, secret)
         : await runtime.ApiAccounts.UpdateAsync(accountId, draft, secret);
-      accountId = saved.Id; key.Password = "";
-      if (check) await runtime.ApiAccounts.CheckAsync(saved.Id);
-      return true;
+      accountId = saved.Id; key.Password = ""; savedAny = true;
+      dialog.Title = "Edit API connection and key"; dialog.PrimaryButtonText = "Save";
+      if (check)
+      {
+        var checkedConnection = await runtime.ApiAccounts.CheckAsync(saved.Id);
+        error.Severity = checkedConnection.CheckState == "valid" ? InfoBarSeverity.Success : checkedConnection.CheckState == "unavailable" ? InfoBarSeverity.Warning : InfoBarSeverity.Error;
+        error.Text = ApiAccountOutcome(checkedConnection.CheckState);
+      }
     }
     async void Submit(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
+      if (submitting) { args.Cancel = true; return; }
       var deferral = args.GetDeferral();
+      args.Cancel = check;
+      submitting = true; dialog.IsPrimaryButtonEnabled = false; dialog.IsSecondaryButtonEnabled = false;
+      error.Severity = InfoBarSeverity.Informational; error.Text = check ? "Saving and checking…" : "Saving…";
       try { await SaveAsync(); }
       catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
-      { args.Cancel = true; error.Text = ex is ArgumentException or InvalidOperationException ? ex.Message : "The key could not be saved in Windows Credential Manager. Nothing else was changed."; }
-      finally { deferral.Complete(); }
+      {
+        args.Cancel = true; error.Severity = InfoBarSeverity.Error;
+        // Provider errors can echo the submitted key or endpoint. Use only our own words.
+        error.Text = savedAny ? "Saved. The key check could not finish. Try checking again." : "Couldn’t save this connection. Check the fields and try again.";
+      }
+      finally { submitting = false; dialog.IsPrimaryButtonEnabled = true; dialog.IsSecondaryButtonEnabled = true; if (savedAny) dialog.CloseButtonText = "Done"; deferral.Complete(); }
     }
     dialog.PrimaryButtonClick += (s, a) => { check = false; Submit(s, a); };
     dialog.SecondaryButtonClick += (s, a) => { check = true; Submit(s, a); };
-    if (await dialog.ShowAsync() is ContentDialogResult.Primary or ContentDialogResult.Secondary) await RenderAsync();
+    var dialogResult = await dialog.ShowAsync();
+    if (savedAny || dialogResult is ContentDialogResult.Primary or ContentDialogResult.Secondary) await RenderAsync();
   }
+  internal static string ApiAccountOutcome(string? state) => state switch
+  {
+    "valid" => "Saved. Key checked successfully.",
+    "invalid" => "Saved. The key is invalid. Edit it and check again.",
+    "no-access" => "Saved. This key does not have access. Check its permissions or use another key.",
+    "needs-key" => "Saved. The key is missing. Enter a key and check again.",
+    "unreadable" => "Windows could not open the saved key. Enter the key again and check it.",
+    "unavailable" => "Saved. The key could not be checked. Try again when the service is available.",
+    _ => "Saved. The key has not been checked."
+  };
 }

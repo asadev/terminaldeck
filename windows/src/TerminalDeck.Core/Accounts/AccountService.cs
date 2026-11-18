@@ -179,7 +179,11 @@ public sealed class AccountService
   public async ValueTask<AccountProfile> RequireSignedInAsync(string id, CancellationToken cancellationToken = default)
   {
     var row = await RefreshAsync(id, cancellationToken);
-    if (!row.SignedIn) throw new SignInRequiredException(row);
+    if (!row.SignedIn)
+    {
+      if (row.Authentication == AccountAuthentication.ApiKey) throw new ApiAccountUnavailableException();
+      throw new SignInRequiredException(row);
+    }
     return row;
   }
 

@@ -255,8 +255,10 @@ public sealed partial class ChatSessions(IChatHistory history, IChatProcessKeepe
         await Switches.SwitchAsync(id, account.Id, cancellationToken);
         return;
       }
+      if (chat.Definition.Options.Model.Length > 0 && !(await accounts.ModelsAsync(account.Id, cancellationToken: cancellationToken)).Models.Any(m => m.Id == chat.Definition.Options.Model))
+        throw new InvalidOperationException("Choose Automatic or a model offered by both accounts before switching.");
       await RetireWorkerAsync(chat, cancellationToken);
-      Save(chat with { Definition = chat.Definition with { AccountId = account.Id, AccountHome = account.HomeId, Options = new() }, CreationKey = Guid.NewGuid().ToString("N"), WorkerSequence = 0 });
+      Save(chat with { Definition = chat.Definition with { AccountId = account.Id, AccountHome = account.HomeId }, CreationKey = Guid.NewGuid().ToString("N"), WorkerSequence = 0, Problem = null });
     }
     finally { gate.Release(); }
   }
@@ -296,6 +298,8 @@ public sealed partial class ChatSessions(IChatHistory history, IChatProcessKeepe
       { Problem = receipt.State is ChatMessageState.Uncertain or ChatMessageState.Dispatching ? "This message may have reached the coding AI. Reconnect to check it; it will not be sent twice." : null });
       _ = NoAnswerAsync(id, message.ClientId, chat.WaitingSince!.Value);
     }
+    catch (ApiAccountUnavailableException ex)
+    { Save(Replace(Get(id), message with { State = ChatMessageState.Failed }) with { Busy = false, ActiveClientId = null, Problem = ex.Message, WaitingSince = null }); }
     catch (SignInRequiredException)
     { Save(Replace(Get(id), message with { State = ChatMessageState.Failed }) with { Busy = false, ActiveClientId = null, Problem = ChatErrors.NotSignedIn(chat.Definition.Provider), WaitingSince = null }); }
     catch (Exception ex) when (ex is IOException or InvalidOperationException && !ct.IsCancellationRequested)

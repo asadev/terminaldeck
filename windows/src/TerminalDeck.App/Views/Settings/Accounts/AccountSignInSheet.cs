@@ -54,6 +54,11 @@ internal static class AccountSignInSheet
     var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, HorizontalAlignment = HorizontalAlignment.Right };
     var retry = new Button { Content = "Try again", Visibility = Visibility.Collapsed };
     var cancel = new Button { Content = "Cancel" }; actions.Children.Add(retry); actions.Children.Add(cancel); Grid.SetRow(actions, 2); content.Children.Add(actions);
+    Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(content, "accounts.signIn.sheet");
+    Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(words, "accounts.signIn.outcome");
+    Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(retry, "accounts.signIn.retry");
+    Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(cancel, "accounts.signIn.cancel");
+    Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(terminalHost, "accounts.signIn.terminal");
     window.Content = content; window.AppWindow.Resize(new(840, 620));
     AccountSignInFlow flow = new(); CliTerminalView? terminal = null;
     using var lifetime = new CancellationTokenSource();

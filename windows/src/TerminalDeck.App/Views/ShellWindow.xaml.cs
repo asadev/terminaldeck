@@ -116,7 +116,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
       {
         await Runtime.InitializeAsync();
         tasksPage = new(new(Runtime.Tasks, Runtime.Projects, Runtime.TaskMachineIdentity, Runtime.TaskPeople, Runtime.ConnectedTasks), this, PresentTaskPopup);
-        hootPage = new(Runtime.Hoot, () => Runtime.Accounts.List(), () => Runtime.ProjectSessions().Where(s => s.Id != Runtime.Hoot.Read().ChatId).Select(s => new TerminalDeck.App.Views.Hoot.HootSessionChoice(s.Id, s.Title)).ToArray(), OpenSession, OpenCodingAis, SignInForHootAsync) { SlashCommands = HootSlashCommands, Chats = Runtime.Chats, DataDirectory = Runtime.Root.DirectoryPath, McpNavigation = id => new ChatMcpNavigation(Runtime.Mcp, (server, tool, args, ct) => Runtime.CallChatAppToolAsync(id, server, tool, args, ct)) };
+        hootPage = new(Runtime.Hoot, () => Runtime.Accounts.List(), () => Runtime.ProjectSessions().Where(s => s.Id != Runtime.Hoot.Read().ChatId).Select(s => new TerminalDeck.App.Views.Hoot.HootSessionChoice(s.Id, s.Title)).ToArray(), OpenSession, OpenCodingAis, SignInForHootAsync) { SlashCommands = HootSlashCommands, Chats = Runtime.Chats, DataDirectory = Runtime.Root.DirectoryPath, AddAccount = () => OpenAddAccountAsync(Runtime.Hoot.Read().Settings?.Provider ?? "claude"), EditApiAccount = OpenApiAccountAsync, McpNavigation = id => new ChatMcpNavigation(Runtime.Mcp, (server, tool, args, ct) => Runtime.CallChatAppToolAsync(id, server, tool, args, ct)) };
         serversPage = new(new(Runtime.Servers), this);
         Runtime.RegisterTools();
         Runtime.StartCodeBackup();
@@ -260,7 +260,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
         chat = new ChatPage(Runtime.Chats, draft.Id, WindowHandle, currentWindowHandle: () => ChatWindowHandle(draft.Id),
           navigation: new ChatNavigation(OpenCodingAis, OpenSession, Runtime.Agents.SessionFace(draft.Id)?.Name,
             Runtime.Projects.Get(Runtime.Projects.Resolve(null, draft.Folder)).Folders,
-            async id => { await Runtime.Accounts.SignInAsync(id, draft.Folder); await Runtime.RefreshSessionsAsync(); }, new ChatMcpNavigation(Runtime.Mcp, (server, tool, args, ct) => Runtime.CallChatAppToolAsync(draft.Id, server, tool, args, ct)), id => Model.Sessions.FirstOrDefault(s => s.Id == id)), accountModels: Runtime.Accounts);
+            async id => { await Runtime.Accounts.SignInAsync(id, draft.Folder); await Runtime.RefreshSessionsAsync(); }, new ChatMcpNavigation(Runtime.Mcp, (server, tool, args, ct) => Runtime.CallChatAppToolAsync(draft.Id, server, tool, args, ct)), id => Model.Sessions.FirstOrDefault(s => s.Id == id), OpenAddAccountAsync, OpenApiAccountAsync), accountModels: Runtime.Accounts);
         chat.Model.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(ChatViewModel.Snapshot)) SyncSessions(); };
         // A first message from the New session page that could not be handed over waits in this chat's box.
         if (pendingChatDrafts.Remove(draft.Id, out var firstMessage)) chat.Model.Draft = firstMessage;
@@ -392,6 +392,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     var current = selectedDraft is { IsLive: true } live
       ? Runtime.Sessions.FirstOrDefault(row => row.Definition.Id == live.Id && row.Definition.Provider != "shell") : null;
     var accounts = Runtime.Accounts.List(selectedDraft?.Provider);
+    Func<Task>? afterClose = null;
     var stack = new StackPanel { Spacing = 16 };
     var feedback = new TextBlock { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
     feedback.SetResourceReference(TextBlock.ForegroundProperty, "DeckSecondaryInkBrush");
@@ -400,43 +401,60 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     foreach (var account in accounts)
     {
       var row = new StackPanel { Spacing = 6 };
-      row.Children.Add(new TextBlock { Text = account.Name + " · " + (account.SignedIn ? account.Email ?? "Signed in" : "Not signed in"), TextWrapping = TextWrapping.Wrap });
+      row.Children.Add(new TextBlock { Text = account.Name + " · " + (account.SignedIn ? account.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey ? "API key" : "Signed in" : account.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey ? "Needs key" : account.Email is null ? "Not signed in" : "Needs sign-in · Sign in again"), TextWrapping = TextWrapping.Wrap });
       var isCurrent = account.SignedIn && current?.Definition.AccountId == account.Id;
       var button = new Button { Content = !account.SignedIn ? "Sign in" : isCurrent ? "Current account" : current is not null ? "Switch this conversation" : "Choose app default in Who uses what", IsEnabled = !isCurrent };
+      Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(button, "terminal.account." + account.Id);
+      if (!account.SignedIn) button.Content = account.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey ? "Edit API key" : account.Email is null ? "Sign in" : "Sign in again";
+      var repairKey = new Button { Content = "Edit API key", Visibility = Visibility.Collapsed };
+      repairKey.Click += (_, _) => { afterClose = () => OpenApiAccountAsync(account.Id); accountSheet?.Hide(); };
       var switchConfirmed = false;
       button.Click += async (_, _) =>
       {
         if (!account.SignedIn)
         {
+          if (account.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey)
+          { afterClose = () => OpenApiAccountAsync(account.Id); accountSheet?.Hide(); return; }
           button.IsEnabled = false; feedback.Text = "Signing in…";
           try { await Runtime.Accounts.SignInAsync(account.Id, selectedDraft?.Folder ?? Runtime.Root.DirectoryPath); }
           catch (TerminalDeck.Core.Accounts.SignInCancelledException) { feedback.Text = ""; button.IsEnabled = true; return; }
           catch (Exception ex) when (ex is not OutOfMemoryException)
           { feedback.Text = ex is ArgumentException or InvalidOperationException or TerminalDeck.Core.Platform.ProviderUnavailableException ? ex.Message : "Sign-in could not open. Try again."; button.IsEnabled = true; return; }
           button.IsEnabled = true; feedback.Text = "";
-          if (Runtime.Accounts.Get(account.Id).SignedIn) { RefreshAccountChip(); accountSheet?.Hide(); }
-          return;
+          if (!Runtime.Accounts.Get(account.Id).SignedIn) return;
+          RefreshAccountChip();
         }
         if (current is null) { accountSheet?.Hide(); await OpenSettingsAsync("accounts"); return; }
+        button.IsEnabled = false;
         if (!switchConfirmed)
         {
-          feedback.Text = "The AI terminal will reopen using this account and the same saved conversation. This can interrupt work in progress. Your tab and previous output stay here.";
-          button.Content = "Switch account"; switchConfirmed = true; return;
+          TerminalDeck.Core.Sessions.SessionActivity? activity = null;
+          try { activity = (await Runtime.Keeper.ActivityAsync()).Activity?.FirstOrDefault(s => s.Id == current.Definition.Id); }
+          catch (Exception ex) when (ex is IOException or InvalidOperationException or TimeoutException) { }
+          if (activity is null || activity.ProviderBusy is not false || activity.InputAgeMs is >= 0 and < 500)
+          {
+            feedback.Text = "This terminal may still be working. Switch now interrupts it and keeps this tab, its output and saved conversation.";
+            button.Content = "Switch now"; switchConfirmed = true; button.IsEnabled = true; return;
+          }
         }
         button.IsEnabled = false;
         try
         {
-          await Runtime.AccountSwitches.PlanAsync(current.Definition.Id, account.Id);
           feedback.Text = "Switching to " + account.Name + "…";
           await Runtime.AccountSwitches.SwitchAsync(current.Definition.Id, account.Id);
           await Runtime.RefreshSessionsAsync(); RefreshAccountChip();
           feedback.Text = "Switched to " + account.Name;
+          accountSheet?.Hide();
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
-        { feedback.Text = ex is ArgumentException or InvalidOperationException or TerminalDeck.Core.Platform.ProviderUnavailableException ? ex.Message : "The account could not switch. Check the session before trying again."; }
+        {
+          feedback.Text = ex is ArgumentException or InvalidOperationException or TerminalDeck.Core.Platform.ProviderUnavailableException ? ex.Message : "The account could not switch. Check the session before trying again.";
+          if (account.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey) repairKey.Visibility = Visibility.Visible;
+        }
         finally { button.IsEnabled = true; }
       };
       row.Children.Add(button); stack.Children.Add(row);
+      row.Children.Add(repairKey);
     }
     // One feedback line serves every row. An element can have only one parent:
     // adding it to each row as well threw before the dialog could open.
@@ -444,9 +462,17 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     var manage = new Button { Content = "Manage accounts…" };
     manage.Click += (_, _) => { accountSheet?.Hide(); OpenCodingAIs(); };
     stack.Children.Add(manage);
+    var add = new Button { Content = "Add account…" };
+    Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(add, "terminal.accounts.add");
+    add.Click += (_, _) => { afterClose = () => OpenAddAccountAsync(selectedDraft?.Provider ?? "claude"); accountSheet?.Hide(); };
+    stack.Children.Add(add);
     var dialog = new ContentDialog { XamlRoot = hostRoot.XamlRoot, RequestedTheme = hostRoot.ActualTheme, Title = "Switch account", Content = new ScrollViewer { Content = stack, MaxHeight = 480, HorizontalScrollMode = ScrollMode.Disabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }, CloseButtonText = "Done" };
     accountSheet = dialog;
     try { await dialog.ShowAsync(); } finally { if (ReferenceEquals(accountSheet, dialog)) accountSheet = null; }
+    if (afterClose is not null)
+      try { await afterClose(); }
+      catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or TimeoutException)
+      { Model.Notice = "The account editor could not open. Open Coding AIs and try again."; }
   }
   private void RefreshAccountChip()
   {
