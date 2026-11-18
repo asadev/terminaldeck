@@ -222,10 +222,25 @@ internal sealed partial class WorkspaceSurface : Grid
       chip.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); chip.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
       chip.SetResourceReference(BackgroundProperty, "DeckTransparentBrush");
       bool Selected() => headerActive == tab.Id;
-      var shape = new Border { Tag = "selected-tab", CornerRadius = new(13), IsHitTestVisible = false, Visibility = Selected() ? Visibility.Visible : Visibility.Collapsed };
-      shape.SetResourceReference(Border.BackgroundProperty, WorkspacePaper.For(tab, session(tab))); SetColumnSpan(shape, 2); chip.Children.Add(shape);
-      var rim = new Border { Tag = "selected-tab-rim", CornerRadius = new(13), BorderThickness = new(1), IsHitTestVisible = false, Visibility = shape.Visibility };
-      rim.SetResourceReference(Border.BorderBrushProperty, "DeckTabRimBrush"); SetColumnSpan(rim, 2); chip.Children.Add(rim);
+      var flare = (double)Application.Current.Resources["DeckTabFlare"];
+      // A zero flare asks the shared shape owner for the closed capsule contour.
+      flare = 0;
+      var shape = new Microsoft.UI.Xaml.Shapes.Path { Tag = "selected-tab", Margin = new(-flare, 0, -flare, 0), IsHitTestVisible = false, Visibility = Selected() ? Visibility.Visible : Visibility.Collapsed };
+      shape.SetResourceReference(Microsoft.UI.Xaml.Shapes.Shape.FillProperty, WorkspacePaper.For(tab, session(tab)));
+      SetColumnSpan(shape, 2); chip.Children.Add(shape);
+      // The fill alone barely differs from the tab strip (terminal paper on the
+      // top bar is #E8E8E8 on #E9E9EE in the light theme), so the selected tab
+      // also gets a rim.
+      var rim = new Microsoft.UI.Xaml.Shapes.Path { Tag = "selected-tab-rim", Margin = shape.Margin, IsHitTestVisible = false, StrokeThickness = 1, Visibility = shape.Visibility };
+      rim.SetResourceReference(Microsoft.UI.Xaml.Shapes.Shape.StrokeProperty, "DeckTabRimBrush");
+      SetColumnSpan(rim, 2); chip.Children.Add(rim);
+      void Shape()
+      {
+        var corner = (double)Application.Current.Resources["DeckTabCorner"];
+        shape.Data = WorkspaceTabShape.Outline(chip.ActualWidth, chip.Height, corner, flare);
+        rim.Data = WorkspaceTabShape.Edge(chip.ActualWidth, chip.Height, corner, flare);
+      }
+      chip.SizeChanged += (_, _) => Shape();
       chip.PointerEntered += (_, _) => { if (!Selected()) chip.Background = (Brush)ShellTheme.Resource(chip, "DeckHoverBrush"); };
       chip.PointerExited += (_, _) => chip.Background = (Brush)ShellTheme.Resource(chip, "DeckControlBrush");
       var label = new Grid { ColumnSpacing = 6, HorizontalAlignment = HorizontalAlignment.Stretch, MinWidth = 0 };
