@@ -62,7 +62,6 @@ public sealed partial class BrowserPane
         using var stream = new InMemoryRandomAccessStream(); using (var writer = new DataWriter(stream.GetOutputStreamAt(0))) { writer.WriteBytes(bytes); await writer.StoreAsync(); } stream.Seek(0);
         var decoder = await BitmapDecoder.CreateAsync(stream); var pixels = (await decoder.GetPixelDataAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Straight, new BitmapTransform(), ExifOrientationMode.IgnoreExifOrientation, ColorManagementMode.DoNotColorManage)).DetachPixelData();
         Check(name + " is a nonblank finite image", decoder.PixelWidth > 100 && decoder.PixelHeight > 100 && pixels.Where((_, index) => index % 4 != 3).Distinct().Take(16).Count() >= 16);
-        if (name == "minimised-window") Check("minimised picture contains the newly painted red background", Enumerable.Range(0, pixels.Length / 4).Count(index => Math.Abs(pixels[index * 4] - 76) <= 2 && Math.Abs(pixels[index * 4 + 1] - 76) <= 2 && Math.Abs(pixels[index * 4 + 2] - 234) <= 2) > pixels.Length / 40);
       }
       await Capture("hidden-tab");
       Stage("background-question");
@@ -79,7 +78,8 @@ public sealed partial class BrowserPane
       await tab.Model.CommandAsync("Runtime.evaluate", new { expression = "document.body.style.background='rgb(234,76,76)'; document.documentElement.style.background='rgb(234,76,76)'; document.querySelector('h1').textContent='Updated while minimised'" });
       var minimisedState = await Core.PerformAsync(tab.Id, BrowserPageAction.Read, JsonSerializer.SerializeToElement(new { selector = "h1" }));
       Check("minimised page reads its new content", minimisedState.GetRawText().Contains("Updated while minimised", StringComparison.Ordinal));
-      await Capture("minimised-window");
+      try { await CaptureAsync(tab); Check("minimised picture answers in plain words", false); }
+      catch (InvalidOperationException minimised) { Check("minimised picture answers in plain words", minimised.Message == MinimisedPictureNote); }
       Check("capture leaves the person’s window minimised", presenter.State == OverlappedPresenterState.Minimized);
       presenter.Restore(false); await Core.TakeHumanControlAsync(tab.Id);
       Stage("popup-protocol");

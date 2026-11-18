@@ -103,6 +103,8 @@ public sealed partial class BrowserPane
       await ShowShotAsync(tab, tab.CapturePath, original);
     }
   }
+  internal const string MinimisedPictureNote = "Terminal Deck's window is minimised, so Windows is not drawing this page and no picture can be taken. Reading, clicking and typing still work. Restore the window and try again.";
+  private static bool WindowNotShown(BrowserTab tab) => tab.View.XamlRoot is { } pageRoot && (!pageRoot.IsHostVisible || AppWindow.GetFromWindowId(pageRoot.ContentIslandEnvironment.AppWindowId).Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized });
   private static async Task<byte[]> CaptureAsync(BrowserTab tab)
   {
     static string Fingerprint(JsonElement result)
@@ -126,15 +128,11 @@ public sealed partial class BrowserPane
       JsonElement result;
       try
       {
-        var hiddenWindow = tab.View.XamlRoot is { } pageRoot && (!pageRoot.IsHostVisible || AppWindow.GetFromWindowId(pageRoot.ContentIslandEnvironment.AppWindowId).Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized });
-        if (hiddenWindow)
-        {
-          // Request only the existing CSS viewport from Chromium's offscreen
-          // capture path. This does not resize, scroll or restore its host window.
-          var metrics = await Step("Page.getLayoutMetrics", new { }); var viewport = metrics.GetProperty("cssVisualViewport");
-          result = await Step("Page.captureScreenshot", new { format = "png", fromSurface = true, captureBeyondViewport = true, clip = new { x = viewport.GetProperty("pageX").GetDouble(), y = viewport.GetProperty("pageY").GetDouble(), width = viewport.GetProperty("clientWidth").GetDouble(), height = viewport.GetProperty("clientHeight").GetDouble(), scale = 1 } }, 15);
-        }
-        else result = await Step("Page.captureScreenshot", new { format = "png", fromSurface = true, captureBeyondViewport = false }, 15);
+        // Windows stops drawing a page whose window is minimised or hidden. Say so
+        // in plain words instead of waiting for, or returning, a blank picture.
+        // Reading, clicking and typing keep working there.
+        if (WindowNotShown(tab)) throw new InvalidOperationException(MinimisedPictureNote);
+        result = await Step("Page.captureScreenshot", new { format = "png", fromSurface = true, captureBeyondViewport = false }, 15);
       }
       catch (TimeoutException) { throw new TimeoutException("The page did not draw a picture within 15 seconds. Reload the page and try again."); }
       var after = Fingerprint(await Step("Runtime.evaluate", new { expression = BrowserAutomation.CaptureFingerprint, contextId, returnByValue = true }));
