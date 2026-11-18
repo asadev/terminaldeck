@@ -88,7 +88,7 @@ public sealed partial class ShellWindow
 
   private static Button TerminalControlChip(string label, string automationId)
   {
-    var chip = new Button { Content = label, Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"], FontSize = 12, MinWidth = 0, Height = 28, MinHeight = 28, Padding = new(6, 0, 6, 0) };
+    var chip = new Button { Content = label, Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"], FontSize = 12, Width = double.NaN, MinWidth = 0, Height = 28, MinHeight = 28, Padding = new(6, 0, 6, 0) };
     AutomationProperties.SetAutomationId(chip, automationId); AutomationProperties.SetName(chip, label + " for this terminal");
     ToolTipService.SetToolTip(chip, label + " for this terminal"); return chip;
   }
