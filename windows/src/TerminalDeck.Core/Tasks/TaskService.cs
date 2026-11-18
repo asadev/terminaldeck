@@ -132,10 +132,16 @@ public sealed partial class TaskService : ITasks
   public DeckTask Status(string id, string status, TaskActor by)
   {
     TaskStatuses.Require(status);
-    return Change(id, by, "Status: " + status + ".", (s, row) =>
+    var snapshot = store.Read();
+    var pendingCompletion = status == "Done" && snapshot.Tasks.FirstOrDefault(t => t.Id == id) is { } before
+      && snapshot.Runs.FirstOrDefault(r => r.Id == before.CurrentRunId) is { State: not TaskRunState.Ended, Efficiency.Completion: "park" or "stop" };
+    return Change(id, by, pendingCompletion ? "Completion requested." : "Status: " + status + ".", (s, row) =>
     {
+      var currentRun = s.Runs.FirstOrDefault(r => r.Id == row.CurrentRunId);
+      if (status == "Done" && currentRun is { State: not TaskRunState.Ended, Efficiency.Completion: "park" or "stop" })
+        return row with { Extras = TaskExtras.Of(row) with { CompletionRequested = true } };
       if (status == "Done" && Active(s, row)) throw new InvalidOperationException("Wait for this task's session to finish before closing it.");
-      return row with { Status = status, NeedsYou = status == "Stuck" };
+      return row with { Status = status, NeedsYou = status == "Stuck", Extras = TaskExtras.Of(row) with { CompletionRequested = false } };
     });
   }
   public DeckTask Archive(string id, bool archived, TaskActor by) => Change(id, by, archived ? "Archived the task." : "Restored from the archive.", (s, row) =>
@@ -191,7 +197,7 @@ public sealed partial class TaskService : ITasks
         {
           var current = s.Runs.Single(r => r.Id == runId);
           if (current.SessionId is not null && current.SessionId != sid) throw new InvalidOperationException("This start returned a different session.");
-          return (s with { Runs = s.Runs.Replace(current, current with { SessionId = sid }) }, true);
+          return (s with { Runs = s.Runs.Replace(current, current with { SessionId = sid, Efficiency = plan.Efficiency, ContextSignature = plan.ContextSignature, AccountId = plan.AccountId, AgentId = plan.AgentId, ExecutionFolder = plan.Folder }) }, true);
         });
         prepared = true;
       }, cancellationToken);
@@ -210,7 +216,7 @@ public sealed partial class TaskService : ITasks
         if (current.State is TaskRunState.Ended or TaskRunState.Yielded or TaskRunState.NeedsYou) return (s, false);
         // The agent service's own refusals are written for people; show which check failed.
         var problem = prepared ? "The session start could not be confirmed. Check its session before starting again."
-          : ex is ArgumentException or TerminalDeck.Core.Mcp.McpRefusal or TerminalDeck.Core.Accounts.SignInRequiredException && ex.Message.Length is > 0 and <= 300 ? "The task could not start: " + ex.Message
+          : ex is ArgumentException or TerminalDeck.Core.Mcp.McpRefusal or TerminalDeck.Core.Agents.AgentBudgetPauseException or TerminalDeck.Core.Accounts.SignInRequiredException && ex.Message.Length is > 0 and <= 300 ? "The task could not start: " + ex.Message
           : "The task could not start. Check the agent and account, then assign it again.";
         var row = Stamp(old with { Status = "Stuck", NeedsYou = true }, problem, TaskActor.App, old);
         return (s with { Runs = s.Runs.Replace(current, current with { State = prepared ? TaskRunState.Uncertain : TaskRunState.Ended, Problem = problem }), Tasks = s.Tasks.Replace(old, row) }, true);

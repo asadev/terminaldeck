@@ -46,8 +46,9 @@ public sealed class KeeperAgentSessionGateway(
     if (plan.Model.Length > 128) throw new ArgumentException("Use a model name no longer than 128 characters for a terminal session.");
     if (plan.Provider == "gemini" && plan.Effort is not ("auto" or "")) throw new ArgumentException("This effort choice is unavailable in the terminal driver. Choose Automatic or start a chat.");
     var definition = new SessionDefinition(plan.SessionId, plan.Provider, plan.Folder, plan.Title, plan.AccountId, plan.AccountHome,
-      InitialPrompt: prompt.Length == 0 ? null : prompt, Model: plan.Model.Length == 0 ? null : plan.Model, Effort: plan.Effort is "auto" or "" ? null : plan.Effort,
+      ConversationId: plan.ConversationId, InitialPrompt: prompt.Length == 0 ? null : prompt, Model: plan.Model.Length == 0 ? null : plan.Model, Effort: plan.Effort is "auto" or "" ? null : plan.Effort,
       Permission: plan.Permission switch { null => null, TerminalDeck.Core.Mcp.AiPermissionMode.AcceptEdits => "acceptEdits", { } mode => mode.ToString().ToLowerInvariant() });
+    definition = definition with { ResumeWithPrompt = plan.ConversationId is not null, AddonsOff = plan.Efficiency?.AddonsOff == true, RequiresDeckTools = plan.Efficiency?.AddonsOff == true || plan.Efficiency?.SerializeHeavyJobs == true };
     definition.Validate(); return definition;
   }
 }

@@ -225,7 +225,8 @@ public sealed partial class SettingsPane
         SettingsPanel.SettingRow("Helper model", "Model name used for new helpers. Empty means the AI's default.", DirectionAction("Edit…", () => EditTemplateTextAsync(category, "Helper model", t => t.HelperModel, (t, value) => t with { HelperModel = value }, 160))),
         SettingsPanel.SettingRow("Memory", "Parts included in a new hand's instructions.", parts)
       }),
-      ("Budgets", null, new[] {
+      (category == AgentCategory.Orchestrator ? null : "Usage budgets", null, category == AgentCategory.Orchestrator ? Array.Empty<FrameworkElement>() : AgentEfficiencyEditor.Rows(() => Current().Efficiency, value => runtime.Agents.SaveTemplate(Current() with { Efficiency = value }), words => directionStatus.Text = words)),
+      (category == AgentCategory.Orchestrator ? "Budgets" : "Hands", null, new[] {
         SettingsPanel.SettingRow("Hands per seat", "Maximum simultaneous hands using one seat.", seat),
         SettingsPanel.SettingRow("Hands per project", "Maximum simultaneous hands in one project.", project),
         SettingsPanel.SettingRow("Card limit", "Maximum number of characters kept in a seat card.", limit)

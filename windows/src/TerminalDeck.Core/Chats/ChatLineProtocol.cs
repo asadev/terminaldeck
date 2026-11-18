@@ -198,7 +198,7 @@ public sealed class ChatLineProtocol(ChatRecord chat, IChatHistory media, bool c
       case "control_cancel_request": signals.Add(new(0, "approvalResolved", S(row, "request_id"), "Cancelled")); break;
       case "result":
         if (P(row, "usage").ValueKind == JsonValueKind.Object)
-          signals.Add(new(0, "usage", "usage:" + clientId, ClientId: clientId, Data: Element(new { source = "Claude turn result", usage = P(row, "usage"), totalCostUsd = P(row, "total_cost_usd").ValueKind == JsonValueKind.Number ? P(row, "total_cost_usd").GetDecimal() : (decimal?)null })));
+          signals.Add(new(0, "usage", "usage:" + clientId, ClientId: clientId, Data: Element(new { source = "Claude turn result", creationKey = chat.CreationKey, usage = P(row, "usage"), totalCostUsd = P(row, "total_cost_usd").ValueKind == JsonValueKind.Number ? P(row, "total_cost_usd").GetDecimal() : (decimal?)null })));
         if (B(row, "is_error") || S(row, "subtype") != "success")
           signals.Add(new(0, "error", Text: ChatErrors.FromProvider(provider, S(row, "result") + TextValue(P(row, "errors"))), ClientId: clientId));
         else signals.Add(new(0, "complete", ClientId: clientId));

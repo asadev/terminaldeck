@@ -10,6 +10,8 @@ public sealed record TaskExtras(bool OwnWorkspace = false, bool Starred = false,
   ImmutableArray<TaskItem> Relations = default, ImmutableArray<TaskItem> Attachments = default,
   ImmutableArray<string> LikedComments = default)
 {
+  public bool CompletionRequested { get; init; }
+  public long? TokenBudget { get; init; }
   // Additional local people; the main person remains DeckTask.Assignee.
   [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
   public ImmutableArray<string> Participants { get; init; }
@@ -38,6 +40,7 @@ public sealed partial class TaskService
       var now = clock.GetUtcNow();
       e = action switch
       {
+        "token-budget" => e with { TokenBudget = value is null or "" ? null : long.TryParse(value, out var budget) && budget is >= 0 and <= 1_000_000_000 ? budget : throw new ArgumentException("Use a task token budget from 0 to 1,000,000,000.") },
         "workspace" => e with { OwnWorkspace = value == "true" },
         "star" => e with { Starred = !e.Starred },
         "follow" => e with { Following = !e.Following },

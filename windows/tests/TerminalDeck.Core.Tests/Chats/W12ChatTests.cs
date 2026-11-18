@@ -159,7 +159,7 @@ public sealed class W12ChatTests
     await using var f = new ChatFixture(); await f.InitializeAsync(); var protocol = new ChatLineProtocol(f.Chat, f.History);
     protocol.User(new(Guid.NewGuid().ToString(), "hello", []));
     var signals = protocol.Receive("""{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":12,"output_tokens":34},"total_cost_usd":0.002}""").Signals;
-    var usage = Assert.Single(signals, s => s.Kind == "usage"); Assert.Equal(12, usage.Data!.Value.GetProperty("usage").GetProperty("input_tokens").GetInt32()); Assert.Contains(signals, s => s.Kind == "complete");
+    var usage = Assert.Single(signals, s => s.Kind == "usage"); Assert.Equal(f.Chat.CreationKey, usage.Data!.Value.GetProperty("creationKey").GetString()); Assert.Equal(12, usage.Data!.Value.GetProperty("usage").GetProperty("input_tokens").GetInt32()); Assert.Contains(signals, s => s.Kind == "complete");
     Assert.DoesNotContain(signals, s => s.Kind == "message");
   }
   [Fact] public void ApprovalPreviewUsesOnlyReportedTextAndMarksMissingOrTruncatedBefore()

@@ -39,4 +39,29 @@ public sealed class AgentTaskRunnerTests
     Assert.Contains("Saved instructions.", plan.Instructions); Assert.Equal(account.HomeId, plan.AccountHome); Assert.Equal("C:/Work/Sample", plan.Folder); Assert.Contains("task", plan.Job, StringComparison.OrdinalIgnoreCase);
     Assert.Equal(2, checks); Assert.Equal(plan.SessionId, Assert.Single(service.Runs()).SessionId);
   }
+  [Theory]
+  [InlineData("chat")]
+  [InlineData("terminal")]
+  public async Task An_exhausted_monthly_pause_refuses_before_any_run_callback_or_driver_spawn(string mode)
+  {
+    var f = new TaskFixture(); var accounts = new AccountService(new MemoryStore<AccountState>(), [new ExampleProvider()]);
+    var account = await accounts.CreateAsync("codex", "Sample subscription"); await accounts.RefreshAsync(account.Id);
+    var starts = 0; var callbacks = 0;
+    var gateway = new DelegateAgentSessionGateway((plan, _) => { starts++; return ValueTask.FromResult(new AgentSessionStarted(plan.SessionId, plan.Mode)); });
+    var agents = new AgentService(new MemoryStore<AgentState>(), f.Projects, new Instructions(), accounts, gateway);
+    agents.Save(new("reviewer", "Reviewer", "codex", ProjectId: "sample", Seat: "reviewer", AccountId: account.Id,
+      Options: new(Efficiency: new(MonthlyTokens: 100, OnExhaustion: "pause"))));
+    var path = Path.Combine(Path.GetTempPath(), "td-agent-pause-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+      var ledger = new AgentBudgetLedger(new TerminalDeck.Core.Storage.JsonStateStore<AgentUsageLedgerState>(TerminalDeck.Core.Storage.AppDataRoot.Explicit(path), "agent-usage"));
+      var now = DateTimeOffset.Now;
+      await ledger.ObserveAsync(new("previous", "reviewer", null, false, now, [new("request:previous", now, 100)], true, false, Ended: true));
+      agents.Budgets = new(ledger, (_, _) => Task.FromResult<IReadOnlyList<AgentUsageObservation>>([]));
+      await Assert.ThrowsAsync<AgentBudgetPauseException>(async () => await agents.StartAsync(new("reviewer", Mode: mode), beforeStart: (_, _) => { callbacks++; return ValueTask.CompletedTask; }));
+      Assert.Equal(0, callbacks); Assert.Equal(0, starts); Assert.Empty(agents.Runs());
+    }
+    finally { if (Directory.Exists(path)) Directory.Delete(path, true); }
+  }
+
 }

@@ -17,6 +17,9 @@ public sealed class AgentService : IAgents, ICloudAgentEntries
   private readonly TimeProvider clock;
   private AgentState state;
   public event Action? Changed;
+  public AgentBudgetRuntime? Budgets { get; set; }
+  public Action<AgentLaunchPlan>? LaunchPreflight { get; set; }
+  public Func<AgentLaunchPlan, string?>? ParkedConversation { get; set; }
   public bool CanStartSessions => sessions is not null && accounts is not null;
   public bool CanStart(string mode) => CanStartSessions && sessions!.SupportsMode(mode);
   public AgentService(IStateStore<AgentState> store, IProjects projects, IAgentInstructions instructions,
@@ -156,6 +159,8 @@ public sealed class AgentService : IAgents, ICloudAgentEntries
   public IReadOnlyList<AgentTemplate> Templates() => Volatile.Read(ref state).Templates;
   public void SaveTemplate(AgentTemplate template, AgentTemplate? expected = null)
   {
+    template.Efficiency?.Validate();
+    if (template.Category == AgentCategory.Orchestrator && template.Efficiency is not null) throw new ArgumentException("Hoot uses its own runtime. Efficiency defaults are available for Leads and Agents.");
     if (!Enum.IsDefined(template.Category) || template.Instructions.Length > 40_000 || template.Instructions.Contains('\0') || template.MaxHandsPerSeat < 0 || template.MaxHandsPerProject < 0 ||
       template.Checklist.Length > 20_000 || template.CardLimit is < 500 or > 40_000 || template.HelperAI is not ("claude" or "codex" or "gemini") || template.HelperModel.Length > 160 ||
       !template.Parts.IsDefault && template.Parts.Any(p => p is not ("card" or "notes" or "diary" or "topics" or "playbook" or "board" or "helper")))
@@ -236,6 +241,15 @@ public sealed class AgentService : IAgents, ICloudAgentEntries
     catch (OperationCanceledException) { throw; }
     catch (Exception ex) when (ex is not OutOfMemoryException) { throw new InvalidOperationException("This account's sign-in status could not be checked. Open Coding AIs and refresh it before starting a session."); }
     if (account.Provider != provider) throw new ArgumentException("Choose an account for this AI.");
+    var efficiency = AgentEfficiency.Merge(template?.Efficiency, agent?.Settings.Efficiency);
+    if (request.TaskTokenBudget is { } taskBudget)
+    {
+      if (taskBudget is < 0 or > 1_000_000_000 || efficiency?.TaskTokens is > 0 && (taskBudget == 0 || taskBudget > efficiency.TaskTokens)) throw new ArgumentException("The task budget cannot exceed the agent's task budget.");
+      efficiency = (efficiency ?? new()) with { TaskTokens = taskBudget };
+    }
+    efficiency?.Validate();
+    var budgetDecision = Budgets is not null && agent is not null ? await Budgets.BeforeStartAsync(agent.Id, efficiency, account.Authentication == AccountAuthentication.ApiKey, cancellationToken) : new AgentBudgetDecision(false, null);
+    if (efficiency?.HasBudget == true && Budgets is null) throw new InvalidOperationException("Agent budget tracking is unavailable. Keep its budget unchanged and reconnect before starting work.");
     var parentSeatKey = request.Helper ? seat?.Key : null;
     var ownInstructions = agent?.InstructionsFile is { } file ? instructions.Read(file) : "";
     AgentRun run; AgentLaunchPlan plan;
@@ -256,21 +270,26 @@ public sealed class AgentService : IAgents, ICloudAgentEntries
         throw new InvalidOperationException("This seat or project has reached its hand limit. Finish a hand or change its category template.");
       var numberOnSeat = seat is null ? 0 : state.Runs.Where(r => r.SeatKey == seat.Key).Select(r => r.HandNumber).DefaultIfEmpty(0).Max() + 1;
       var id = Guid.NewGuid().ToString();
-      run = new(id, agent?.Id, agent?.Name ?? "", provider, project.Id, seat?.Key, numberOnSeat, request.Job.Trim(), request.Mode, AgentRunState.Starting, clock.GetUtcNow(), ParentSeatKey: parentSeatKey);
+      run = new(id, agent?.Id, agent?.Name ?? "", provider, project.Id, seat?.Key, numberOnSeat, request.Job.Trim(), request.Mode, AgentRunState.Starting, clock.GetUtcNow(), ParentSeatKey: parentSeatKey, AccountId: account.Id, Folder: folder, Api: account.Authentication == AccountAuthentication.ApiKey, TaskRunId: request.TaskRunId, Efficiency: efficiency, BudgetWarning: budgetDecision.Warning);
       var memory = seat is null ? null : state.Seats.FirstOrDefault(m => m.SeatKey == seat.Key);
       var contextMemory = request.Helper ? state.Seats.FirstOrDefault(m => m.SeatKey == parentSeatKey) : memory;
       var parts = template?.Parts ?? [];
-      var skillAdvice = agent is not null && !agent.Settings.SkillsOff && !agent.Skills.IsDefaultOrEmpty
+      var skillsOff = agent?.Settings.SkillsOff == true || efficiency?.AddonsOff == true && provider == "claude";
+      var skillAdvice = agent is not null && !skillsOff && !agent.Skills.IsDefaultOrEmpty
         ? "Saved skill references (advice, not tool restrictions). If these skills are installed for this working folder or AI account, consult their instructions when useful: " + JsonSerializer.Serialize(agent.Skills)
-        : agent?.Settings.SkillsOff == true ? "Skills are turned off for this agent. Do not use any skills." : null;
-      var prompt = string.Join("\n\n", new[] { template?.Instructions, parts.Contains("card") ? contextMemory?.Card : null, parts.Contains("notes") ? contextMemory?.Notes : null, request.Helper ? parentTemplate?.Checklist : null, ownInstructions, skillAdvice, request.Helper ? null : ToolAdvice(agent), LinkedServers(project) }.Where(s => !string.IsNullOrWhiteSpace(s)));
+        : skillsOff ? "Skills are turned off for this agent. Do not use any skills." : null;
+      var prompt = string.Join("\n\n", new[] { template?.Instructions, parts.Contains("card") ? contextMemory?.Card : null, parts.Contains("notes") ? contextMemory?.Notes : null, request.Helper ? parentTemplate?.Checklist : null, ownInstructions, skillAdvice, request.Helper ? null : ToolAdvice(agent), LinkedServers(project), request.TaskRunId is not null ? AgentBudgetPolicy.Brief(efficiency) : null, budgetDecision.Warning }.Where(s => !string.IsNullOrWhiteSpace(s)));
       // Only a start that already carries instructions or a job says where the work is;
       // a plain session must not gain a first message it never had.
       if (start.AskedFolder is { } asked && (prompt.Length > 0 || request.Job.Trim().Length > 0)) prompt = string.Join("\n\n", new[] { prompt, ProjectStartFolders.Note(asked) }.Where(s => s.Length > 0));
       plan = new(id, agent?.Id, seat?.Key, project.Id, folder, provider, account.Id, account.HomeId, request.Model ?? (request.Helper ? parentTemplate!.HelperModel : agent?.Model ?? ""), request.Effort ?? (request.Helper ? "auto" : agent?.Effort ?? "auto"), prompt,
         agent?.InstructionsFile, request.Title ?? agent?.Name ?? AgentSeats.ProviderName(provider), request.Job.Trim(), request.Mode,
         request.Permission ?? (request.Helper ? null : AgentOptions.ToMode(agent?.Settings.PermissionMode ?? DefaultPermission(project))));
+      plan = plan with { Efficiency = efficiency };
+      plan = plan with { ContextSignature = AgentContextPolicy.Signature(plan, request.OwnerScope) };
+      if (request.TaskRunId is not null && efficiency?.ReuseContext == true && ParkedConversation?.Invoke(plan) is { } conversation) plan = plan with { ConversationId = conversation };
       if (plan.Provider == "gemini" && plan.Effort is not ("" or "auto")) throw new ArgumentException("This Windows session path does not support the saved Gemini effort. Choose Automatic in Agent settings before starting.");
+      LaunchPreflight?.Invoke(plan);
       sessions.Validate(plan);
       var seats = seat is not null && memory is null ? state.Seats.Add(new(seat.Key)) : state.Seats;
       Persist(state with { Runs = state.Runs.Add(run), Seats = seats });
@@ -327,7 +346,7 @@ public sealed class AgentService : IAgents, ICloudAgentEntries
       var parent = state.Runs.FirstOrDefault(r => r.SessionId == parentId && r.Mode == "chat");
       if (parent is null) return;
       var nextHand = state.Runs.Where(r => r.SeatKey == parent.SeatKey).Select(r => r.HandNumber).DefaultIfEmpty().Max() + 1;
-      Persist(state with { Runs = state.Runs.Add(parent with { SessionId = childId, HandNumber = nextHand, State = AgentRunState.Running, StartedAt = clock.GetUtcNow(), Problem = null }) });
+      Persist(state with { Runs = state.Runs.Add(parent with { SessionId = childId, HandNumber = nextHand, State = AgentRunState.Running, StartedAt = clock.GetUtcNow(), Problem = null, TaskRunId = null, BudgetWarning = null }) });
     }
     Changed?.Invoke();
   }
@@ -388,11 +407,12 @@ public sealed class AgentService : IAgents, ICloudAgentEntries
   {
     if (o is null) return null;
     static ImmutableArray<string> Clean(ImmutableArray<string> rows) => rows.IsDefault ? [] : rows.Select(r => r.Trim()).Where(r => r.Length > 0).Distinct(StringComparer.Ordinal).ToImmutableArray();
+    o.Efficiency?.Validate();
     o = o with { PermissionMode = string.IsNullOrWhiteSpace(o.PermissionMode) ? null : o.PermissionMode, WorkingFolder = string.IsNullOrWhiteSpace(o.WorkingFolder) ? null : ProjectPaths.Normalize(o.WorkingFolder),
       ToolsPreferred = Clean(o.ToolsPreferred), ToolsAvoided = Clean(o.ToolsAvoided) };
     if (o.PermissionMode is not null && !AgentOptions.PermissionModes.Contains(o.PermissionMode)) throw new ArgumentException("Choose App default, Ask before changes, Plan only or Change without asking.");
     if (o.ToolsPreferred.Length > 40 || o.ToolsAvoided.Length > 40 || o.ToolsPreferred.Concat(o.ToolsAvoided).Any(t => t.Length > 100 || t.Any(char.IsControl))) throw new ArgumentException("Name up to 40 tools, each in a few words.");
-    return o.PermissionMode is null && o.WorkingFolder is null && o.ToolsPreferred.IsEmpty && o.ToolsAvoided.IsEmpty && !o.SkillsOff ? null : o;
+    return o.PermissionMode is null && o.WorkingFolder is null && o.ToolsPreferred.IsEmpty && o.ToolsAvoided.IsEmpty && !o.SkillsOff && o.Efficiency is null ? null : o;
   }
   private static void Validate(SavedAgent agent, bool allowSavedUnsupportedChoices = false)
   {

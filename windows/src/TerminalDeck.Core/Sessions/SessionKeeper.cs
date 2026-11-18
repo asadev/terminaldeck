@@ -248,6 +248,7 @@ public sealed class SessionKeeper
   {
     State = observation.Presence == ProcessPresence.Live && !string.IsNullOrEmpty(observation.LeaseIdentity) ? SessionState.Running : SessionState.Held,
     HasStarted = row.HasStarted || observation.Presence == ProcessPresence.Live,
+    ResumePromptDelivered = row.ResumePromptDelivered || row.Definition.ResumeWithPrompt && observation.Presence == ProcessPresence.Live,
     LeaseIdentity = observation.LeaseIdentity ?? row.LeaseIdentity
   };
 
@@ -526,6 +527,24 @@ public sealed class SessionKeeper
       var lease = row.State == SessionState.Exited && row.LeaseIdentity is not null ? row.LeaseIdentity : RequireLease(id, expectedInstance);
       await processes.QuitAsync(lease, cancellationToken);
       Commit(Get(id) with { State = SessionState.Exited, LeaseIdentity = null }, "exit");
+    }
+    finally { gate.Release(); }
+  }
+
+  // The task completion owner must recheck identity and idleness under the same lease that closes it.
+  public async ValueTask<bool> TryStopIdleAsync(SessionRecord expected, CancellationToken ct = default)
+  {
+    await gate.WaitAsync(ct);
+    try
+    {
+      var row = Get(expected.Definition.Id);
+      if (row.Definition != expected.Definition || row.CreationKey != expected.CreationKey || row.AccountRevision != expected.AccountRevision) return false;
+      if (row.State == SessionState.Exited) return true;
+      if (row.LeaseIdentity is null || !(await processes.ObserveAsync(row, ct)).Idle) return false;
+      await processes.QuitAsync(row.LeaseIdentity, ct);
+      if ((await processes.ObserveAsync(row, ct)).Presence != ProcessPresence.Dead) return false;
+      Commit(row with { State = SessionState.Exited, LeaseIdentity = null }, "exit");
+      return true;
     }
     finally { gate.Release(); }
   }

@@ -61,6 +61,14 @@ public sealed class WindowsChatLaunchPlanner(AppDataRoot root, string toolsDirec
           "-c", "mcp_servers.deck-tools.args=" + System.Text.Json.JsonSerializer.Serialize(toolArgs)]);
       }
     }
+    if (provider == "gemini" && chat.Definition.RequiresDeckTools) environment = AgentGeminiTools.EnvironmentFor(root, chat.Definition.Id, environment, chat.Definition.AddonsOff);
+    if (chat.Definition.AddonsOff)
+    {
+      var home = TerminalDeck.Core.Accounts.AccountHomes.Resolve(root, provider, chat.Definition.AccountHome, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), TerminalDeck.Core.Storage.StableChannel.IsStable(AppContext.BaseDirectory));
+      arguments.AddRange(provider == "codex"
+        ? AgentAddonInventory.Restrict(new WindowsProviderLaunchPlanner(root, toolsDirectory).Resolve("codex", Accounts.WindowsApiAccountLaunch.Arguments(root, provider, chat.Definition.AccountHome).Concat(new[] { "mcp", "list", "--json" }).ToArray(), environment, chat.Definition.Cwd), AgentAddonLaunch.CodexConfigured(home, chat.Definition.Cwd))
+        : AgentAddonLaunch.Restrict(provider, home));
+    }
     return new WindowsProviderLaunchPlanner(root, toolsDirectory).Resolve(provider, arguments, environment, chat.Definition.Cwd);
   }
 }
