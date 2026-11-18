@@ -5,6 +5,23 @@ namespace TerminalDeck.App.Shell;
 
 public sealed class SidebarStateTests
 {
+  [Fact] public void CodeAliasDoesNotWriteOrRewriteTheStoredPins()
+  {
+    var original = new[] { "Files", "Tasks", "GitHub", "SourceControl" }; SidebarSaved? written = null;
+    var state = new SidebarState(new(original, [], [], []), true, value => written = value);
+    Assert.Null(written); Assert.Equal(new[] { "Code", "Tasks" }, state.Read.Pages);
+    state.Geometry(280, true); Assert.Equal(original, written!.Pages);
+    state.Pin("Cloud", true); Assert.Equal(original.Append("Cloud"), written!.Pages);
+  }
+  [Fact] public void LegacyCodePinsMergeOnceAndKeepTheirOrderAndActions()
+  {
+    var state = new SidebarState(new(["Tasks", "Files", "GitHub", "SourceControl", "Cloud"], [], [], []), true);
+    Assert.Equal(new[] { "Tasks", "Code", "Cloud" }, state.Read.Pages);
+    Assert.DoesNotContain(SidebarState.Catalogue, page => page.Id is "Files" or "GitHub" or "SourceControl");
+    Assert.Contains(SidebarState.Catalogue, page => page.Id == "Code");
+    state.MovePage("GitHub", "Tasks"); Assert.Equal("Code", state.Read.Pages[0]);
+    state.Pin("Files", false); Assert.False(state.Pinned("Code")); state.Pin("SourceControl", true); Assert.True(state.Pinned("Code"));
+  }
   [Fact] public void FreshAndUpgradeDefaultsMatchAndSavedPinsWin()
   {
     Assert.Equal(new[] { "Agents", "Tasks", "Projects" }, new SidebarState(null, false).Read.Pages);

@@ -55,6 +55,7 @@ public static class SettingsNavigation
   // category ("accounts", "mcp-servers") has its own name.
   public static string Title(string id) => id switch
   {
+    TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Id => TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Title,
     "accounts" => "Which account agents use",
     "mcp" or "mcp-servers" => "MCP servers",
     _ => Categories.Concat(InnerPages).FirstOrDefault(item => item.Id == id)?.Title ?? (IsDevice(id) ? "Device" : "Settings")
@@ -68,6 +69,7 @@ public static class SettingsNavigation
     "hoot" or "copilot" => "hoot",
     "mcp" or "mcp-servers" => "outside-ai-apps",
     "devices" or "devices.older" => "profile",
+    TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Id => TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Id,
     _ when IsDevice(section) => section,
     _ when Categories.Any(item => item.Id == section) || InnerPages.Any(item => item.Id == section) => section,
     _ => throw new ArgumentException("Choose an available Settings category.")

@@ -126,8 +126,7 @@ jobs:
           [ -n "$run" ] || { echo '::error::This exact main commit needs green CI before UI packaging.'; exit 1; }
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs" --jq '.jobs[] | [.name,.conclusion] | @tsv'
           gh run download "$run" -R "$GITHUB_REPOSITORY" -n windows-ui-check -D "$RUNNER_TEMP/ui-ci-proof"
-          receipt="$(find "$RUNNER_TEMP/ui-ci-proof" -name receipt.json | head -1)"
-          [ -n "$receipt" ] && jq -e --arg commit "$GITHUB_SHA" '(.latestSourceCommit // .sourceCommit) == $commit and .outcome == "passed"' "$receipt"
+          python windows/scripts/windows/ui-check-evidence.py validate --root "$RUNNER_TEMP/ui-ci-proof" --commit "$GITHUB_SHA"
           echo "Reusing passed UI checks from $run; no test is rerun."
 
       - uses: actions/setup-dotnet@v5

@@ -46,15 +46,21 @@ public static class McpCatalogue
     foreach (var spec in TerminalDeck.Core.Hooks.ProviderHooksTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Notifications.NotificationTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Cloud.CloudTools.Specs) result[spec.Id] = spec;
+    foreach (var spec in TerminalDeck.Core.Cloud.CloudSubscriptionTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Cloud.CloudFolderTools.Specs.Concat(TerminalDeck.Core.Cloud.CloudArtifactsTools.Specs)) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Remote.ReachAccountTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Code.CodeBackupTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Cloud.CloudProjectSecretFilesTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.WhatsApp.WhatsAppTools.Specs) result[spec.Id] = spec;
+    foreach (var spec in TerminalDeck.Core.Agents.AgentLibraryTools.Specs) result[spec.Id] = spec;
+    foreach (var spec in TerminalDeck.Core.Agents.AgentEfficiencyMcp.Specs) result[spec.Id] = spec;
+    foreach (var spec in TerminalDeck.Core.Agents.AgentHeavyWorkMcp.Specs) result[spec.Id] = spec;
     return result.Values.ToArray();
   }
   public static McpTier EffectiveTier(McpToolSpec spec, JsonElement arguments, bool ownsSession = false)
   {
+    if (spec.Id == TerminalDeck.Core.Agents.AgentEfficiencyMcp.Id) return TerminalDeck.Core.Agents.AgentEfficiencyMcp.Tier(arguments);
+    if (spec.Id == TerminalDeck.Core.Agents.AgentHeavyWorkMcp.Id) return TerminalDeck.Core.Agents.AgentHeavyWorkMcp.Tier(arguments);
     if (TerminalDeck.Core.Tasks.TasksMcp.Specs.Any(t => t.Id == spec.Id)) return TerminalDeck.Core.Tasks.TasksMcp.Tier(spec, arguments);
     if (TerminalDeck.Core.Code.CodeMcp.Specs.Any(t => t.Id == spec.Id)) return TerminalDeck.Core.Code.CodeMcp.Tier(spec, arguments);
     if (TerminalDeck.Core.Accounts.AccountMcp.Specs.Any(t => t.Id == spec.Id)) return TerminalDeck.Core.Accounts.AccountMcp.Tier(spec, arguments);
@@ -66,12 +72,13 @@ public static class McpCatalogue
       "cloud.devices" => action == "list" ? McpTier.Read : McpTier.Alter,
       "browser.privacy" => action == "list" ? McpTier.Read : McpTier.Alter,
       "terminal.providers" => action == "list" ? McpTier.Read : action == "start" ? McpTier.Act : McpTier.Alter,
-      "computers.services" => action is "look" or "controls-read" or "usage" or "account-read" or "logins" or "host-read" or "github-read" or "clipboard-read" ? McpTier.Read : action is "account-switch" or "sign-in" or "sign-out" or "host-restart" or "host-stop" or "github-connect" or "github-cancel" or "github-disconnect" or "close" or "rename" or "controls-set" or "input" or "keys" or "send" ? McpTier.Alter : McpTier.Act,
+      "computers.services" => action is "chat-watch" or "chat-unwatch" or "chat-options" or "look" or "controls-read" or "usage" or "account-read" or "logins" or "host-read" or "github-read" or "clipboard-read" ? McpTier.Read : action is "chat-set" or "chat-send" or "chat-interrupt" or "chat-answer" or "account-switch" or "sign-in" or "sign-out" or "host-restart" or "host-stop" or "github-connect" or "github-cancel" or "github-disconnect" or "close" or "rename" or "controls-set" or "input" or "keys" or "send" ? McpTier.Alter : McpTier.Act,
       "computers.screen" => action == "picture" ? McpTier.Read : McpTier.Act,
       "quality.staysfixed" => action is "doctor" or "preview" ? McpTier.Read : McpTier.Alter,
       "quality.fix" => action == "preview" ? McpTier.Read : McpTier.Alter,
       "accounts.install" => action == "state" ? McpTier.Read : McpTier.Alter,
       "accounts.sign_in_flow" => action is null or "state" ? McpTier.Read : McpTier.Alter,
+      "agents.library" => action is "save" or "assign" or "unassign" ? McpTier.Alter : McpTier.Read,
       "tasks.agents" => arguments.GetProperty("do").GetString() == "list" ? McpTier.Read : McpTier.Alter,
       "remote.workspace" => arguments.TryGetProperty("projects", out _) ? McpTier.Alter : McpTier.Read,
       "mcp.callers" => action == "list" ? McpTier.Read : McpTier.Alter,

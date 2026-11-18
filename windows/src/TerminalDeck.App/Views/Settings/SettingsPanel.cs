@@ -49,7 +49,11 @@ public sealed partial class SettingsPanel : Grid
     legacy.OpenYourCloud = () => OpenMainPage?.Invoke("Cloud") == true;
     legacy.SettingsContentRendered += () => { if (page.Children.Contains(legacy)) PresentHostedPage(); };
     legacy.DirectionRefreshRequested += async id => { if (SelectedCategory == id) await ShowAsync(selectedSection, false); };
-    legacy.CloudAccount.Changed += _ => DispatcherQueue.TryEnqueueHandled(UpdateProfileRow);
+    legacy.CloudAccount.Changed += _ => DispatcherQueue.TryEnqueueHandled(async () =>
+    {
+      UpdateProfileRow(); var route = legacy.ResolveSettingsAccess(selectedSection);
+      if (route != selectedSection) await ShowAsync(route, false);
+    });
     // A row that opens a second page ("Which account agents use", "MCP servers", "Custom terminal CLIs") goes
     // through this window's history, so the bar names it and Back returns.
     legacy.NavigateSettings = SelectAsync;
@@ -134,6 +138,7 @@ public sealed partial class SettingsPanel : Grid
 
   private async Task ShowAsync(string section, bool remember)
   {
+    section = legacy.ResolveSettingsAccess(section);
     if (SettingsNavigation.IsHoot(section))
     {
       if (OpenMainPage?.Invoke("Hoot") == true) return;

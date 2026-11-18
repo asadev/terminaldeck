@@ -142,6 +142,10 @@ public sealed class CloudContents
 
   /// One plain line per provider that could not be read (fixed words and the kind's title only; never a name or a path).
   public Action<string>? Log { get; set; }
+  // Retained manager views and confirmation callbacks recheck the live offer.
+  // Default true preserves callers against old services and paywall-off.
+  public Func<bool> AccessAllowed { get; set; } = static () => true;
+  private CloudContentsResult AccessRefused => new(0, CloudSubscriptionPageText.Subscribe);
 
   public CloudContents(Func<bool> deleteRuleOpen, Func<CloudDeleteActor> person)
   {
@@ -253,8 +257,8 @@ public sealed class CloudContents
 
   public async Task<CloudOpenedItem?> OpenAsync(CloudContentsRow row, CancellationToken cancel = default)
   {
-    if (!row.CanOpen || Source(row.Kind) is not { } source) return null;
-    try { return await source.OpenAsync(row, cancel); }
+    if (!AccessAllowed() || !row.CanOpen || Source(row.Kind) is not { } source) return null;
+    try { var result = await source.OpenAsync(row, cancel); return AccessAllowed() ? result : null; }
     catch (OperationCanceledException) { throw; }
     catch (Exception e) { Say(row.Kind, "could not open an item", e); return null; }
   }
@@ -267,6 +271,7 @@ public sealed class CloudContents
 
   private async Task<CloudContentsResult> RemoveAsync(IReadOnlyList<CloudContentsRow> rows, CloudDeleteScope scope)
   {
+    if (!AccessAllowed()) return AccessRefused;
     var open = SafeGate();
     var actor = person();
     var done = 0;
@@ -275,6 +280,7 @@ public sealed class CloudContents
     {
       bool canDelete;
       try { canDelete = await source.Removals!.CanDeleteEverywhereAsync(); } catch { canDelete = false; }
+      if (!AccessAllowed()) return new(done, CloudSubscriptionPageText.Subscribe);
       var (cloud, everywhere) = Scopes(source.Kind, source.OffersCloudOnly, open, canDelete);
       if (scope == CloudDeleteScope.Cloud ? !cloud : !everywhere) { failed += items.Count; continue; }
       try { done += (await source.Removals!.DeleteItemsAsync(items, scope, actor)).Count; }
@@ -293,10 +299,12 @@ public sealed class CloudContents
 
   private async Task<CloudContentsResult> BackAsync(IReadOnlyList<CloudContentsRow> rows, CloudItemState state, CloudBringBackDestination to)
   {
+    if (!AccessAllowed()) return AccessRefused;
     var done = 0;
     var failed = rows.Count(r => r.State != state);
     foreach (var (source, items) in Route(rows.Where(r => r.State == state)))
     {
+      if (!AccessAllowed()) return new(done, CloudSubscriptionPageText.Subscribe);
       try { done += (await source.Removals!.BringBackAsync(items, to)).Count; }
       catch (Exception e) { Say(source.Kind, to == CloudBringBackDestination.ThisPc ? "could not bring back" : "could not put in Cloud again", e); failed += items.Count; }
     }
@@ -389,11 +397,13 @@ public sealed class CloudContents
   /// "Put back all" for the selected lines.
   public async Task<CloudContentsResult> PutBackAllAsync(IReadOnlyList<CloudBinLine> lines)
   {
+    if (!AccessAllowed()) return AccessRefused;
     var done = 0;
     var failed = 0;
     foreach (var line in lines)
       foreach (var (source, group) in await PartsAsync(line))
       {
+        if (!AccessAllowed()) return new(done, CloudSubscriptionPageText.Subscribe);
         try { done += (await source.Removals!.PutBackGroupAsync(group.Id)).Count; }
         catch (Exception e) { Say(source.Kind, "could not put back", e); failed += group.Items.Count; }
       }
@@ -403,11 +413,13 @@ public sealed class CloudContents
   /// "Delete for good" (right-click only).
   public async Task<CloudContentsResult> DeleteForGoodAsync(IReadOnlyList<CloudBinLine> lines)
   {
+    if (!AccessAllowed()) return AccessRefused;
     var done = 0;
     var failed = 0;
     foreach (var line in lines)
       foreach (var (source, group) in await PartsAsync(line))
       {
+        if (!AccessAllowed()) return new(done, CloudSubscriptionPageText.Subscribe);
         try { await source.Removals!.DeleteForGoodAsync(group.Items); done += group.Items.Count; }
         catch (Exception e) { Say(source.Kind, "could not delete for good", e); failed += group.Items.Count; }
       }

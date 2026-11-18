@@ -66,6 +66,9 @@ public delegate ValueTask<bool> McpLivePermission(McpGrant grant, McpToolSpec to
 public sealed class McpDoor(IMcpPermissionBroker permission, TimeProvider? time = null, Func<McpToolSpec, McpToolHandler, McpToolHandler>? wrap = null,
   Action<McpGrant, McpToolSpec, JsonElement>? preflight = null)
 {
+  public Func<string, bool>? ToolOffered { get; set; }
+  public Func<bool>? RelayAllowed { get; set; }
+
   private sealed record Handler(McpToolSpec Spec, McpToolHandler Run);
   private sealed record Caller(byte[] Digest, McpGrant Grant, McpLivePermission Permitted, long Revision, CancellationTokenSource Lifetime);
   private readonly TimeProvider clock = time ?? TimeProvider.System;
@@ -121,6 +124,7 @@ public sealed class McpDoor(IMcpPermissionBroker permission, TimeProvider? time 
   }
   public bool AllowsRelay(string token)
   {
+    if (RelayAllowed?.Invoke() == false) return false;
     try { var id = Authenticate(token); lock (gate) return RequireCaller(id).Grant.AllowRelay; }
     catch (McpRefusal) { return false; }
   }
@@ -141,7 +145,7 @@ public sealed class McpDoor(IMcpPermissionBroker permission, TimeProvider? time 
     lock (gate)
     {
       var caller = RequireCaller(id);
-      return tools.Values.Distinct().Select(t => t.Spec).Where(t => caller.Grant.Tools.Contains(t.Id) && caller.Grant.Tiers.Contains(t.Tier)).OrderBy(t => t.Id).ToArray();
+      return tools.Values.Distinct().Select(t => t.Spec).Where(t => caller.Grant.Tools.Contains(t.Id) && caller.Grant.Tiers.Contains(t.Tier) && ToolOffered?.Invoke(t.Id) != false).OrderBy(t => t.Id).ToArray();
     }
   }
   public async ValueTask<JsonElement> CallAsync(Guid id, string name, JsonElement arguments, CancellationToken cancellationToken = default)
@@ -150,7 +154,7 @@ public sealed class McpDoor(IMcpPermissionBroker permission, TimeProvider? time 
     lock (gate)
     {
       caller = RequireCaller(id);
-      if (!tools.TryGetValue(name, out var found) || !caller.Grant.Tools.Contains(found.Spec.Id)) throw new McpRefusal("That tool is not available to this caller.");
+      if (!tools.TryGetValue(name, out var found) || !caller.Grant.Tools.Contains(found.Spec.Id) || ToolOffered?.Invoke(found.Spec.Id) == false) throw new McpRefusal("That tool is not available to this caller.");
       handler = found;
       var session = arguments.ValueKind == JsonValueKind.Object && arguments.TryGetProperty("sessionId", out var sid) && sid.ValueKind == JsonValueKind.String ? sid.GetString() : null;
       owns = session is not null && (session == caller.Grant.SessionId || startedBy.GetValueOrDefault(session) == caller.Grant.CallerId);
@@ -167,6 +171,7 @@ public sealed class McpDoor(IMcpPermissionBroker permission, TimeProvider? time 
         var current = RequireCaller(id);
         if (current.Revision != caller.Revision || !current.Grant.Tiers.Contains(tier)) throw new McpRefusal("This caller's permission changed. Ask again with the current permission.");
       }
+      if (ToolOffered?.Invoke(handler.Spec.Id) == false) throw new McpRefusal("That tool is not available for this account.");
       preflight?.Invoke(Copy(caller.Grant), handler.Spec, arguments);
       if (!await caller.Permitted(Copy(caller.Grant), handler.Spec, arguments, tier, token)) throw new McpRefusal("This action is outside the caller's current permission.");
       lock (gate) if (RequireCaller(id).Revision != caller.Revision) throw new McpRefusal("This caller's permission changed.");

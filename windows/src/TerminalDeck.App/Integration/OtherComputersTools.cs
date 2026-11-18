@@ -14,10 +14,11 @@ public static class OtherComputersTools
       context.Require("settings", "devices");
       return ValueTask.FromResult(JsonSerializer.SerializeToElement(TerminalDeck.App.Views.Usage.DesktopResourceMeter.Read(runtime)));
     });
-    door.Register("computers.look", (context, _, ct) =>
+    door.Register("computers.look", async (context, _, ct) =>
     {
       context.Require("settings", "devices");
-      return ValueTask.FromResult(JsonSerializer.SerializeToElement(computers.List().Where(c => context.Has("computers", c.Id))));
+      await computers.RefreshAccountMachinesAsync(ct);
+      return JsonSerializer.SerializeToElement(computers.List().Where(c => context.Has("computers", c.Id)));
     });
     door.Register("computers.manage", async (context, args, ct) =>
     {

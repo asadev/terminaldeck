@@ -4,11 +4,12 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.Web.WebView2.Core;
 using TerminalDeck.App.Integration;
+using TerminalDeck.App.Shell;
 using Windows.ApplicationModel.DataTransfer;
 
 namespace TerminalDeck.App.Views.Computers;
 
-// The same renderer as local terminals, backed only by the remote host's PTY.
+// One live session, backed by the host's actual terminal or chat protocol.
 // No duplicate local process or session-ledger row is created.
 public sealed class RemoteSessionPane : Grid, IAsyncDisposable
 {
@@ -18,12 +19,23 @@ public sealed class RemoteSessionPane : Grid, IAsyncDisposable
   private readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap };
   private readonly CancellationTokenSource stop = new();
   private bool ready, started;
+  private readonly RemoteChatPane? chatPane;
   private int cols = 120, rows = 30;
   public RemoteSessionPane(OtherComputersService service, string computer, string session)
   {
     this.service = service; this.computer = computer; this.session = session;
-    RowDefinitions.Add(new() { Height = GridLength.Auto }); RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
-    Children.Add(status); Grid.SetRow(web, 1); Children.Add(web);
+    RowDefinitions.Add(new() { Height = GridLength.Auto }); RowDefinitions.Add(new() { Height = GridLength.Auto }); RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
+    this.SetResourceReference(BackgroundProperty, "DeckCanvasBrush");
+    var isChat = service.Services(computer).Sessions.Any(row => OtherComputersService.Text(row, "id", "") == session && row.TryGetProperty("chat", out var flag) && flag.ValueKind == JsonValueKind.True);
+    Children.Add(new RemoteSessionHeader(service, computer, session, isChat, text => status.Text = text));
+    status.FontSize = 12; status.Margin = new(16, 4, 16, 4); status.Visibility = Visibility.Collapsed;
+    status.RegisterPropertyChangedCallback(TextBlock.TextProperty, (_, _) => status.Visibility = status.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed);
+    Grid.SetRow(status, 1); Children.Add(status);
+    if (isChat)
+    {
+      chatPane = new RemoteChatPane(service, computer, session, text => status.Text = text); Grid.SetRow(chatPane, 2); Children.Add(chatPane); return;
+    }
+    Grid.SetRow(web, 2); Children.Add(web);
     service.Frame += Received; service.Changed += Changed;
     Loaded += async (_, _) => { if (!started) { started = true; await StartAsync(); } };
     ActualThemeChanged += (_, _) => Post(new { type = "theme", theme = ActualTheme == ElementTheme.Dark ? "dark" : "light" });
@@ -50,6 +62,7 @@ public sealed class RemoteSessionPane : Grid, IAsyncDisposable
           {
             case "ready": ready = true; Post(new { type = "theme", theme = ActualTheme == ElementTheme.Dark ? "dark" : "light" }); await service.AttachAsync(computer, session, cols, rows, stop.Token); break;
             case "input":
+              if (!service.CloudAllowed || !service.List().Any(c => c.Id == computer && c.State == "Online")) { status.Text = "Reconnecting to that computer…"; break; }
               var text = m.GetProperty("data").GetString() ?? "";
               if (Encoding.UTF8.GetByteCount(text) > 65536) throw new ArgumentException("Paste at most 64 KB at once.");
               await service.SendAsync(computer, new { t = "input", id = session, data = text }, stop.Token); break;
@@ -92,6 +105,7 @@ public sealed class RemoteSessionPane : Grid, IAsyncDisposable
   public async ValueTask DisposeAsync()
   {
     stop.Cancel(); service.Frame -= Received; service.Changed -= Changed;
+    if (chatPane is not null) { await chatPane.DisposeAsync(); return; }
     try { await service.DetachAsync(computer, session); } catch (Exception ex) when (ex is not OutOfMemoryException) { }
     web.Close();
   }

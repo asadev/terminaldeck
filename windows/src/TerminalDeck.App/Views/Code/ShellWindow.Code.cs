@@ -17,6 +17,18 @@ public sealed partial class ShellWindow
   private SourceControlPage? sourceControlPage;
   private GitHubPage? gitHubPage;
 
+  private ProjectCodeWorkspace? codeWorkspace;
+  private FrameworkElement CodeWorkspaceView(string? section = null)
+  {
+    codeWorkspace ??= new ProjectCodeWorkspace(selected =>
+    {
+      if (selected == "Files") return new FilesPage(CodePagesHost, codeFiles);
+      if (selected == "Changes") return new SourceControlPage(CodePagesHost, codeGit);
+      var github = new GitHubPage(CodePagesHost, Runtime.CopyGitHub); github.SelectProjectSection(selected); return github;
+    });
+    if (section is not null) codeWorkspace.Select(section);
+    return codeWorkspace;
+  }
   private CodeHost CodePagesHost => codeHost ??= new(this);
   private FrameworkElement CodePageView(ShellPage page) => page switch
   {

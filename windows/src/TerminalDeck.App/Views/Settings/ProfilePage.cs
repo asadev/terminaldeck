@@ -88,13 +88,17 @@ public sealed partial class ProfilePage : UserControl
     }
     body.Children.Add(who);
 
-    body.Children.Add(SettingsPanel.GroupRows([
+    var links = new List<FrameworkElement> {
       SettingsPanel.LinkRow("Personal information", null, SettingsPanel.IconTile("", "DeckProjectGraphiteBrush"), null, () => open("personal")),
-      SettingsPanel.LinkRow("Sign-in", null, SettingsPanel.IconTile("", "DeckProjectGraphiteBrush"), null, () => open("sign-in")),
-      SettingsPanel.LinkRow("Cloud", null, SettingsPanel.IconTile("", "DeckProjectBlueBrush"), CloudPageText.Account(snapshot).CloudRow, () => open("cloud"))
-    ]));
+      SettingsPanel.LinkRow("Sign-in", null, SettingsPanel.IconTile("", "DeckProjectGraphiteBrush"), null, () => open("sign-in"))
+    };
+    if (snapshot.Subscription.AllowsCloudServices)
+      links.Add(SettingsPanel.LinkRow("Cloud", null, SettingsPanel.IconTile("", "DeckProjectBlueBrush"), CloudPageText.Account(snapshot).CloudRow, () => open("cloud")));
+    if (snapshot.Subscription.ShowsSubscription && snapshot.Subscription.LastAnswer is { } plan)
+      links.Add(SettingsPanel.LinkRow(CloudSubscriptionPageText.Title, null, SettingsPanel.IconTile("", "DeckAgentIndigoBrush"), CloudSubscriptionPageText.RowValue(plan), () => open(CloudSubscriptionPageText.Id)));
+    body.Children.Add(SettingsPanel.GroupRows(links));
 
-    var devices = DeviceRows();
+    IReadOnlyList<CloudDeviceRow> devices = snapshot.Subscription.AllowsCloudServices ? DeviceRows() : [];
     if (devices.Count > 0)
     {
       body.Children.Add(SettingsPanel.GroupTitle("Devices"));

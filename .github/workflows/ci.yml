@@ -145,7 +145,16 @@ jobs:
             python windows/scripts/windows/reuse-ui-check.py
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
+            if ($scope.PSObject.Properties.Name -contains 'retainFrom') {
+              python windows/scripts/windows/ui-check-evidence.py preflight
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
             ./windows/scripts/windows/check-ui.ps1 -Configuration Release -Platform x64 -ScratchRoot "$env:RUNNER_TEMP\TD-test"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($scope.PSObject.Properties.Name -contains 'retainFrom') {
+              python windows/scripts/windows/ui-check-evidence.py retain --root windows/.artifacts/windows-check/ui
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
           }
       - name: Keep focused UI receipts
         if: always() && needs.changes.outputs.ui == 'true'

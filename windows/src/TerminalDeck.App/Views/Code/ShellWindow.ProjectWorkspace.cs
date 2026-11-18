@@ -18,6 +18,7 @@ public sealed partial class ShellWindow
       "Files" => Embedded(new FilesPage(host, codeFiles)),
       "Code" => new ProjectCodeWorkspace(section =>
       {
+        if (section == "Files") return Embedded(new FilesPage(host, codeFiles));
         if (section == "Changes") return Embedded(new SourceControlPage(host, codeGit));
         var github = new GitHubPage(host, Runtime.CopyGitHub); github.SelectProjectSection(section); return Embedded(github);
       }),

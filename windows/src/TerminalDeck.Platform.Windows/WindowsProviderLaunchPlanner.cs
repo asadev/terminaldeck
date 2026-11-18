@@ -87,7 +87,16 @@ public sealed class WindowsProviderLaunchPlanner(AppDataRoot root, string toolsD
       else arguments.AddRange(["--approval-mode", definition.Permission switch { "plan" => "plan", "auto" or "acceptEdits" => "auto_edit", "bypass" => "yolo", _ => "default" }]);
     }
     if (definition.Provider == "claude" && definition.Purpose != "sign-in") arguments.InsertRange(0, ExtraFolderArguments(definition.Cwd));
-    if (definition.InitialPrompt is not null && !resume) arguments.Add(definition.InitialPrompt);
+    if (definition.RequiresDeckTools && definition.Provider == "gemini") environment = new Dictionary<string, string>(AgentGeminiTools.EnvironmentFor(root, definition.Id, environment, definition.AddonsOff), StringComparer.OrdinalIgnoreCase);
+    if (definition.RequiresDeckTools) arguments.AddRange(AgentAddonLaunch.OwnTools(root, definition.Provider, definition.Id));
+    if (definition.AddonsOff)
+    {
+      var restrictions = definition.Provider == "codex"
+        ? AgentAddonInventory.Restrict(Resolve("codex", api.Arguments.Concat(new[] { "mcp", "list", "--json" }).ToArray(), environment, definition.Cwd), AgentAddonLaunch.CodexConfigured(home, definition.Cwd))
+        : AgentAddonLaunch.Restrict(definition.Provider, home);
+      arguments.AddRange(restrictions);
+    }
+    if (definition.InitialPrompt is not null && (!resume || definition.ResumeWithPrompt && !session.ResumePromptDelivered)) arguments.Add(definition.InitialPrompt);
     return Resolve(definition.Provider, arguments, environment, definition.Cwd);
   }
   public ProcessLaunch Resolve(string provider, IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string> environment, string cwd)

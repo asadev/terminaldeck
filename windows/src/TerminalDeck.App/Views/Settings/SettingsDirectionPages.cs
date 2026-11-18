@@ -31,8 +31,16 @@ public sealed partial class SettingsPane
   internal TerminalDeck.Core.Cloud.CloudAccountClient CloudAccount => runtime.Cloud;
   // Devices and Cloud live inside Profile (Mac, 15 Nov); a device's own page is "device:<id>".
   // "browser" is drawn for the Browser's own small settings window, never for the Settings list.
+  internal string ResolveSettingsAccess(string id)
+  {
+    var snapshot = runtime.Cloud.Snapshot.Subscription;
+    if (id == TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Id && !snapshot.ShowsSubscription) return "profile";
+    if (!snapshot.AllowsCloudServices && (id == "cloud" || SettingsNavigation.IsDevice(id) || id is "devices" or "devices.older")) return TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Id;
+    return id;
+  }
   internal FrameworkElement? DirectionPage(string id, Action<string> select) => id switch
   {
+    TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Id => new CloudSubscriptionPage(runtime.Cloud),
     "profile" => new ProfilePage(runtime.Cloud, select, async id => { if (runtime.Reach is { } reach) await reach.RemoveIfOnAsync(id); }, ProfilePairedDevices()),
     "personal" => new PersonalPage(runtime.Cloud),
     "sign-in" => new SignInPage(runtime.Cloud),
@@ -217,7 +225,8 @@ public sealed partial class SettingsPane
         SettingsPanel.SettingRow("Helper model", "Model name used for new helpers. Empty means the AI's default.", DirectionAction("Edit…", () => EditTemplateTextAsync(category, "Helper model", t => t.HelperModel, (t, value) => t with { HelperModel = value }, 160))),
         SettingsPanel.SettingRow("Memory", "Parts included in a new hand's instructions.", parts)
       }),
-      ("Budgets", null, new[] {
+      (category == AgentCategory.Orchestrator ? null : "Usage budgets", null, category == AgentCategory.Orchestrator ? Array.Empty<FrameworkElement>() : AgentEfficiencyEditor.Rows(() => Current().Efficiency, value => runtime.Agents.SaveTemplate(Current() with { Efficiency = value }), words => directionStatus.Text = words)),
+      (category == AgentCategory.Orchestrator ? "Budgets" : "Hands", null, new[] {
         SettingsPanel.SettingRow("Hands per seat", "Maximum simultaneous hands using one seat.", seat),
         SettingsPanel.SettingRow("Hands per project", "Maximum simultaneous hands in one project.", project),
         SettingsPanel.SettingRow("Card limit", "Maximum number of characters kept in a seat card.", limit)

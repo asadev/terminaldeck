@@ -1,0 +1,690 @@
+{
+  "date": "2026-11-18",
+  "kind": "source inventory only; not runtime or screenshot evidence",
+  "input": "/Users/imatch/Deck Dev/code/td-ship-0230/RESULT.md:254-298",
+  "inputCaveat": "The consolidated Mac report retains original lane line numbers and some stale descriptions. Number/path identities are retained; feature names here follow the corresponding consumer. No Mac source is changed.",
+  "rules": {
+    "off": "all existing tools/commands/capabilities preserved; subscription row/page/tool hidden even offer=true",
+    "missing": "old/unavailable service disables enforcement, never invents entitlement",
+    "unpaid": "on+none/lapsed hides only Cloud/relay offers and rechecks stale callbacks/transport frames",
+    "preserved": "preferences, raw pins, trust, peers, account records, local sessions, local artifacts, direct SSH and WhatsApp"
+  },
+  "counts": {
+    "anchors": 41,
+    "categories": 16,
+    "statuses": {
+      "wired": 28,
+      "partial": 10,
+      "unsupported": 1,
+      "not-present": 2
+    }
+  },
+  "anchors": [
+    {
+      "number": 1,
+      "macReportedAnchor": "TerminalDeckNative/NativeCloudAccount.swift:951",
+      "category": "Devices",
+      "feature": "Account device operations and service projection",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.Core/Cloud/CloudAccountClient.Subscription.cs",
+        "windows/src/TerminalDeck.Core/Cloud/CloudAccountClient.Devices.cs",
+        "windows/src/TerminalDeck.App/Integration/AppRuntime.CloudSubscription.cs"
+      ],
+      "mcp": [
+        "cloud.devices",
+        "cloud.subscription"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 2,
+      "macReportedAnchor": "TerminalDeckNative/NativeCloudSettings.swift:227",
+      "category": "SyncSwitches",
+      "feature": "Cloud switch and stale page presses",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Settings/CloudPage.xaml.cs",
+        "windows/src/TerminalDeck.Core/Cloud/CloudAccountClient.Join.cs"
+      ],
+      "mcp": [
+        "cloud.status"
+      ],
+      "status": "partial",
+      "limitation": "Windows has one Use Cloud switch; no per-kind switches and no dedicated sync-now mutation MCP."
+    },
+    {
+      "number": 3,
+      "macReportedAnchor": "TerminalDeckNative/NativeProfileSettings.swift:229",
+      "category": "SettingsCloud",
+      "feature": "Profile plan/Cloud/device presentation",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Settings/ProfilePage.cs",
+        "windows/src/TerminalDeck.App/Views/Settings/ProfilePage.Devices.cs"
+      ],
+      "mcp": [
+        "cloud.profile",
+        "cloud.devices",
+        "cloud.subscription"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 4,
+      "macReportedAnchor": "TerminalDeckNative/NativeDevicesSettings.swift:253",
+      "category": "Devices",
+      "feature": "Device account page fence",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Settings/DevicesPage.cs",
+        "windows/src/TerminalDeck.App/Views/Settings/SettingsDirectionPages.cs"
+      ],
+      "mcp": [
+        "cloud.devices"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 5,
+      "macReportedAnchor": "TerminalDeckNative/MACHINESDevicesScreen.swift:50",
+      "category": "Devices",
+      "feature": "Paired devices page fence",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/SettingsPane.cs",
+        "windows/src/TerminalDeck.App/Views/Windows/ShellDevicesPopup.cs"
+      ],
+      "mcp": [
+        "devices.page",
+        "remote.manage"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 6,
+      "macReportedAnchor": "TerminalDeckNative/NativeSettingsKit.swift:118",
+      "category": "SettingsCloud",
+      "feature": "Settings route and stale plan navigation",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Settings/SettingsDirectionPages.cs",
+        "windows/src/TerminalDeck.App/Views/Settings/SettingsPanel.cs"
+      ],
+      "mcp": [
+        "ui.workspace",
+        "cloud.subscription"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 7,
+      "macReportedAnchor": "TerminalDeckNative/NativeDevicesSettings.swift:421",
+      "category": "Pairing",
+      "feature": "Device menus and pending removal callbacks",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/SettingsPane.cs",
+        "windows/src/TerminalDeck.App/Views/Settings/ProfilePage.Devices.cs",
+        "windows/src/TerminalDeck.App/Integration/RemoteService.Control.cs"
+      ],
+      "mcp": [
+        "remote.manage",
+        "cloud.devices"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 8,
+      "macReportedAnchor": "TerminalDeckNative/NativeMacReachSettings.swift:15",
+      "category": "PhoneAndWebReach",
+      "feature": "Signed-in Reach choice and coordinator lifecycle",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Integration/AppRuntime.CloudReach.cs",
+        "windows/src/TerminalDeck.App/Integration/RemoteService.CloudAccess.cs"
+      ],
+      "mcp": [
+        "cloud.reach.status",
+        "remote.manage"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 9,
+      "macReportedAnchor": "TerminalDeckNative/NativeJoinRemoteDialog.swift:11",
+      "category": "Pairing",
+      "feature": "New pair/connect plus existing launch intent",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Integration/OtherComputersService.cs",
+        "windows/src/TerminalDeck.App/Integration/OtherComputers.CloudAccess.cs",
+        "windows/src/TerminalDeck.App/Integration/RemoteService.Control.cs"
+      ],
+      "mcp": [
+        "computers.manage",
+        "remote.manage"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 10,
+      "macReportedAnchor": "TerminalDeckNative/SidebarView.swift:282",
+      "category": "SidebarCloud",
+      "feature": "Cloud rows and pins are filtered without preference writes",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Windows/ShellSidebar.cs",
+        "windows/src/TerminalDeck.App/Views/Windows/ShellCloudAccess.cs"
+      ],
+      "mcp": [
+        "ui.workspace",
+        "ui.sidebar",
+        "shell.read"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 11,
+      "macReportedAnchor": "TerminalDeckNative/NativeCloudChatsViews.swift:114",
+      "category": "OtherComputerSessions",
+      "feature": "Cloud saved copy and exact live session route",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Chat/CloudSessionRoute.cs",
+        "windows/src/TerminalDeck.App/Integration/OtherComputersReach.cs"
+      ],
+      "mcp": [
+        "computers.look",
+        "computers.services"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 12,
+      "macReportedAnchor": "TerminalDeckNative/NativeCloudChatsMove.swift:97",
+      "category": "SessionMove",
+      "feature": "Switch/move to this Windows computer",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Integration/OtherComputersOperations.cs",
+        "windows/src/TerminalDeck.Core/Computers/ComputerOperations.cs"
+      ],
+      "mcp": [],
+      "status": "unsupported",
+      "limitation": "Windows has no move/take protocol. No action, mutation tool or simulated transfer is offered."
+    },
+    {
+      "number": 13,
+      "macReportedAnchor": "TerminalDeckNative/NativeCloudChatsViews.swift:172",
+      "category": "OtherComputerSessions",
+      "feature": "Remote header and live chat controls",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Computers/RemoteSessionHeader.cs",
+        "windows/src/TerminalDeck.App/Views/Computers/RemoteChatPane.cs",
+        "windows/src/TerminalDeck.App/Views/Computers/RemoteSessionPane.cs"
+      ],
+      "mcp": [
+        "computers.services"
+      ],
+      "status": "partial",
+      "limitation": "Only the real host-offered controls/accounts/plan usage are shown; full local context strip is not transported."
+    },
+    {
+      "number": 14,
+      "macReportedAnchor": "TerminalDeckNative/NativeCloudContents.swift:357",
+      "category": "FileManager",
+      "feature": "Your Cloud whole-page fence and stale callbacks",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Windows/ShellSidebar.cs",
+        "windows/src/TerminalDeck.App/Views/CloudAccessSurface.cs",
+        "windows/src/TerminalDeck.Core/Cloud/CloudContents.cs"
+      ],
+      "mcp": [
+        "cloud.folder",
+        "cloud.folder_add",
+        "cloud.artifacts"
+      ],
+      "status": "wired",
+      "limitation": "Manager mutations remain person-only under the existing owner policy; they are not new tools."
+    },
+    {
+      "number": 15,
+      "macReportedAnchor": "TerminalDeckNative/NativeCloudManager.swift:42",
+      "category": "PhonesCopy",
+      "feature": "Stored session copy and Cloud content owners",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Integration/AppRuntime.CloudChats.cs",
+        "windows/src/TerminalDeck.Core/Cloud/CloudAccountClient.Sync.cs"
+      ],
+      "mcp": [
+        "cloud.status"
+      ],
+      "status": "partial",
+      "limitation": "Existing uploader detaches with SyncIdentity; Windows has no separate Phones copy toggle."
+    },
+    {
+      "number": 16,
+      "macReportedAnchor": "TerminalDeckNative/SHELLRoutes.swift:127",
+      "category": "SidebarCloud",
+      "feature": "Restored/new page routes and retained paid surfaces",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Windows/ShellWindows.cs",
+        "windows/src/TerminalDeck.App/Views/Windows/ShellCloudAccess.cs",
+        "windows/src/TerminalDeck.App/Views/CloudAccessSurface.cs"
+      ],
+      "mcp": [
+        "ui.workspace",
+        "shell.read"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 17,
+      "macReportedAnchor": "TerminalDeckNative/NativeCloudSyncChoices.swift:32",
+      "category": "SyncSwitches",
+      "feature": "Cloud switch and sync admission",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Settings/CloudPage.xaml.cs",
+        "windows/src/TerminalDeck.Core/Cloud/CloudAccountClient.Sync.cs"
+      ],
+      "mcp": [
+        "cloud.status"
+      ],
+      "status": "partial",
+      "limitation": "No per-kind Windows switches or mutation MCP were invented."
+    },
+    {
+      "number": 18,
+      "macReportedAnchor": "TerminalDeckNative/NativeCloudStatusLine.swift:158",
+      "category": "SyncSwitches",
+      "feature": "Cloud status, Resume and Sync now",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Settings/CloudPage.xaml.cs",
+        "windows/src/TerminalDeck.App/Views/Settings/SettingsDirectionPages.cs"
+      ],
+      "mcp": [
+        "cloud.status"
+      ],
+      "status": "partial",
+      "limitation": "Existing native actions are guarded; no existing dedicated Resume/Sync-now MCP owner was identified."
+    },
+    {
+      "number": 19,
+      "macReportedAnchor": "TerminalDeckNative/NativeCloudSecrets.swift:300",
+      "category": "SavedPasswords",
+      "feature": "Cloud manager password rows and recovery owner reach",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Windows/ShellSidebar.cs",
+        "windows/src/TerminalDeck.Core/Cloud/CloudContents.cs",
+        "windows/src/TerminalDeck.App/Integration/AppRuntime.CloudSecrets.cs"
+      ],
+      "mcp": [
+        "cloud.status"
+      ],
+      "status": "partial",
+      "limitation": "Cloud rows are gated; Windows has no Mac recovery-control screen. Local saved login use stays available."
+    },
+    {
+      "number": 20,
+      "macReportedAnchor": "TerminalDeckNative/NativeCloudSettings.swift:130",
+      "category": "FileManager",
+      "feature": "Manage files entrance and retained page",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Settings/CloudPage.xaml.cs",
+        "windows/src/TerminalDeck.App/Views/Windows/ShellSidebar.cs",
+        "windows/src/TerminalDeck.Core/Cloud/CloudContents.cs"
+      ],
+      "mcp": [
+        "cloud.folder",
+        "cloud.artifacts"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 21,
+      "macReportedAnchor": "TerminalDeckNative/NativeAiAppsSettings.swift:47",
+      "category": "AiAppsInternet",
+      "feature": "AI-app relay toggle/address and existing caller keys",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Settings/Connections/CallerManagement.cs",
+        "windows/src/TerminalDeck.App/Integration/AppRuntime.cs",
+        "windows/src/TerminalDeck.Core/Mcp/McpDoor.cs"
+      ],
+      "mcp": [
+        "ai_apps.internet",
+        "mcp.remote",
+        "mcp.callers"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 22,
+      "macReportedAnchor": "TerminalDeckNative/NativeBrowserBRMachines.swift:28",
+      "category": "RemoteMachineChoices",
+      "feature": "Browser ports and remote browser-tool bridge",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Integration/OtherComputersTransfers.cs",
+        "windows/src/TerminalDeck.App/Integration/OtherComputersBrowser.cs",
+        "windows/src/TerminalDeck.App/Views/Computers/ComputerServicesWindow.cs"
+      ],
+      "mcp": [
+        "computers.services"
+      ],
+      "status": "partial",
+      "limitation": "Windows browser session selector lists local sessions; remote ports/browser bridge use the paid computers owner. No Mac machine picker is invented."
+    },
+    {
+      "number": 23,
+      "macReportedAnchor": "TerminalDeckNative/NativeCopilotMachines.swift:36",
+      "category": "RemoteMachineChoices",
+      "feature": "Remote Hoot capabilities",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Computers/ComputerServicesWindow.cs",
+        "windows/src/TerminalDeck.App/Integration/OtherComputersOperations.cs"
+      ],
+      "mcp": [
+        "computers.services"
+      ],
+      "status": "partial",
+      "limitation": "Remote Hoot is in existing Services UI; Windows global Hoot page has no remote-machine selection to migrate."
+    },
+    {
+      "number": 24,
+      "macReportedAnchor": "TerminalDeckNative/NativeNewSessionDialog.swift:372",
+      "category": "RemoteMachineChoices",
+      "feature": "New session remote choice",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Computers/ComputerSessionPicker.cs",
+        "windows/src/TerminalDeck.App/Views/Agents/NewSessionPicker.cs"
+      ],
+      "mcp": [
+        "computers.services",
+        "agents.start"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 25,
+      "macReportedAnchor": "TerminalDeckNative/NativeServerHost.swift:24",
+      "category": "PhoneAndWebReach",
+      "feature": "Host start/restart and phone/web screen controls",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Integration/RemoteService.Control.cs",
+        "windows/src/TerminalDeck.App/Integration/RemoteService.CloudAccess.cs",
+        "windows/src/TerminalDeck.App/Integration/PhoneHostRuntime.cs",
+        "windows/src/TerminalDeck.App/Views/SettingsPane.cs"
+      ],
+      "mcp": [
+        "remote.manage",
+        "phone.screen"
+      ],
+      "status": "wired",
+      "limitation": "Direct SSH server sessions and local process controls remain local."
+    },
+    {
+      "number": 26,
+      "macReportedAnchor": "TerminalDeckNative/NativeCodingAIStore.swift:23",
+      "category": "RemoteMachineChoices",
+      "feature": "Coding AI store scope",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Store/StorePage.cs"
+      ],
+      "mcp": [
+        "store.read"
+      ],
+      "status": "not-present",
+      "limitation": "Windows Store is local; no retained relay-device scope exists. Local provider installation remains unchanged."
+    },
+    {
+      "number": 27,
+      "macReportedAnchor": "TerminalDeckNative/NativeScrapingSettings.swift:261",
+      "category": "RemoteMachineChoices",
+      "feature": "Scraping/browser settings scope",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Browser/BrowserPane.Sessions.cs",
+        "windows/src/TerminalDeck.App/Views/Browser/BrowserPane.Sessions.cs"
+      ],
+      "mcp": [
+        "browser.page"
+      ],
+      "status": "not-present",
+      "limitation": "Windows has no scraping relay-machine scope. Its local Browser settings remain unchanged."
+    },
+    {
+      "number": 28,
+      "macReportedAnchor": "TerminalDeckNative/NativeRemoteMacs.swift:34",
+      "category": "RemoteMachineChoices",
+      "feature": "Other computers list and outbound transport",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Computers/OtherComputersCard.cs",
+        "windows/src/TerminalDeck.App/Integration/OtherComputers.CloudAccess.cs",
+        "windows/src/TerminalDeck.App/Integration/OtherComputersService.cs"
+      ],
+      "mcp": [
+        "computers.look",
+        "computers.manage"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 29,
+      "macReportedAnchor": "TerminalDeckBackend/BackendCloudAccountTools.swift:36",
+      "category": "CloudTools",
+      "feature": "Cloud contracts, discovery and stale direct calls",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Integration/AppRuntime.CloudSubscription.cs",
+        "windows/src/TerminalDeck.Core/Cloud/CloudSubscription.cs",
+        "windows/src/TerminalDeck.Core/Mcp/McpCatalogue.cs",
+        "windows/src/TerminalDeck.Core/Mcp/McpDoor.cs"
+      ],
+      "mcp": [
+        "cloud.*",
+        "cloud.subscription"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 30,
+      "macReportedAnchor": "TerminalDeckBackend/BackendDeckCoreSecurityControl.swift:156",
+      "category": "CloudTools",
+      "feature": "Security/caller relay admission and unchanged local authentication",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Integration/AppRuntime.cs",
+        "windows/src/TerminalDeck.Core/Mcp/McpDoor.cs",
+        "windows/src/TerminalDeck.Core/Remote/CloudRelayApplications.cs"
+      ],
+      "mcp": [
+        "mcp.callers",
+        "mcp.remote"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 31,
+      "macReportedAnchor": "TerminalDeckBackend/BackendMCPTools.swift:236",
+      "category": "CloudTools",
+      "feature": "Inbound phone/Receiver/MCP frame-level admission",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Integration/RemoteService.cs",
+        "windows/src/TerminalDeck.Core/Remote/CloudRelayApplications.cs",
+        "windows/src/TerminalDeck.Core/Mcp/McpDoor.cs"
+      ],
+      "mcp": [
+        "phone.*",
+        "remote.*",
+        "cloud.*",
+        "computers.*"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 32,
+      "macReportedAnchor": "TerminalDeckNative/NativeCodeBackupPage.swift:445",
+      "category": "ProjectCloudActions",
+      "feature": "Project secret-file Cloud actions; local GitHub retained",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Integration/AppRuntime.CloudBootFiles.cs",
+        "windows/src/TerminalDeck.Core/Cloud/CloudProjectSecretFilesTools.cs",
+        "windows/src/TerminalDeck.App/Views/Code/ProjectCodeWorkspace.cs"
+      ],
+      "mcp": [
+        "cloud.project_secrets",
+        "code.*"
+      ],
+      "status": "partial",
+      "limitation": "Windows exposes status through the shared Cloud tool; Mac secret-file backup row/actions do not exist. Local GitHub/Code actions are not paid-gated."
+    },
+    {
+      "number": 33,
+      "macReportedAnchor": "TerminalDeckNative/AppCommands.swift:55",
+      "category": "CloudTools",
+      "feature": "Shell command execution and discoverable command list",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Windows/ShellCommandUi.cs",
+        "windows/src/TerminalDeck.App/Views/Windows/ShellReadTools.cs",
+        "windows/src/TerminalDeck.Core/Cloud/CloudSubscription.cs"
+      ],
+      "mcp": [
+        "ui.workspace",
+        "shell.read"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 34,
+      "macReportedAnchor": "TerminalDeckNative/NativeCommandPalette.swift:56",
+      "category": "CloudTools",
+      "feature": "Command palette offers and stale command dispatch",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Windows/ShellCommandUi.cs",
+        "windows/src/TerminalDeck.App/Views/Windows/ShellCloudAccess.cs"
+      ],
+      "mcp": [
+        "ui.workspace",
+        "shell.read"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 35,
+      "macReportedAnchor": "TerminalDeckNative/NativeTerminalScreen.swift:22",
+      "category": "OtherComputerSessions",
+      "feature": "Remote terminal content on original host",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Computers/RemoteSessionPane.cs",
+        "windows/src/TerminalDeck.App/Views/CloudAccessSurface.cs"
+      ],
+      "mcp": [
+        "computers.services"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 36,
+      "macReportedAnchor": "TerminalDeckNative/NativeTerminalScreen.swift:54",
+      "category": "OtherComputerSessions",
+      "feature": "Detached remote chat/terminal content",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Computers/ComputerServicesWindow.cs",
+        "windows/src/TerminalDeck.App/Views/Computers/ComputerSessionPicker.cs",
+        "windows/src/TerminalDeck.App/Views/CloudAccessSurface.cs"
+      ],
+      "mcp": [
+        "computers.services"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 37,
+      "macReportedAnchor": "TerminalDeckNative/NativeRemoteMacs.swift:334",
+      "category": "RemoteMachineChoices",
+      "feature": "Existing remote desktop screen and capability refusal",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Computers/ComputerScreenWindow.cs",
+        "windows/src/TerminalDeck.App/Integration/OtherComputersOperations.cs"
+      ],
+      "mcp": [
+        "computers.screen"
+      ],
+      "status": "partial",
+      "limitation": "Only shared desktop displays supported by Windows protocol are offered. No remote simulator picker/layout or session move protocol exists."
+    },
+    {
+      "number": 38,
+      "macReportedAnchor": "TerminalDeckNative/NativeArtifactsCatalogModel.swift:96",
+      "category": "ArtifactCloudActions",
+      "feature": "Cloud-only artifact rows vs local Artifacts list",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/Windows/ShellSidebar.cs",
+        "windows/src/TerminalDeck.Core/Cloud/CloudContents.cs",
+        "windows/src/TerminalDeck.App/Views/Receiver/ArtifactsPage.cs"
+      ],
+      "mcp": [
+        "cloud.artifacts",
+        "artifacts.list"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 39,
+      "macReportedAnchor": "TerminalDeckNative/NativeArtifactsCatalogCards.swift:115",
+      "category": "ArtifactCloudActions",
+      "feature": "Cloud-only all-device removal and stale confirmation",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.Core/Cloud/CloudContents.cs",
+        "windows/src/TerminalDeck.App/Views/Settings/CloudBinPage.cs",
+        "windows/src/TerminalDeck.App/Views/Receiver/ArtifactsPage.cs"
+      ],
+      "mcp": [
+        "cloud.artifacts"
+      ],
+      "status": "wired",
+      "limitation": "Existing manager mutations remain person-only. Local artifact Delete from list is preserved."
+    },
+    {
+      "number": 40,
+      "macReportedAnchor": "TerminalDeckNative/NativeArtifactsCatalogCards.swift:121",
+      "category": "ArtifactCloudActions",
+      "feature": "Cloud preview and local artifact preview",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.Core/Cloud/CloudContents.cs",
+        "windows/src/TerminalDeck.App/Views/Settings/YourCloudPage.cs",
+        "windows/src/TerminalDeck.App/Views/Receiver/ArtifactPreviewSurface.cs"
+      ],
+      "mcp": [
+        "cloud.artifacts",
+        "artifacts.list"
+      ],
+      "status": "wired",
+      "limitation": null
+    },
+    {
+      "number": 41,
+      "macReportedAnchor": "TerminalDeckNative/NativeArtifactsCatalogScreen.swift:81",
+      "category": "ArtifactCloudActions",
+      "feature": "Already-open Cloud artifact/manager content",
+      "windowsOwners": [
+        "windows/src/TerminalDeck.App/Views/CloudAccessSurface.cs",
+        "windows/src/TerminalDeck.Core/Cloud/CloudContents.cs",
+        "windows/src/TerminalDeck.App/Views/Settings/YourCloudPage.cs"
+      ],
+      "mcp": [
+        "cloud.artifacts"
+      ],
+      "status": "wired",
+      "limitation": null
+    }
+  ]
+}

@@ -74,7 +74,8 @@ public sealed partial class AppRuntime
     ct.ThrowIfCancellationRequested();
     if (HootStorage.At(Root).Load()?.ChatId == chatId) { await PrepareHootToolsAsync(chatId, ct); return; }
     if (!Chats.List().Any(c => c.Definition.Id == chatId)) await Chats.RefreshAsync(ct);
-    ConnectChatTools(chatId);
+    if (Chats.List().Any(c => c.Definition.Id == chatId)) ConnectChatTools(chatId);
+    else { await RefreshSessionsAsync(); ConnectAgentTerminalTools(chatId); }
   }
   private bool Live(McpRegistration registration)
   {
@@ -152,6 +153,9 @@ public sealed partial class AppRuntime
     lock (chatConnections)
       foreach (var id in chatConnections.Keys.ToArray())
         if (!CallerAuthority.IsCurrent("chat:" + id)) { CallerAuthority.Revoke(Door, "chat:" + id); chatConnections.Remove(id); }
+    lock (terminalToolConnections)
+      foreach (var id in terminalToolConnections.Keys.ToArray())
+        if (!CallerAuthority.IsCurrent("terminal:" + id)) { CallerAuthority.Revoke(Door, "terminal:" + id); terminalToolConnections.Remove(id); }
   }
   private sealed class CallerFacts(AppRuntime runtime) : ISessionCallerFacts
   {

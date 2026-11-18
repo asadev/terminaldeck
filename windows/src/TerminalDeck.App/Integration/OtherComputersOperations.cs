@@ -85,6 +85,7 @@ public sealed partial class OtherComputersService
   }
   public void RequireCapability(string id, string capability)
   {
+    RequireCloudAccess();
     var row = List().FirstOrDefault(c => c.Id == id);
     if (row?.State != "Online" || !row.Capabilities.Contains(capability)) throw new InvalidOperationException("This computer does not currently grant " + capability + ".");
   }
@@ -138,9 +139,16 @@ public sealed partial class OtherComputersService
   }
   private async Task RestoreWatchesAsync(string id, CancellationToken ct)
   {
+    await RestoreChatWatchesAsync(id, ct);
     foreach (var pair in attached.Where(p => p.Key.Computer == id))
       if (Services(id).Sessions.Any(s => Text(s, "id", "") == pair.Key.Session))
         try { await AttachAsync(id, pair.Key.Session, pair.Value.Cols, pair.Value.Rows, ct); } catch (Exception ex) when (ex is not OutOfMemoryException) { }
+  }
+  private async Task RestoreChatWatchesAsync(string id, CancellationToken ct)
+  {
+    foreach (var watched in watchedChats.Keys.Where(key => key.Computer == id))
+      if (Services(id).Sessions.Any(row => Text(row, "id", "") == watched.Session))
+        try { await ChatActionAsync(id, watched.Session, "watch", ct: ct); } catch (Exception ex) when (ex is not OutOfMemoryException) { }
   }
   public void Nudge()
   {
@@ -152,6 +160,7 @@ public sealed partial class OtherComputersService
   }
   private void ScheduleReconnect(string id)
   {
+    if (!CloudAllowed) return;
     if (List().Any(c => c.Id == id && c.State == "Online")) return;
     FailRequests(id);
     if (lifetime.IsCancellationRequested || !wanted.ContainsKey(id) || !retrying.TryAdd(id, 0)) return;
@@ -161,7 +170,7 @@ public sealed partial class OtherComputersService
       try
       {
         var attempt = 0;
-        while (wanted.ContainsKey(id) && !lifetime.IsCancellationRequested)
+        while (CloudAllowed && wanted.ContainsKey(id) && !lifetime.IsCancellationRequested)
         {
           await Task.Delay(TimeSpan.FromSeconds(Math.Min(30, Math.Pow(2, Math.Min(attempt++, 5)))), lifetime.Token);
           try { await ConnectAsync(id, lifetime.Token); return; }

@@ -14,6 +14,8 @@ public sealed record ChatEvent(long Sequence, string Kind, string Id, string Tex
   JsonElement? Data = null, DateTimeOffset At = default);
 public sealed record ChatDefinition(string Id, string Provider, string Cwd, string Title, string AccountId, string AccountHome, ChatOptions Options, string Instructions = "", AiPermissionMode PermissionMode = AiPermissionMode.Ask, bool ForkSession = false)
 {
+  public bool AddonsOff { get; init; }
+  public bool RequiresDeckTools { get; init; }
   public void Validate(bool allowSavedUnsupportedChoices = false)
   {
     ChatPermissionModes.Validate(Provider, PermissionMode);
@@ -73,6 +75,7 @@ public interface IChatSessions
   ValueTask StopAsync(string id, CancellationToken cancellationToken = default);
   ValueTask ContinueWithoutResendingAsync(string id, CancellationToken cancellationToken = default);
   ValueTask EndAsync(string id, CancellationToken cancellationToken = default);
+  ValueTask<bool> TryEndIdleAsync(ChatRecord expected, CancellationToken ct = default) => ValueTask.FromResult(false);
   ValueTask RetryAsync(string id, CancellationToken cancellationToken = default);
   ValueTask SetOptionsAsync(string id, ChatOptions options, CancellationToken cancellationToken = default);
   ValueTask SetAccountAsync(string id, string accountId, CancellationToken cancellationToken = default);

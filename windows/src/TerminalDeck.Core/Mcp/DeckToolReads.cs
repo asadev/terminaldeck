@@ -10,7 +10,7 @@ public static class DeckToolReads
   public const string ServerPrefix = "mcp__deck-tools__";
   private static readonly Lazy<Dictionary<string, McpToolSpec>> ByWire = new(() => McpCatalogue.Load().GroupBy(s => s.Wire).ToDictionary(g => g.Key, g => g.First()));
   private static readonly HashSet<string> ReadingVerbs = ["list", "get", "read", "search", "describe", "show", "status", "preview", "progress", "comments",
-    "activity", "routine", "trash", "history", "diff", "look", "find", "summary", "state", "snapshot", "fetch", "description_history", "recording", "screenshot"];
+    "activity", "routine", "trash", "history", "diff", "look", "find", "summary", "state", "snapshot", "fetch", "description_history", "recording", "screenshot", "read-defaults", "usage", "wait"];
   public static bool Quiet(string toolName, JsonElement input)
   {
     if (!toolName.StartsWith(ServerPrefix, StringComparison.Ordinal) || !ByWire.Value.TryGetValue(toolName[ServerPrefix.Length..], out var spec)) return false;

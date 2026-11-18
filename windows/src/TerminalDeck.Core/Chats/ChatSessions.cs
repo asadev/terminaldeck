@@ -196,16 +196,33 @@ public sealed partial class ChatSessions(IChatHistory history, IChatProcessKeepe
     await gate.WaitAsync(cancellationToken);
     try
     {
-      var chat = Get(id); if (chat.Ended) return;
-      // End is durable only after the owned worker and its CLI have retired.
-      await RetireWorkerAsync(chat, cancellationToken);
-      if ((await processes.ObserveAsync(Session(chat), cancellationToken)).Presence != ProcessPresence.Dead)
-        throw new IOException("The chat has not finished closing. Reconnect and try End chat again.");
-      chat = chat with { Ended = true, Busy = false, ActiveClientId = null, Stopping = false, Paused = true, WaitingSince = null,
-        Messages = chat.Messages.Select(m => m.State == ChatMessageState.Dispatching ? m with { State = ChatMessageState.Uncertain } : m).ToArray() };
-      Save(Add(chat, "ended", Guid.NewGuid().ToString("N"), "Chat ended. History is kept."));
+      await EndOwnedAsync(Get(id), cancellationToken);
     }
     finally { gate.Release(); }
+  }
+  public async ValueTask<bool> TryEndIdleAsync(ChatRecord expected, CancellationToken ct = default)
+  {
+    await gate.WaitAsync(ct);
+    try
+    {
+      var chat = Get(expected.Definition.Id);
+      if (chat.Definition != expected.Definition || chat.CreationKey != expected.CreationKey || chat.AccountRevision != expected.AccountRevision) return false;
+      if (chat.Ended) return true;
+      if (chat.Busy || chat.Stopping || chat.Messages.Any(m => m.State is ChatMessageState.Queued or ChatMessageState.Dispatching)) return false;
+      await EndOwnedAsync(chat, ct); return Get(chat.Definition.Id).Ended;
+    }
+    finally { gate.Release(); }
+  }
+  private async ValueTask EndOwnedAsync(ChatRecord chat, CancellationToken cancellationToken)
+  {
+    if (chat.Ended) return;
+    // End is durable only after the owned worker and its CLI have retired.
+    await RetireWorkerAsync(chat, cancellationToken);
+    if ((await processes.ObserveAsync(Session(chat), cancellationToken)).Presence != ProcessPresence.Dead)
+      throw new IOException("The chat has not finished closing. Reconnect and try End chat again.");
+    chat = chat with { Ended = true, Busy = false, ActiveClientId = null, Stopping = false, Paused = true, WaitingSince = null,
+      Messages = chat.Messages.Select(m => m.State == ChatMessageState.Dispatching ? m with { State = ChatMessageState.Uncertain } : m).ToArray() };
+    Save(Add(chat, "ended", Guid.NewGuid().ToString("N"), "Chat ended. History is kept."));
   }
   public async ValueTask RetryAsync(string id, CancellationToken cancellationToken = default)
   {

@@ -64,6 +64,7 @@ public static class AgentEditors
   {
     if (AgentEditorWindow.FocusExisting(agents, agent.Id, focus)) return;
     var o = agent.Settings;
+    AgentEfficiency? efficiency = o.Efficiency;
     var accounts = (operation as TerminalDeck.App.ViewModels.Agents.AgentsViewModel)?.Accounts ?? (operation as ProjectsViewModel)?.Accounts;
     // General
     var name = Field("Name", agent.Name, max: 60); var description = Field("What it does", agent.Description, true);
@@ -152,6 +153,7 @@ public static class AgentEditors
       Words("Before it changes files: App default uses the app's setting; Plan only lets it read and plan; Change without asking lets it edit files in its folder.", 12, true));
     Panel("Limits", limits, taskLimit, Words("Category template: " + Limit(template.MaxHandsPerSeat) + " hands per seat; " + Limit(template.MaxHandsPerProject) + " per project.", 12, true),
       AsyncButton("Edit category template", () => TemplatesAsync(form.XamlRoot, agents, operation, category)));
+    Panel("Budgets", TerminalDeck.App.Views.Settings.AgentEfficiencyEditor.Rows(() => efficiency, value => efficiency = value, words => { error.Message = words; error.IsOpen = true; }).Cast<UIElement>().ToArray());
     Panel("Tools", preferred, avoided, Words("These are named in its brief as advice.", 12, true), skills, skillsOff);
     var chooseFolder = AsyncButton("Choose…", async () =>
     {
@@ -192,7 +194,7 @@ public static class AgentEditors
         MaxConcurrentTasks = Picked(limits) == "none" ? null : double.IsFinite(taskLimit.Value) && taskLimit.Value >= 1 && taskLimit.Value <= int.MaxValue && taskLimit.Value == Math.Truncate(taskLimit.Value) ? (int)taskLimit.Value : throw new ArgumentException("Choose a whole number of tasks or No limit."),
         Status = Enum.Parse<SavedAgentStatus>(Picked(status), true), AccountId = Picked(account).Length == 0 ? null : Picked(account),
         Options = o with { PermissionMode = Picked(permission).Length == 0 ? null : Picked(permission), WorkingFolder = string.IsNullOrWhiteSpace(folder.Text) ? null : folder.Text.Trim(),
-          ToolsPreferred = Split(preferred.Text), ToolsAvoided = Split(avoided.Text), SkillsOff = skillsOff.IsOn }
+          ToolsPreferred = Split(preferred.Text), ToolsAvoided = Split(avoided.Text), SkillsOff = skillsOff.IsOn, Efficiency = efficiency }
       }, agent));
       error.Message = operation.Message; error.Severity = InfoBarSeverity.Error; error.IsOpen = !ok; return ok;
     });

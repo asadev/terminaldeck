@@ -75,6 +75,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
     TerminalDeck.App.Views.Agents.NewSessionPicker.Computers = OtherComputers;
     Mcp = new(new JsonStateStore<McpManagerState>(root, "mcp"), new WindowsCredentialStore(root), root, new WindowsMcpCommandResolver(), new ManagedMcpFactory());
     Door = new(permissions ?? CallerAuthority, wrap: dispatch, preflight: PreflightV2);
+    InitializeAgentBudgets();
     CallerAuthority.Authorized += action =>
     {
       var directory = Path.Combine(Root.DirectoryPath, "mcp"); WindowsPrivateDirectory.Ensure(directory);
@@ -114,7 +115,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
     InitializePhoneWorkspace();
     InitializePhoneManagementTools();
     _ = ResumeCloudAsync();
-    await Remote.StartAsync(); Changed?.Invoke();
+    await Remote.StartAtLaunchAsync(); Changed?.Invoke();
   }
   private readonly KeeperReconnectGate reconnectGate = new();
   public long KeeperGeneration => reconnectGate.Generation;
@@ -172,9 +173,8 @@ public sealed partial class AppRuntime : IAsyncDisposable
   private async ValueTask<AgentSessionStarted> StartAgentChatAsync(AgentLaunchPlan plan, CancellationToken ct)
   {
     if (!Directory.Exists(plan.Folder)) throw new ArgumentException("Choose an existing folder.");
-    var chat = await Chats.CreateAsync(new(plan.SessionId, plan.Provider, plan.Folder, plan.Title, plan.AccountId, plan.AccountHome, new(plan.Model, plan.Effort), plan.Instructions,
-      plan.Permission is { } chosen && ChatPermissionModes.Supported(plan.Provider).Contains(chosen) ? chosen : General.NewChatPermission(plan.Provider)),
-      customTitle: plan.Title != TerminalDeck.Core.Agents.AgentSeats.ProviderName(plan.Provider), cancellationToken: ct);
+    var chat = await Chats.CreateAsync(AgentTaskChatDefinition(plan),
+      conversationId: plan.ConversationId, customTitle: plan.Title != TerminalDeck.Core.Agents.AgentSeats.ProviderName(plan.Provider), cancellationToken: ct);
     ConnectChatTools(chat.Definition.Id);
     if (plan.Job.Length > 0) await Chats.SendAsync(chat.Definition.Id, plan.SessionId, plan.Job, cancellationToken: ct);
     await RefreshSessionsAsync(); return new(chat.Definition.Id, "chat");
@@ -197,9 +197,10 @@ public sealed partial class AppRuntime : IAsyncDisposable
   public Task SendBrowserContextAsync(string id, string draft) =>
     SendAsync(id, TerminalDeck.Core.Browser.BrowserContext.TerminalMessage(draft));
   private bool remoteTools;
-  public bool RemoteToolsEnabled => remoteTools;
+  public bool RemoteToolsEnabled => remoteTools && CloudServicesAllowed;
   public async Task SetRemoteToolsAsync(bool enabled)
   {
+    if (enabled && !CloudServicesAllowed) throw new InvalidOperationException(TerminalDeck.Core.Remote.CloudRelayLifecycle.SubscriptionRequired);
     if (enabled) await Remote.StartAsync();
     remoteTools = enabled;
     if (!enabled)
@@ -271,6 +272,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
   {
     KeeperSessionTools.Register(Door, () => Keeper);
     new TerminalDeck.Core.Code.CodeMcp(new(), new(), CopyGitHub).Register(Door);
+    new TerminalDeck.Core.Agents.AgentLibraryTools(Projects, Agents, ProjectSessions).Register(Door);
     var projectTools = new ProjectsAgentsMcp(Projects, Agents, ProjectFolders, ProjectSessions, Accounts, ProjectAgentPages);
     chatTools = new ChatMcpTools(Chats, General.NewChatPermission);
     McpToolHandler start = async (c, a, ct) =>
@@ -393,6 +395,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
   public async ValueTask DisposeAsync() {
     if (Interlocked.Exchange(ref runtimeDisposed, 1) != 0) return;
     accountNotificationsReady = false;
+    if (subscriptionChanged is not null) Cloud.Changed -= subscriptionChanged;
     if (receiverSources is not null) receiverSources.Changed -= EnsureReceiverTransport;
     await DisposeServerSigninAsync();
     await Remote.DisposeAsync();

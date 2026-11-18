@@ -24,7 +24,7 @@ public static class TaskActivityKinds
 }
 public enum TaskRunState { Starting, Working, NeedsYou, Uncertain, Yielded, Ended }
 public sealed record TaskRun(string Id, string TaskId, string AgentId, string Folder, string Mode, TaskRunState State,
-  DateTimeOffset StartedAt, string? SessionId = null, string? Problem = null);
+  DateTimeOffset StartedAt, string? SessionId = null, string? Problem = null, TerminalDeck.Core.Agents.AgentEfficiency? Efficiency = null, string? ContextSignature = null, string? AccountId = null, bool Parked = false, string? ConversationId = null, DateTimeOffset? CompletedAt = null, string? ExecutionFolder = null);
 public sealed record TaskMention(string Id, string TaskId, string CommentId, string Recipient, string? SessionId = null,
   bool Delivered = false, string? Problem = null, TaskMentionAuthority? Authority = null, string? TargetIdentity = null);
 public sealed record TaskMentionAuthority(string Id, string CallerId, string? SessionId, string? SeatId, bool Owner, string ProjectId, string Folder);
@@ -52,7 +52,7 @@ public sealed record TaskFilter(string? ProjectId = null, string Search = "", st
 public sealed record SavedTaskView(string Id, string Machine, string Name, TaskFilter State);
 public sealed record TasksState(int Version, ImmutableArray<DeckTask> Tasks, ImmutableArray<TaskRun> Runs,
   ImmutableArray<TaskMention> Mentions, ImmutableDictionary<string, TaskFilter> Filters, ImmutableArray<SavedTaskView> Views = default, ImmutableArray<DeckGoal> Goals = default);
-public sealed record TaskPreparedSession(string SessionId, string ProjectId, string Folder, string AccountId, string AgentId);
+public sealed record TaskPreparedSession(string SessionId, string ProjectId, string Folder, string AccountId, string AgentId, TerminalDeck.Core.Agents.AgentEfficiency? Efficiency = null, string? ContextSignature = null);
 public sealed record TaskLaunch(DeckTask Task, string RunId, string AgentId, string Mode, string Brief, TaskActor? AssignedBy = null);
 public interface ITaskRunner
 {

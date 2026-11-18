@@ -6,6 +6,9 @@ public enum SessionState { Starting, Running, Held, Exited }
 public sealed record SessionDefinition(string Id, string Provider, string Cwd, string Title, string? AccountId = null,
   string? AccountHome = null, string? ConversationId = null, string? DeviceId = null, string? Purpose = null, string? InitialPrompt = null, string? Model = null, string? Effort = null, string? Permission = null, string? ServerId = null, string? Shell = null)
 {
+  public bool ResumeWithPrompt { get; init; }
+  public bool AddonsOff { get; init; }
+  public bool RequiresDeckTools { get; init; }
   public TerminalDeck.Core.Servers.ServerCodingTask? ServerCodingTask { get; init; }
   public string? ServerStartIn { get; init; }
   public void Validate()
@@ -23,7 +26,7 @@ public sealed record SessionDefinition(string Id, string Provider, string Cwd, s
 public sealed record SessionRecord(SessionDefinition Definition, string CreationKey, SessionState State,
   string? LeaseIdentity = null, string Replay = "", int? ExitCode = null, long CreatedAt = 0, bool HasStarted = false, bool Resume = false, long AccountRevision = 0, string? LastAccountSwitch = null,
   SessionDefinition? PendingAccount = null, string? PendingAccountSwitch = null, string ReplayPrefix = "", bool AccountRollback = false, TerminalSize? ReplaySize = null,
-  bool DeclaredConversation = false);
+  bool DeclaredConversation = false, bool ResumePromptDelivered = false);
 // What the update check needs to know about one open terminal right now. Ages are
 // milliseconds; null means never seen since this keeper started. OutputRunMs is how
 // long the latest unbroken stretch of output has lasted (an AI at work repaints all

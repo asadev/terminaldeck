@@ -26,7 +26,7 @@ public sealed partial class TaskDetailPage
     var grid = new Grid { ColumnSpacing = 12, RowSpacing = 8 };
     AutomationProperties.SetAutomationId(grid, "tasks.properties");
     foreach (var width in new[] { new GridLength(132), new GridLength(1.4, GridUnitType.Star), new GridLength(116), new GridLength(0.6, GridUnitType.Star) }) grid.ColumnDefinitions.Add(new() { Width = width });
-    for (var i = 0; i < 5; i++) grid.RowDefinitions.Add(new() { Height = GridLength.Auto });
+    for (var i = 0; i < 6; i++) grid.RowDefinitions.Add(new() { Height = GridLength.Auto });
     void FieldRow(int row, int column, string glyph, string label, FrameworkElement value, bool empty = false, int span = 1, bool grayEmpty = true)
     {
       var name = Stack(8); name.Orientation = Orientation.Horizontal; name.VerticalAlignment = VerticalAlignment.Center;
@@ -38,8 +38,17 @@ public sealed partial class TaskDetailPage
       if (value is ContentControl control) control.HorizontalContentAlignment = HorizontalAlignment.Left;
       if (empty) { if (grayEmpty) value.Opacity = 0.45; emptyFields.Add(name); emptyFields.Add(value); }
     }
+    var budget = new TextBox { Text = extras.TokenBudget?.ToString(System.Globalization.CultureInfo.CurrentCulture) ?? "", PlaceholderText = "Agent default", Width = 160, MaxLength = 10, TextAlignment = TextAlignment.Right };
+    AutomationProperties.SetAutomationId(budget, "tasks.tokenBudget");
+    budget.LostFocus += async (_, _) =>
+    {
+      if (budget.Text == (extras.TokenBudget?.ToString(System.Globalization.CultureInfo.CurrentCulture) ?? "")) return;
+      await DetailAsync("token-budget", value: budget.Text.Trim());
+    };
+    ToolTipService.SetToolTip(budget, "A token warning budget for the next run. Blank inherits; 0 is unlimited. It cannot exceed the agent's task budget.");
+    FieldRow(5, 0, "\uE9D9", "Token budget", budget, span: 3);
     var statusRow = Stack(5); statusRow.Orientation = Orientation.Horizontal;
-    var status = TaskLayout.Quiet(task.Status.ToUpperInvariant(), () => { });
+    var status = TaskLayout.Quiet(extras.CompletionRequested ? "FINISHING…" : task.Status.ToUpperInvariant(), () => { });
     status.Foreground = new SolidColorBrush(Microsoft.UI.Colors.White); status.FontSize = 11; status.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
     var tone = task.Status switch { "Working on it" => "DeckProjectOrangeBrush", "Done" => "SystemFillColorSuccessBrush", "Stuck" => "SystemFillColorCriticalBrush", "To-Do" => "TextFillColorSecondaryBrush", "In Progress" => "DeckProjectPurpleBrush", _ => "AccentFillColorDefaultBrush" };
     status.SetResourceReference(Control.BackgroundProperty, tone); status.CornerRadius = new CornerRadius(5, 0, 0, 5);
@@ -47,14 +56,14 @@ public sealed partial class TaskDetailPage
     foreach (var state in TaskStatuses.All) { var item = new MenuFlyoutItem { Text = state }; item.Click += async (_, _) => await SetStatusAsync(state); menu.Items.Add(item); }
     status.Flyout = menu;
     statusRow.Spacing = 0; statusRow.Children.Add(status);
-    if (TaskStatuses.Next(task.Status) is { } nextStatus)
+    if (!extras.CompletionRequested && TaskStatuses.Next(task.Status) is { } nextStatus)
     {
       var next = TaskLayout.Icon("\uE76C", "Next status: " + nextStatus, async () => await SetStatusAsync(nextStatus));
       next.Width = 20; next.MinWidth = 20; next.Padding = new Thickness(0); next.Opacity = 0.85;
       next.SetResourceReference(Control.BackgroundProperty, tone); next.Foreground = status.Foreground; next.CornerRadius = new CornerRadius(0, 5, 5, 0); statusRow.Children.Add(next);
     }
     else status.CornerRadius = new CornerRadius(5);
-    if (task.Status != "Done")
+    if (task.Status != "Done" && !extras.CompletionRequested)
     {
       var done = TaskLayout.Icon("\uE73E", "Mark complete", async () => await SetStatusAsync("Done")); done.Margin = new Thickness(6, 0, 0, 0); done.BorderThickness = new Thickness(1); done.CornerRadius = new CornerRadius(5); done.SetResourceReference(Control.BorderBrushProperty, "CardStrokeColorDefaultBrush"); statusRow.Children.Add(done);
     }

@@ -139,7 +139,7 @@ public sealed class UsageService : IDisposable
 
   /// Keep this session's figures live while something shows them: the CLI's own files are watched
   /// (no polling) and every change, after a short settle, raises `Changed` for the session.
-  public IDisposable Watch(string sessionId)
+  public IDisposable Watch(string sessionId, bool includeApiTranscript = false)
   {
     lock (gate)
     {
@@ -147,7 +147,7 @@ public sealed class UsageService : IDisposable
       if (watches.TryGetValue(sessionId, out var existing)) { existing.Count++; return new Release(() => Unwatch(sessionId)); }
     }
     var session = subject(sessionId); var paths = new List<(string Folder, string Filter, bool Deep)>();
-    if (session is { OnServer: false, Account: { Home: { } home, ApiKey: false } account })
+    if (session is { OnServer: false, Account: { Home: { } home } account } && (!account.ApiKey || includeApiTranscript))
     {
       if (account.Provider == "claude")
       {
@@ -155,6 +155,7 @@ public sealed class UsageService : IDisposable
         paths.Add((Directory.Exists(Path.Combine(home, "projects")) ? Path.Combine(home, "projects") : home, "*.jsonl", true));
       }
       else if (account.Provider == "codex") paths.Add((Directory.Exists(Path.Combine(home, "sessions")) ? Path.Combine(home, "sessions") : home, "*.jsonl", true));
+      else if (account.Provider == "gemini" && includeApiTranscript) paths.Add((Directory.Exists(Path.Combine(home, ".gemini", "tmp")) ? Path.Combine(home, ".gemini", "tmp") : home, "session-*.json", true));
     }
     var watch = new FileWatch(this, sessionId, session?.Account?.Key);
     foreach (var (folder, filter, deep) in paths.Distinct())

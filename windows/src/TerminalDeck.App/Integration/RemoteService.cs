@@ -54,19 +54,19 @@ public sealed partial class RemoteService : IAsyncDisposable
   public ILinkEngine? LinkEngine { get; set; }
   /// A connection moved onto its link (video sends a keyframe first there).
   public event Action<string>? LinkMoved;
-  public bool OnLink(string channel) => relay?.OnLink(channel) == true;
-  public bool AwaitsLink(string channel) => relay?.AwaitsLink(channel) == true;
-  public bool HasLink(string channel) => relay?.HasLink(channel) == true;
-  public bool? SendDirect(string channel, byte[] message, LinkLane lane) => relay?.SendDirect(channel, message, lane);
-  public LinkVideo? LinkVideo(string channel) => relay?.LinkVideo(channel);
+  public bool OnLink(string channel) => CloudRelayAllowed && relay?.OnLink(channel) == true;
+  public bool AwaitsLink(string channel) => CloudRelayAllowed && relay?.AwaitsLink(channel) == true;
+  public bool HasLink(string channel) => CloudRelayAllowed && relay?.HasLink(channel) == true;
+  public bool? SendDirect(string channel, byte[] message, LinkLane lane) => CloudRelayAllowed ? relay?.SendDirect(channel, message, lane) : null;
+  public LinkVideo? LinkVideo(string channel) => CloudRelayAllowed ? relay?.LinkVideo(channel) : null;
   private void OnTrustChangedForLinks() => _ = Task.Run(RefreshLinkDevices);
   private void RefreshLinkDevices()
   {
     if (relay is not { } current) return;
     var (eligible, known) = LinkEligibility.Devices(Trust);
-    current.RefreshLinkDevices(eligible, known);
+    current.RefreshLinkDevices(CloudRelayAllowed ? eligible : [], known);
   }
-  public string? McpAddress => hostSecret is null ? null : "https://relay.terminaldeck.dev/mcp/" + PairingCode.HostId(hostSecret);
+  public string? McpAddress => !CloudRelayAllowed || hostSecret is null ? null : "https://relay.terminaldeck.dev/mcp/" + PairingCode.HostId(hostSecret);
   public DeviceTrust Trust { get; }
   public PhoneSessionGrants Grants { get; }
   public RelayConnectionState State { get; private set; } = RelayConnectionState.Stopped;
@@ -88,7 +88,7 @@ public sealed partial class RemoteService : IAsyncDisposable
   {
     lock (hostSecretGate)
     {
-      if (!phonesEnabled || relay is null || hostSecret is null || identity is null) return null;
+      if (!CloudRelayAllowed || !phonesEnabled || relay is null || hostSecret is null || identity is null) return null;
       try { return new(PairingCode.HostId(hostSecret), ReachWire.Base64Url(identity.PublicKey), Environment.MachineName); }
       catch (ObjectDisposedException) { return null; }
     }
@@ -98,36 +98,42 @@ public sealed partial class RemoteService : IAsyncDisposable
   public Func<bool>? ReceiverTransportRequired { get; set; }
   private async Task StartHostCoreAsync(bool enablePhones = true)
   {
-    stop.Token.ThrowIfCancellationRequested();
+    stop.Token.ThrowIfCancellationRequested(); cloudLifecycle.RequireAllowed();
     if (relay is not null) return;
     SetHostSecret(await SecretAsync("remote-host"));
     var key = await SecretAsync("remote-identity");
     try { identity = new(key); } finally { CryptographicOperations.ZeroMemory(key); }
+    cloudLifecycle.RequireAllowed();
+    var reuseLocal = localWeb is not null && application is not null && transportHub is not null && phonesEnabled == enablePhones;
     phonesEnabled = enablePhones;
     var view = new SessionView(sessions, Grants);
-    if (enablePhones)
+    if (!reuseLocal && enablePhones)
     {
       application = new PhoneLink(Trust, Environment.MachineName, AppVersion, view);
       application = WrapApplication?.Invoke(application, view) ?? application;
       application = new WebLaunchApplication(application, Trust, webLaunch, id => WebEnrolled?.Invoke(id));
     }
-    else application = new ReceiverOnlyPhoneApplication();
-    transportHub = new(application);
+    else if (!reuseLocal) application = new ReceiverOnlyPhoneApplication();
+    if (!reuseLocal) transportHub = new(application!);
     var webRoot = Path.Combine(AppContext.BaseDirectory, "web");
-    if (enablePhones && LocalWebHost.CompatibleBundle(webRoot))
+    if (enablePhones && localWeb is null && LocalWebHost.CompatibleBundle(webRoot))
     {
       var preferredPort = 8444;
       try { using var previous = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dataRoot.DirectoryPath, "remote-local.json"))); if (Uri.TryCreate(previous.RootElement.GetProperty("address").GetString(), UriKind.Absolute, out var address) && address.IsLoopback) preferredPort = address.Port; }
       catch (Exception ex) when (ex is IOException or JsonException or KeyNotFoundException) { }
-      localWeb = new(webRoot, Trust, transportHub, id => WebEnrolled?.Invoke(id), preferredPort: preferredPort); localWeb.Start();
+      localWeb = new(webRoot, Trust, transportHub!, id => WebEnrolled?.Invoke(id), preferredPort: preferredPort); localWeb.Start();
       File.WriteAllText(Path.Combine(dataRoot.DirectoryPath, "remote-local.json"), JsonSerializer.Serialize(new { address = localWeb.Address, protocol = 1 }));
     }
-    relay = new(RelayEndpoint.Default, hostSecret, identity, transportHub, mcp: enablePhones ? McpBridge : null, receiver: ReceiverApplication,
-      linkEngine: enablePhones ? LinkEngine : null, linkEligible: enablePhones ? LinkEligibility.For(Trust) : null) { Reach = enablePhones ? ReachLink : null };
+    cloudLifecycle.RequireAllowed();
+    var eligible = LinkEligibility.For(Trust);
+    relay = new(RelayEndpoint.Default, hostSecret, identity, new CloudRelayPhoneApplication(transportHub!, () => CloudRelayAllowed),
+      mcp: enablePhones && McpBridge is { } mcp ? new CloudRelayMcpApplication(mcp, () => CloudRelayAllowed) : null,
+      receiver: ReceiverApplication is { } receiver ? new CloudRelayReceiverApplication(receiver, () => CloudRelayAllowed) : null,
+      linkEngine: enablePhones ? LinkEngine : null, linkEligible: enablePhones ? peer => CloudRelayAllowed ? eligible(peer) : null : null) { Reach = enablePhones ? ReachLink : null };
     // Security M2: which devices may hold a TURN login comes from the trust store, now and on every change.
     RefreshLinkDevices();
     Trust.Changed += OnTrustChangedForLinks;
-    relay.StateChanged += state => { State = enablePhones ? state : RelayConnectionState.Stopped; Changed?.Invoke(); };
+    relay.StateChanged += state => { State = CloudRelayAllowed && enablePhones ? state : RelayConnectionState.Stopped; Changed?.Invoke(); };
     relay.LinkMoved += channel => LinkMoved?.Invoke(channel);
     relayRun = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
     tasks.Add(relay.RunAsync(relayRun.Token));
@@ -144,16 +150,22 @@ public sealed partial class RemoteService : IAsyncDisposable
   {
     // Reach by account live: devices join by signing in; the code stays only behind the switch being off.
     if (Trust.PairingLockedByReach) throw new InvalidOperationException(ReachPage.PairingLocked);
-    await StartAsync();
-    pairingStop?.Cancel();
-    var offer = Trust.Pairing.Create();
-    pairingStop = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
-    pairingStop.CancelAfter(TimeSpan.FromSeconds(60));
-    var token = pairingStop.Token;
-    var rendezvous = PairingCode.Derive(offer.Code);
-    var beacon = new RendezvousBeacon(new(RelayEndpoint.Default, PairingCode.HostId(hostSecret!), identity!.PublicKey, Environment.MachineName, "win32"), offer.ExpiresAt, TimeProvider.System);
-    tasks.Add(RunBeaconAsync(rendezvous, beacon, token));
-    Changed?.Invoke(); return offer;
+    cloudLifecycle.RequireAllowed(); await StartAsync();
+    await lifecycleGate.WaitAsync(stop.Token);
+    try
+    {
+      cloudLifecycle.RequireAllowed();
+      pairingStop?.Cancel();
+      var offer = Trust.Pairing.Create();
+      pairingStop = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
+      pairingStop.CancelAfter(TimeSpan.FromSeconds(60));
+      var token = pairingStop.Token;
+      var rendezvous = PairingCode.Derive(offer.Code);
+      var beacon = new RendezvousBeacon(new(RelayEndpoint.Default, PairingCode.HostId(hostSecret!), identity!.PublicKey, Environment.MachineName, "win32"), offer.ExpiresAt, TimeProvider.System);
+      tasks.Add(RunBeaconAsync(rendezvous, beacon, token));
+      Changed?.Invoke(); return offer;
+    }
+    finally { lifecycleGate.Release(); }
   }
   private static async Task RunBeaconAsync(RendezvousIdentity identity, RendezvousBeacon beacon, CancellationToken ct)
   {

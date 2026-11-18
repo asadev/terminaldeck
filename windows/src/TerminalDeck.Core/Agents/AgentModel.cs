@@ -17,7 +17,7 @@ public sealed record SavedAgent(string Id, string Name, string Provider, string 
 // PermissionMode: ask | plan | auto (Before it changes files). WorkingFolder: used when a
 // start names no folder. Tools to use/avoid are advice in the brief, exactly as on the Mac.
 public sealed record AgentOptions(string? PermissionMode = null, string? WorkingFolder = null,
-  ImmutableArray<string> ToolsPreferred = default, ImmutableArray<string> ToolsAvoided = default, bool SkillsOff = false)
+  ImmutableArray<string> ToolsPreferred = default, ImmutableArray<string> ToolsAvoided = default, bool SkillsOff = false, AgentEfficiency? Efficiency = null)
 {
   public static AgentOptions Default { get; } = new(ToolsPreferred: [], ToolsAvoided: []);
   public static readonly string[] PermissionModes = ["ask", "plan", "auto"];
@@ -25,19 +25,19 @@ public sealed record AgentOptions(string? PermissionMode = null, string? Working
   public static string PermissionLabel(string? mode) => mode switch { "ask" => "Ask before changes", "plan" => "Plan only", "auto" => "Change without asking", _ => "App default" };
 }
 public sealed record AgentTemplate(AgentCategory Category, string Instructions, int MaxHandsPerSeat = 0, int MaxHandsPerProject = 0,
-  string Checklist = "", ImmutableArray<string> Parts = default, string HelperAI = "claude", string HelperModel = "sonnet", int CardLimit = 8000);
+  string Checklist = "", ImmutableArray<string> Parts = default, string HelperAI = "claude", string HelperModel = "sonnet", int CardLimit = 8000, AgentEfficiency? Efficiency = null);
 public sealed record AgentSeat(string Key, AgentCategory Category, string? ProjectId, string? Role, string MemoryFolder);
 public sealed record AgentSeatMemory(string SeatKey, string Card = "", string Notes = "");
 public sealed record AgentRun(string SessionId, string? AgentId, string AgentName, string Provider, string ProjectId, string? SeatKey,
-  int HandNumber, string Job, string Mode, AgentRunState State, DateTimeOffset StartedAt, string? Problem = null, string? ParentSeatKey = null);
+  int HandNumber, string Job, string Mode, AgentRunState State, DateTimeOffset StartedAt, string? Problem = null, string? ParentSeatKey = null, string? AccountId = null, string? Folder = null, bool Api = false, string? TaskRunId = null, AgentEfficiency? Efficiency = null, string? BudgetWarning = null);
 public sealed record AgentState(int Version, ImmutableArray<SavedAgent> Agents, ImmutableArray<AgentTemplate> Templates,
   ImmutableArray<AgentSeatMemory> Seats, ImmutableArray<AgentRun> Runs, ImmutableArray<string> RetiredIds = default);
 public sealed record NewAgentSession(string? AgentId, string? ProjectId = null, string? Folder = null, string? Provider = null,
   string? AccountId = null, string Mode = "terminal", string Job = "", bool Helper = false, string? Title = null, string? Model = null, string? Effort = null,
-  TerminalDeck.Core.Mcp.AiPermissionMode? Permission = null);
+  TerminalDeck.Core.Mcp.AiPermissionMode? Permission = null, string? TaskRunId = null, long? TaskTokenBudget = null, string? OwnerScope = null);
 public sealed record AgentLaunchPlan(string SessionId, string? AgentId, string? SeatKey, string ProjectId, string Folder,
   string Provider, string AccountId, string AccountHome, string Model, string Effort, string Instructions,
-  string? InstructionsFile, string Title, string Job, string Mode, TerminalDeck.Core.Mcp.AiPermissionMode? Permission = null);
+  string? InstructionsFile, string Title, string Job, string Mode, TerminalDeck.Core.Mcp.AiPermissionMode? Permission = null, AgentEfficiency? Efficiency = null, string? ContextSignature = null, string? ConversationId = null);
 public sealed record AgentSessionStarted(string SessionId, string Mode);
 public sealed record AgentTreeNode(SavedAgent Agent, ImmutableArray<AgentTreeNode> Reports);
 public sealed record AgentFace(string Id, string Name, string Icon, bool Hoot = false, string? PhotoPath = null);

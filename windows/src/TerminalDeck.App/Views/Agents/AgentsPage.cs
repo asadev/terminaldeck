@@ -107,13 +107,17 @@ public sealed partial class AgentsPage : Grid
   private IReadOnlyList<SavedAgent> Rows() => Model.Filter(query, projectFilter, archived, roleFilter, stateFilter);
   private void Directory(StackPanel body)
   {
-    var switcher = ViewSwitch(grouping, new[] { "All agents", "Org chart", "Routines" }, name => { grouping = name; Render(); });
+    var switcher = ViewSwitch(grouping, new[] { "All agents", "Org chart", "At work", "Routines", "Skills" }, name => { grouping = name; Render(); });
     var all = Model.Agents.List().Where(a => a.Status != SavedAgentStatus.Archived).ToArray();
     var working = all.Count(a => Model.Activity(a).State == AgentActivityState.Working);
-    body.Children.Add(PageHeader("Agents", $"{all.Length} {(all.Length == 1 ? "agent" : "agents")} · {working} working now", null, switcher,
-      AsyncButton("Templates", OpenTemplatesAsync),
-      AsyncButton("New agent", () => AgentEditors.HireAsync(XamlRoot, Model.Agents, Model.Projects, navigation, Model, projectFilter), true)));
+    var caption = grouping == "Skills" ? librarySkills is null ? "" : librarySkills.Count + " installed skills" :
+      grouping == "At work" ? working + " working now" : $"{all.Length} {(all.Length == 1 ? "agent" : "agents")} · {working} working now";
+    UIElement[] actions = grouping == "Skills" ? [AsyncButton("New skill", NewLibrarySkillAsync, true)] :
+      [AsyncButton("Templates", OpenTemplatesAsync), AsyncButton("New agent", () => AgentEditors.HireAsync(XamlRoot, Model.Agents, Model.Projects, navigation, Model, projectFilter), true)];
+    body.Children.Add(PageHeader("Agents", caption, null, switcher, actions));
     if (grouping == "Routines") { RoutinesTab(body, null); return; }
+    if (grouping == "At work") { WorkDirectory(body); return; }
+    if (grouping == "Skills") { SkillDirectory(body); return; }
     var filters = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
     filters.Children.Add(Filter("Project", new[] { ("", "All projects") }.Concat(Model.Projects.List().Select(p => (p.Id, p.Name))), projectFilter ?? "", id => { projectFilter = id.Length > 0 ? id : null; roleFilter = ""; Render(); }));
     filters.Children.Add(Filter("Role", new[] { ("", "All roles"), ("lead", "Project leads") }.Concat(Model.Roles(projectFilter).Select(r => ("role:" + r, r.Replace('-', ' ')))), roleFilter, id => { roleFilter = id; Render(); }));

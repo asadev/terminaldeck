@@ -47,8 +47,8 @@ public sealed class AgentTaskRunner(IAgents agents, IProjects projects,
     var ownWorkspace = TaskExtras.Of(launch.Task).OwnWorkspace;
     var folder = ownWorkspace ? TaskWorkspace.Folder(launch.Task) : launch.Task.Folder;
     var run = await agents.StartAsync(new(agentId, launch.Task.ProjectId, folder, Mode: launch.Mode, Job: launch.Brief,
-      Title: launch.Task.Title[..Math.Min(120, launch.Task.Title.Length)]), ct, async (plan, token) => {
-        await prepared(new(plan.SessionId, plan.ProjectId, plan.Folder, plan.AccountId, agentId), token);
+      Title: launch.Task.Title[..Math.Min(120, launch.Task.Title.Length)], TaskRunId: launch.RunId, TaskTokenBudget: TaskExtras.Of(launch.Task).TokenBudget, OwnerScope: (launch.AssignedBy?.Id ?? "unknown") + ":" + (launch.Task.Connected?.SystemId ?? "local")), ct, async (plan, token) => {
+        await prepared(new(plan.SessionId, plan.ProjectId, plan.Folder, plan.AccountId, agentId, plan.Efficiency, plan.ContextSignature), token);
         if (ownWorkspace) await TaskWorkspace.PrepareAsync(launch.Task, token);
       });
     return run.SessionId;

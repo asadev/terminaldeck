@@ -22,6 +22,14 @@ public static class OtherComputersServiceTools
       int Number(string key, int fallback) => fields[key]?.GetValue<int>() ?? fallback;
       switch (action)
       {
+        case "chat-options": return await computers.ChatOptionsAsync(id, Text("id"), ct: ct);
+        case "chat-set":
+          var patch = new JsonObject();
+          foreach (var key in new[] { "model", "effort" }) if (fields[key] is JsonValue choice && choice.TryGetValue<string>(out var value)) patch[key] = value;
+          if (patch.Count == 0) throw new McpRefusal("Choose a model or effort offered by this chat.");
+          return await computers.ChatOptionsAsync(id, Text("id"), patch, ct);
+        case "chat-watch": case "chat-unwatch": case "chat-send": case "chat-interrupt": case "chat-answer":
+          await computers.ChatActionAsync(id, Text("id"), action[5..], fields["text"]?.GetValue<string>(), fields["request"]?.GetValue<string>(), fields["approved"]?.GetValue<bool>() ?? false, fields["clientMessageId"]?.GetValue<string>(), ct); break;
         case "clipboard-read": return JsonSerializer.SerializeToElement(new { text = await computers.ReadClipboardAsync(id, ct) });
         case "clipboard-write": await computers.WriteClipboardAsync(id, Text("text"), ct); break;
         case "look": return JsonSerializer.SerializeToElement(computers.Services(id));

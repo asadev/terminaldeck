@@ -157,7 +157,12 @@
               "hoot",
               "settings",
               "devices",
-              "mcp"
+              "mcp",
+              "code",
+              "cloud",
+              "files",
+              "sourcecontrol",
+              "github"
             ]
           },
           "sessionId": {
@@ -367,7 +372,14 @@
                   "Servers",
                   "Devices",
                   "Receiver",
-                  "Mcp"
+                  "Mcp",
+                  "Store",
+                  "Hooks",
+                  "Code",
+                  "Cloud",
+                  "Files",
+                  "SourceControl",
+                  "GitHub"
                 ]
               },
               "pinned": {
@@ -378,7 +390,7 @@
                 "items": {
                   "type": "string"
                 },
-                "maxItems": 8
+                "maxItems": 16
               },
               "sessionId": {
                 "type": "string"

@@ -291,6 +291,7 @@ public sealed partial class ShellWindow
   }
   private FrameworkElement PageView(ShellPage page)
   {
+    if (!CloudPageAllowed(page)) return new TerminalDeck.App.Views.Settings.CloudSubscriptionPage(Runtime.Cloud);
     // A session on another machine: its own page each time (never retained under the one page key).
     if (page == ShellPage.CloudChat) return cloudChatView ?? new WorkspaceLoadingView();
     if (pageViews.TryGetValue(page, out var retained)) return retained;
@@ -306,6 +307,7 @@ public sealed partial class ShellWindow
       ShellPage.Store => new Store.StorePage(Runtime.AppStore, () => { Model.Page = ShellPage.Mcp; }),
       ShellPage.Mcp => ConnectionPage(page),
       ShellPage.Files or ShellPage.SourceControl or ShellPage.GitHub => CodePageView(page),
+      ShellPage.Code => CodeWorkspaceView(),
       ShellPage.Receiver when Runtime.Receiver is not null => new TerminalDeck.App.Views.Receiver.ReceiverPage(new(Runtime.Receiver, Runtime.ReceiverIntake), Runtime.ReceiverProjectChoices(), ShowReceiverKeyAsync, sourceSettings: Runtime.ReceiverSources),
       ShellPage.Artifacts when Runtime.Artifacts is not null && Runtime.Receiver is not null => new TerminalDeck.App.Views.Receiver.ArtifactsPage(Runtime.Artifacts, Runtime.Receiver, Runtime.ReceiverArtifactFolders(), OpenSession),
       _ => new WorkspaceLoadingView()

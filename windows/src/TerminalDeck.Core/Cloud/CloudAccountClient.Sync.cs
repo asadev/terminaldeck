@@ -26,7 +26,7 @@ public sealed partial class CloudAccountClient : ICloudSyncAccount
     get
     {
       var record = saved;
-      return record is not null && keys is not null && Snapshot.Phase == CloudPhase.SignedIn && !record.CloudOff && record.Registered
+      return record is not null && keys is not null && Snapshot.Phase == CloudPhase.SignedIn && Snapshot.Subscription.AllowsCloudServices && !record.CloudOff && record.Registered
         ? (record.Session.User.Id, record.DeviceId) : null;
     }
   }

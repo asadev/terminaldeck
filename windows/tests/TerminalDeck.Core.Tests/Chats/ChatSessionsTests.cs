@@ -7,6 +7,15 @@ namespace TerminalDeck.Core.Tests.Chats;
 [Collection("Windows chat")]
 public sealed class ChatSessionsTests
 {
+  [Fact] public async Task Task_completion_does_not_close_a_busy_chat_or_a_different_saved_worker()
+  {
+    await using var f = new ChatFixture(); await f.InitializeAsync();
+    var expected = f.Chats.Get(f.Chat.Definition.Id);
+    Assert.False(await f.Chats.TryEndIdleAsync(expected with { CreationKey = "stale" }));
+    await f.Chats.SendAsync(expected.Definition.Id, Guid.NewGuid().ToString(), "hold");
+    Assert.False(await f.Chats.TryEndIdleAsync(f.Chats.Get(expected.Definition.Id)));
+    Assert.False(f.Chats.Get(expected.Definition.Id).Ended);
+  }
   [Fact] public async Task RealPipeStreamsUnicodeAndFullMessageReplacesItsDeltas()
   {
     await using var f = new ChatFixture(); await f.InitializeAsync(); var id = Guid.NewGuid().ToString();

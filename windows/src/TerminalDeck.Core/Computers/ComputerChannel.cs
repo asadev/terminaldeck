@@ -24,6 +24,7 @@ public sealed class ComputerChannel : IAsyncDisposable
 
   /// Set before OpenAsync to ask for the direct link (§11); null keeps the relay connection (the pairing lookups).
   public ILinkAnswerEngine? LinkEngine { get; init; }
+  public string? RelayBearer { get; init; }
   /// What the hello claims about the link.
   public IReadOnlyList<string> LinkCapabilities => LinkEngine is null ? [] : LinkGuest.Capabilities;
   /// The connection runs on its direct link now ("host", "internet", "turn"), or null.
@@ -31,6 +32,7 @@ public sealed class ComputerChannel : IAsyncDisposable
 
   public async Task OpenAsync(MachineOffer host, NoiseIdentity identity, CancellationToken ct)
   {
+    if (RelayBearer is { } bearer) socket.Options.SetRequestHeader("authorization", "Bearer " + bearer);
     socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
     socket.Options.KeepAliveTimeout = TimeSpan.FromSeconds(30);
     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
