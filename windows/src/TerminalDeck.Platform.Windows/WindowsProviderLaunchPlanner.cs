@@ -87,7 +87,7 @@ public sealed class WindowsProviderLaunchPlanner(AppDataRoot root, string toolsD
       else arguments.AddRange(["--approval-mode", definition.Permission switch { "plan" => "plan", "auto" or "acceptEdits" => "auto_edit", "bypass" => "yolo", _ => "default" }]);
     }
     if (definition.Provider == "claude" && definition.Purpose != "sign-in") arguments.InsertRange(0, ExtraFolderArguments(definition.Cwd));
-    if (definition.RequiresDeckTools && definition.Provider == "gemini") environment = AgentGeminiTools.EnvironmentFor(root, definition.Id, environment, definition.AddonsOff);
+    if (definition.RequiresDeckTools && definition.Provider == "gemini") environment = new Dictionary<string, string>(AgentGeminiTools.EnvironmentFor(root, definition.Id, environment, definition.AddonsOff), StringComparer.OrdinalIgnoreCase);
     if (definition.RequiresDeckTools) arguments.AddRange(AgentAddonLaunch.OwnTools(root, definition.Provider, definition.Id));
     if (definition.AddonsOff)
     {
