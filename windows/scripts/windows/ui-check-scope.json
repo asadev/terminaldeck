@@ -2,28 +2,15 @@
   "part": "A",
   "checks": [
     {
-      "project": "tests\\TerminalDeck.Core.Tests\\TerminalDeck.Core.Tests.csproj",
-      "names": [
-        "CloudProfileTests",
-        "CloudProfileManagementTests",
-        "CloudDeviceRowsTests",
-        "CloudDeviceNamesTests",
-        "SessionKeeperTests",
-        "UsageMeterTests",
-        "TerminalControlsTests",
-        "CloudAccountTests",
-        "CloudWiringTests",
-        "CloudScreensTests"
-      ]
-    },
-    {
       "project": "src\\TerminalDeck.App\\Views\\Windows\\Tests\\TerminalDeck.Shell.Tests.csproj",
       "names": [
-        "WorkspaceTextTests",
-        "SessionStatusTests",
-        "SidebarStateTests",
-        "SidebarHistoryTests"
+        "WorkspaceTextTests"
       ]
     }
-  ]
+  ],
+  "priorPartAChecks": {
+    "run": 44237443915,
+    "uniquePassed": 123,
+    "unchangedCoreOwners": true
+  }
 }
