@@ -1,20 +1,38 @@
 {
-  "part": "B",
+  "part": "C",
   "checks": [
     {
       "project": "tests\\TerminalDeck.Core.Tests\\TerminalDeck.Core.Tests.csproj",
       "names": [
-        "TerminalDeck.Core.Tests.Browser.BrowserBookmarksTests",
-        "TerminalDeck.Core.Tests.Browser.BrowserLocalPortsTests",
-        "TerminalDeck.Core.Tests.Browser.BrowserTests",
-        "TerminalDeck.Core.Tests.Browser.BrowserWorkspaceTests",
-        "TerminalDeck.Core.Tests.Browser.W13IntegrationTests"
+        "TerminalDeck.Core.Tests.Agents.AgentBudgetTests",
+        "TerminalDeck.Core.Tests.Agents.AgentHeavyWorkTests",
+        "TerminalDeck.Core.Tests.Agents.AgentSkillLibraryTests",
+        "TerminalDeck.Core.Tests.Sessions.AgentIdleCompletionTests",
+        "TerminalDeck.Core.Tests.Tasks.TaskEfficiencyTests",
+        "TerminalDeck.Core.Tests.Tasks.AgentTaskRunnerTests",
+        "TerminalDeck.Core.Tests.Chats.ChatSessionsTests",
+        "TerminalDeck.Core.Tests.Chats.W12ChatTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudAccountTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudWiringTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudSubscriptionTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudContentsTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudTaskBudgetTests",
+        "TerminalDeck.Core.Tests.Computers.RemoteSessionReadingTests",
+        "TerminalDeck.Core.Tests.Hoot.ConversationHandoffTests",
+        "TerminalDeck.Core.Tests.Remote.CloudRelayLifecycleTests",
+        "TerminalDeck.Core.Tests.Mcp.W12ShellContractTests"
+      ]
+    },
+    {
+      "project": "tests\\TerminalDeck.Chat.Windows.Tests\\TerminalDeck.Chat.Windows.Tests.csproj",
+      "names": [
+        "TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests"
       ]
     },
     {
       "project": "src\\TerminalDeck.App\\Views\\Windows\\Tests\\TerminalDeck.Shell.Tests.csproj",
       "names": [
-        "WorkspaceTabSizingTests"
+        "TerminalDeck.App.Shell.SidebarStateTests"
       ]
     }
   ]

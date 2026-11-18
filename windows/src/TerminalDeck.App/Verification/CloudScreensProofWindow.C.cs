@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using TerminalDeck.App.Integration;
+using TerminalDeck.App.Shell;
 using TerminalDeck.App.ViewModels.Agents;
 using TerminalDeck.App.Views;
 using TerminalDeck.App.Views.Agents;

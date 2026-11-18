@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using TerminalDeck.App.Shell;
 using TerminalDeck.Core.Agents;
 using static TerminalDeck.App.Views.Projects.ProjectAgentUi;
 
@@ -31,7 +32,7 @@ public sealed partial class AgentsPage
         head.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         head.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
         head.Children.Add(Button(agent.Name, () => OpenAgent(agent.Id)));
-        var status = StatusLine(agent); Grid.SetColumn(status, 1); head.Children.Add(status); card.Children.Add(head);
+        var status = (FrameworkElement)StatusLine(agent); Grid.SetColumn(status, 1); head.Children.Add(status); card.Children.Add(head);
         foreach (var run in Model.Hands(agent.Id)) card.Children.Add(SessionRunRow(run));
         body.Children.Add(Card(card));
       }
