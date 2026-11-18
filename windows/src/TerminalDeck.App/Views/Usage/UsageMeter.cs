@@ -48,6 +48,11 @@ public sealed class UsageMeter : StackPanel
     stripCapsule.Child = strip;
     MeterRing.Host(stripButton, stripCapsule); stripButton.Visibility = Visibility.Collapsed;
     MeterRing.Host(ringButton, MeterRing.Capsule(ring));
+    // The plan control uses the shared meter without its capsule.
+    if (ringButton.Content is Border capsule) capsule.Child = null;
+    MeterRing.Host(ringButton, ring);
+    ringButton.Width = ringButton.Height = ringButton.MinWidth = ringButton.MinHeight = 26;
+    planCard.Width = 252;
     Children.Add(stripButton); Children.Add(ringButton);
 
     foreach (var (flyout, card) in new[] { (contextFlyout, contextCard), (planFlyout, planCard) })
@@ -64,7 +69,7 @@ public sealed class UsageMeter : StackPanel
     // An open card keeps the theme it opened with; close it when the window's theme changes.
     ActualThemeChanged += (_, _) => { if (planFlyout.IsOpen) planFlyout.Hide(); if (contextFlyout.IsOpen) contextFlyout.Hide(); };
     stripButton.PointerEntered += (_, _) => Send(panel.Hover(UsagePanel.Context));
-    ringButton.PointerEntered += (_, _) => Send(panel.Hover(UsagePanel.Plan));
+    // Plan limits open only on a press, so passing over the header stays quiet.
     // A transient hover flyout may dismiss before the anchor's Click arrives.
     // Preserve the press intent through Closed instead of treating it as a
     // second press on a panel that was just pinned by native popup handling.
@@ -141,13 +146,7 @@ public sealed class UsageMeter : StackPanel
     // The card lives in a popup: give it the window's theme so a dark window never
     // gets a light card (its brushes are resolved from the card's own theme).
     var theme = anchor.ActualTheme;
-    if (flyout.FlyoutPresenterStyle?.Setters.OfType<Setter>().FirstOrDefault(s => s.Property == FrameworkElement.RequestedThemeProperty)?.Value is not ElementTheme shown || shown != theme)
-    {
-      var style = new Style(typeof(FlyoutPresenter));
-      if (Application.Current.Resources.TryGetValue(typeof(FlyoutPresenter), out var glass) && glass is Style basedOn) style.BasedOn = basedOn;
-      style.Setters.Add(new Setter(FrameworkElement.RequestedThemeProperty, theme));
-      flyout.FlyoutPresenterStyle = style;
-    }
+    DeckMenu.Apply(flyout, theme);
     if (flyout.Content is FrameworkElement card && card.RequestedTheme != theme) { card.RequestedTheme = theme; Render(); }
     flyout.ShowAt(anchor, new FlyoutShowOptions { Placement = FlyoutPlacementMode.Bottom, ShowMode = pinned ? FlyoutShowMode.Standard : FlyoutShowMode.TransientWithDismissOnPointerMoveAway });
   }
@@ -187,7 +186,7 @@ public sealed class UsageMeter : StackPanel
     var now = UsageFormat.Now();
     var readouts = (report?.Readings ?? []).Select(r => UsageReadout.Of(r, now)).ToArray();
     var worst = UsageBarRules.Worst(readouts);
-    var account = report?.ReportedAccount?.Name;
+    var account = DeckMenu.AccountName(report?.ReportedAccount?.Name);
     var whose = string.Join(" · ", new[] { AgentName(provider), account }.Where(s => !string.IsNullOrEmpty(s)));
     var withheld = report?.Reason == UsageBarRules.ServerWithheld ? report.Reason : null;
     var title = UsageBarRules.Title(readouts, whose, withheld, blocked, report);
@@ -209,7 +208,7 @@ public sealed class UsageMeter : StackPanel
     var summary = fresh?.Summary(now) ?? "Context window";
     AutomationProperties.SetName(stripButton, summary); ToolTipService.SetToolTip(stripButton, null);
 
-    DrawRing(worst?.Percent, worst?.Level ?? UsageLevel.Ok);
+    DrawPlanRing(worst?.Percent, worst?.Level ?? UsageLevel.Ok);
     Pulse(checking);
     AutomationProperties.SetName(ringButton, "Plan limits: " + title);
 
@@ -231,29 +230,34 @@ public sealed class UsageMeter : StackPanel
       ToolTipService.SetToolTip(info, note); AutomationProperties.SetName(info, "About these plan limits: " + note); header.Children.Add(info);
     }
     planCard.Children.Add(header);
-    if (note is not null && readouts.Length == 0) planCard.Children.Add(Secondary(note, 12, wrap: true));
+    if (readouts.Length == 0) planCard.Children.Add(Secondary("No reading yet", 12));
     foreach (var readout in readouts) planCard.Children.Add(WindowRow(readout));
-    if (checking) planCard.Children.Add(Secondary("Checking with " + AgentName(provider) + "…", 12));
-    if (blocked is not null)
-    {
-      var again = new Button { Content = "Check again" }; again.Click += (_, _) => Check(true); planCard.Children.Add(again);
-    }
+    var refresh = new Button { Content = checking ? "Checking…" : "Refresh", IsEnabled = !checking, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left, MinHeight = 30, Padding = new(0), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new(0) };
+    refresh.Click += (_, _) => Check(true); planCard.Children.Add(refresh);
   }
 
   private static Brush PlanBrush(UsageLevel level) => level == UsageLevel.Critical ? LevelBrush(level) : (Brush)Application.Current.Resources["DeckProjectOrangeBrush"];
 
   private void DrawRing(double? percent, UsageLevel level) => MeterRing.Draw(ring, percent, PlanBrush(level));
 
+  private void DrawPlanRing(double? percent, UsageLevel level)
+  {
+    var amount = checking ? 25 : percent;
+    DrawRing(amount, level);
+    if (level == UsageLevel.Ok) MeterRing.Draw(ring, amount, LevelBrush(level));
+  }
+
   private void Pulse(bool checkingNow)
   {
-    if (!checkingNow || !IsLoaded || !new Windows.UI.ViewManagement.UISettings().AnimationsEnabled)
+    if (!checkingNow || !IsLoaded || !new global::Windows.UI.ViewManagement.UISettings().AnimationsEnabled)
     {
-      pulse?.Stop(); pulse = null; ring.Opacity = checkingNow ? 0.55 : 1; return;
+      pulse?.Stop(); pulse = null; ring.RenderTransform = null; return;
     }
     if (pulse is not null) return;
-    var fade = new DoubleAnimation { From = 1, To = 0.55, Duration = TimeSpan.FromSeconds(0.8), AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever, EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } };
-    Storyboard.SetTarget(fade, ring); Storyboard.SetTargetProperty(fade, nameof(Opacity));
-    pulse = new(); pulse.Children.Add(fade); pulse.Begin();
+    var rotation = new RotateTransform(); ring.RenderTransform = rotation; ring.RenderTransformOrigin = new(.5, .5);
+    var turn = new DoubleAnimation { From = 0, To = 360, Duration = TimeSpan.FromSeconds(1.1), RepeatBehavior = RepeatBehavior.Forever };
+    Storyboard.SetTarget(turn, rotation); Storyboard.SetTargetProperty(turn, nameof(RotateTransform.Angle));
+    pulse = new(); pulse.Children.Add(turn); pulse.Begin();
   }
 
   /// "Context window" with the figure, the used/free bar and rows, and the facts.
@@ -292,10 +296,10 @@ public sealed class UsageMeter : StackPanel
   private static FrameworkElement WindowRow(UsageReadout readout)
   {
     var row = new StackPanel { Spacing = 3 };
-    row.Children.Add(Row(new TextBlock { Text = readout.Name, FontSize = 13 }, new TextBlock { Text = readout.Value, FontSize = 13, Foreground = readout.Bar ? LevelBrush(readout.Level) : null }));
+    row.Children.Add(Row(new TextBlock { Text = readout.Name, FontSize = 13 }, new TextBlock { Text = readout.Percent is { } amount ? amount.ToString("0") + "% used" : "No reading yet", FontSize = 12, Foreground = readout.Bar ? LevelBrush(readout.Level) : null }));
     if (readout.Bar)
     {
-      var bar = new Grid { Height = 5, Opacity = readout.State == "aged" ? 0.55 : 1 };
+      var bar = new Grid { Height = 4, Opacity = readout.State == "aged" ? 0.55 : 1 };
       var track = new Border { CornerRadius = new(2.5) }; track.SetResourceReference(Border.BackgroundProperty, "DeckDividerBrush");
       var fill = new Border { CornerRadius = new(2.5), HorizontalAlignment = HorizontalAlignment.Left, Background = LevelBrush(readout.Level) };
       bar.Children.Add(track); bar.Children.Add(fill);
@@ -304,7 +308,7 @@ public sealed class UsageMeter : StackPanel
       row.Children.Add(bar);
       if (readout.Facts.Length > 0) row.Children.Add(Secondary(readout.Facts, 11));
     }
-    else if (readout.Detail.Length > 0) row.Children.Add(Secondary(readout.Detail, 11, wrap: true));
+    else if (readout.Detail.Length > 0) ToolTipService.SetToolTip(row, readout.Detail);
     AutomationProperties.SetName(row, readout.Name + ": " + readout.Detail);
     return row;
   }

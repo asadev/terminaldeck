@@ -103,6 +103,7 @@ internal sealed class ChatComposerBox
       chip.Style = (Style)Application.Current.Resources["DeckNavigationButtonStyle"];
       chip.MinHeight = 28; chip.MinWidth = 32; chip.Padding = new Thickness(6, 4, 6, 4); chip.FontSize = 12;
     }
+    DeckMenu.Pill(Model); DeckMenu.Pill(Effort);
     Account.MaxWidth = 180; Model.MaxWidth = 220; Effort.MaxWidth = 100;
     Choices.Padding = new Thickness(12, 0, 12, 0);
     Choices.Children.Add(Permission); Grid.SetColumn(Model, 1); Choices.Children.Add(Model); Grid.SetColumn(Effort, 2); Choices.Children.Add(Effort);

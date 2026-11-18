@@ -319,7 +319,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
     AccountFlowTools.Register(Door, Accounts, provider => InstallAiAsync(provider, alreadyApproved: true),
       (provider, action) => InstallFlowRequested?.Invoke(provider, action) ?? throw new McpRefusal("Open Coding AIs in the app."),
       (id, action) => SignInFlowRequested?.Invoke(id, action) ?? throw new McpRefusal("Open this account in Coding AIs."));
-    InitializeTerminalControlTools();
+    InitializeTerminalControlTools(); InitializeHeldSessionTools();
     chatTools.Register(Door);
     TerminalDeck.Core.WhatsApp.WhatsAppTools.Register(Door, () => WhatsApp);
     projectTools.Register(Door);

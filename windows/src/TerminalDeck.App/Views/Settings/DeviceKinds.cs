@@ -33,3 +33,52 @@ public static class DeviceKinds
     _ => PcGlyph
   };
 }
+
+public enum DeviceModel { Computer, MacMini, MacStudio, MacPro, MacBook, IMac, WindowsDesktop, WindowsLaptop, IPhone, IPad, AndroidPhone, AndroidTablet, Phone, Browser }
+
+public static class DeviceModels
+{
+  public static DeviceModel Of(string? platform, string? name, string? reported = null)
+  {
+    var model = From(reported);
+    if (model is not null) return model.Value;
+    var p = platform?.ToLowerInvariant() ?? "";
+    var n = name?.ToLowerInvariant() ?? "";
+    if (p is "web" or "browser") return DeviceModel.Browser;
+    if (p == "windows") return DeviceKinds.Of(p, n) == DeviceKind.Laptop ? DeviceModel.WindowsLaptop : DeviceModel.WindowsDesktop;
+    if (p == "android") return DeviceKinds.Of(p, n) == DeviceKind.Tablet ? DeviceModel.AndroidTablet : DeviceModel.AndroidPhone;
+    if (p is "ios" or "iphone") return n.Contains("ipad") ? DeviceModel.IPad : DeviceModel.IPhone;
+    if (p == "ipados") return DeviceModel.IPad;
+    model = From(name);
+    if (model is not null) return model.Value;
+    return p switch
+    {
+      "windows" => DeviceKinds.Of(p, n) == DeviceKind.Laptop ? DeviceModel.WindowsLaptop : DeviceModel.WindowsDesktop,
+      "mac" or "macos" => DeviceModel.IMac,
+      "ios" or "iphone" => DeviceModel.IPhone,
+      "ipados" => DeviceModel.IPad,
+      "android" => DeviceKinds.Of(p, n) == DeviceKind.Tablet ? DeviceModel.AndroidTablet : DeviceModel.AndroidPhone,
+      _ => DeviceModel.Computer
+    };
+  }
+
+  private static DeviceModel? From(string? value)
+  {
+    var s = value?.ToLowerInvariant().Replace("_", "-") ?? "";
+    if (s.Length == 0) return null;
+    if (s.Contains("browser") || s.Contains("chrome") || s.Contains("firefox") || s.Contains("safari") || s.Contains("edge on")) return DeviceModel.Browser;
+    if (s.Contains("mac-mini") || s.Contains("mac mini") || s.StartsWith("macmini")) return DeviceModel.MacMini;
+    if (s.Contains("mac-studio") || s.Contains("mac studio")) return DeviceModel.MacStudio;
+    if (s.Contains("mac-pro") || s.Contains("mac pro") || s.StartsWith("macpro")) return DeviceModel.MacPro;
+    if (s.Contains("macbook")) return DeviceModel.MacBook;
+    if (s.Contains("imac")) return DeviceModel.IMac;
+    if (s.Contains("iphone")) return DeviceModel.IPhone;
+    if (s.Contains("ipad")) return DeviceModel.IPad;
+    if (s.Contains("android-tablet") || s.Contains("galaxy tab")) return DeviceModel.AndroidTablet;
+    if (s.Contains("android-phone") || s.Contains("pixel") || s.Contains("galaxy")) return DeviceModel.AndroidPhone;
+    if (s.Contains("windows-laptop") || s.Contains("laptop") || s.Contains("surface") || s.Contains("thinkpad") || s.Contains("notebook")) return DeviceModel.WindowsLaptop;
+    if (s.Contains("windows-desktop") || s.Contains(" pc") || s == "pc") return DeviceModel.WindowsDesktop;
+    if (s.Contains("phone")) return DeviceModel.Phone;
+    return null;
+  }
+}

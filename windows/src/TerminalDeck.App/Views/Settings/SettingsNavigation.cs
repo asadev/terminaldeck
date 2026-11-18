@@ -67,7 +67,7 @@ public static class SettingsNavigation
     "accounts" or "coding-ais" => "coding-ais",
     "hoot" or "copilot" => "hoot",
     "mcp" or "mcp-servers" => "outside-ai-apps",
-    "devices" => "profile",
+    "devices" or "devices.older" => "profile",
     _ when IsDevice(section) => section,
     _ when Categories.Any(item => item.Id == section) || InnerPages.Any(item => item.Id == section) => section,
     _ => throw new ArgumentException("Choose an available Settings category.")

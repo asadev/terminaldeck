@@ -78,7 +78,7 @@ public sealed partial class ShellWindow
       var count = new TextBlock { FontSize = 12, Opacity = 0.65 }; pageCounts[id] = count;
       var button = new ToggleButton { Tag = id, Content = row, Style = (Style)Application.Current.Resources["DeckNavigationButtonStyle"], HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch, CanDrag = true, AllowDrop = true };
       AutomationProperties.SetName(button, page.Title); button.Click += (_, _) => OpenSidebarPage(id);
-      var menu = new MenuFlyout(); var unpin = new MenuFlyoutItem { Text = "Unpin from side panel" }; unpin.Click += (_, _) => SidebarGuard(() => sidebar.Pin(id, false)); menu.Items.Add(unpin);
+      var menu = DeckMenu.CreateFor(Root); var unpin = new MenuFlyoutItem { Text = "Unpin from side panel" }; unpin.Click += (_, _) => SidebarGuard(() => sidebar.Pin(id, false)); menu.Items.Add(unpin);
       var up = new MenuFlyoutItem { Text = "Move up" }; up.Click += (_, _) => MovePinnedPage(id, -1); menu.Items.Add(up);
       var down = new MenuFlyoutItem { Text = "Move down" }; down.Click += (_, _) => MovePinnedPage(id, 1); menu.Items.Add(down);
       var tab = new MenuFlyoutItem { Text = "Move page to tab" }; tab.Click += (_, _) => OpenPageTab(id); menu.Items.Add(tab);
@@ -141,7 +141,7 @@ public sealed partial class ShellWindow
   }
   private void ShowProjectSessionsCount(string projectId, FrameworkElement target)
   {
-    var menu = new MenuFlyout();
+    var menu = DeckMenu.CreateFor(Root);
     foreach (var session in SidebarProjectSessions(projectId).Where(s => !Model.Sessions.Any(row => row.Id == s.Id && IsHistory(row)) && s.Status.ToLowerInvariant() is not ("ended" or "exited") && !sidebar.Read.SessionPins.Contains(s.Id) && !sidebar.Read.HiddenSessions.Contains(s.Id) && !sidebar.IsArchived(s.Id)))
     {
       var item = new MenuFlyoutItem { Text = session.Title }; item.Click += (_, _) => OpenSession(session.Id); menu.Items.Add(item);
@@ -151,7 +151,7 @@ public sealed partial class ShellWindow
   }
   private void ShowPageCount(string id, FrameworkElement target)
   {
-    var menu = new MenuFlyout();
+    var menu = DeckMenu.CreateFor(Root);
     if (id == "Tasks")
       foreach (var task in Runtime.Tasks.List())
       {
@@ -215,7 +215,7 @@ public sealed partial class ShellWindow
     var shortcuts = new Button { Content = "Keyboard Shortcuts  ·  Ctrl+/", HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left };
     shortcuts.Click += async (_, _) => { morePagesFlyout?.Hide(); await RunShellCommandGuardedAsync("shortcuts"); };
     rows.Children.Add(shortcuts); opens.Add(shortcuts);
-    morePagesFlyout = new Flyout { Content = rows };
+    morePagesFlyout = DeckMenu.Create(rows);
     morePagesFlyout.Opened += (_, _) => opens[0].Focus(FocusState.Keyboard);
     if (!W12Proof) morePagesFlyout.ShowAt(MorePages);
   }
@@ -239,12 +239,11 @@ public sealed partial class ShellWindow
 
   /// One session row's content: the thin outline type icon, the name on one line, the small orange dot only when the
   /// session needs him. Nothing else.
-  internal static Grid SidebarSimpleRow(string glyph, string title, bool needsYou, bool onAccent)
+  internal static Grid SidebarSimpleRow(string glyph, string title, bool needsYou, bool onAccent, string state = "")
   {
     var row = new Grid { ColumnSpacing = 8, MinHeight = 32, Padding = new(0) };
-    row.ColumnDefinitions.Add(new() { Width = new(16) }); row.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); row.ColumnDefinitions.Add(new() { Width = new(12) });
-    var icon = new DeckIcon { Glyph = glyph, FontSize = SidebarRowLook.GlyphSize, VerticalAlignment = VerticalAlignment.Center };
-    icon.SetResourceReference(Control.ForegroundProperty, onAccent ? "DeckSidebarSelectionInkBrush" : "DeckSecondaryInkBrush");
+    row.ColumnDefinitions.Add(new() { Width = new(18) }); row.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); row.ColumnDefinitions.Add(new() { Width = new(12) });
+    var icon = new SessionTypeIcon { Glyph = glyph, State = state, OnAccent = onAccent };
     row.Children.Add(icon);
     var name = new TextBlock { Text = title, FontSize = 13, MaxLines = 1, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
     if (onAccent) name.SetResourceReference(TextBlock.ForegroundProperty, "DeckSidebarSelectionInkBrush");
@@ -277,7 +276,7 @@ public sealed partial class ShellWindow
     foreach (var row in rows)
     {
       var selected = Model.Page == ShellPage.CloudChat && cloudChatRef == row.Ref;
-      var open = new Button { Content = SidebarSimpleRow(SidebarRowLook.Glyph(row.Chat), row.Name, row.NeedsYou, selected), Height = 32, Padding = new(8, 0, 8, 0), Margin = new(0, 2, 0, 2),
+      var open = new Button { Content = SidebarSimpleRow(SidebarRowLook.Glyph(row.Chat), row.Name, row.NeedsYou, selected, row.State), Height = 32, Padding = new(8, 0, 8, 0), Margin = new(0, 2, 0, 2),
         HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch, Style = (Style)Application.Current.Resources["DeckSidebarActionStyle"] };
       AutomationProperties.SetName(open, row.Name);
       if (selected) open.SetResourceReference(Control.BackgroundProperty, "DeckSidebarSelectionBrush");

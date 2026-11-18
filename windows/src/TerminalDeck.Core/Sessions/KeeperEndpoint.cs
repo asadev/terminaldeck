@@ -35,6 +35,8 @@ public sealed class KeeperEndpoint(SessionKeeper keeper, ReadOnlyMemory<byte> se
         if (prepareUpdate is null) throw new InvalidOperationException("This keeper cannot hand over its sessions for an update.");
         await prepareUpdate(cancellationToken);
         return new(Success: true);
+      case "forget-held": await keeper.ForgetHeldAsync(Id(request), cancellationToken); return new(Success: true);
+      case "reopen": return new(Session: await keeper.ReopenAsync(Id(request), cancellationToken));
       case "create": return new(Session: await keeper.CreateAsync(request.Launch ?? throw new ArgumentException("Choose a session to create."), cancellationToken));
       case "account-rollback": return new(Session: await keeper.RollbackAccountAsync(request.Launch ?? throw new ArgumentException("Choose the original account."), request.Transaction ?? "", cancellationToken));
       case "account": return new(Session: await keeper.SwitchAccountAsync(request.Launch ?? throw new ArgumentException("Choose an account."), request.Revision ?? -1, request.Transaction ?? "", cancellationToken));

@@ -19,7 +19,7 @@ namespace TerminalDeck.App.Views.Settings;
 /// Every rule of what shows comes from `YourCloudRules` (tested in Core.Tests); this file draws it.
 public sealed class YourCloudPage : UserControl
 {
-  private const double PlacesWidth = 215, PaneWidth = 340, RowHeight = 36, ChangedWidth = 170, OnWidth = 130, SizeWidth = 80;
+  private const double PlacesWidth = 232, PaneWidth = 340, RowHeight = 36, ChangedWidth = 150, OnWidth = 130, SizeWidth = 104;
   private readonly CloudContents? contents;
   private readonly Action openCode;
   private readonly Action openSecret;
@@ -28,7 +28,7 @@ public sealed class YourCloudPage : UserControl
   private readonly ListView bin = new() { SelectionMode = ListViewSelectionMode.Single, Padding = new(8, 0, 8, 8) };
   private readonly ListView list = new() { SelectionMode = ListViewSelectionMode.Extended, IsMultiSelectCheckBoxEnabled = false };
   private readonly StackPanel crumbs = new() { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
-  private readonly TextBox search = new() { PlaceholderText = "Search", Width = 200, VerticalAlignment = VerticalAlignment.Center };
+  private readonly TextBox search = new() { PlaceholderText = "Search", Width = 180, MinHeight = 28, CornerRadius = new(8), BorderThickness = new(0), Padding = new(10, 3, 10, 3), VerticalAlignment = VerticalAlignment.Center };
   private readonly Button back = Icon("", "Back"), forward = Icon("", "Forward");
   private readonly Button open = Text(YourCloudRules.Open), binCloud = Bin(YourCloudRules.BinCloud), binEverywhere = Bin(YourCloudRules.BinEverywhere),
     bringBack = Text(YourCloudRules.BringBack), putInCloud = Text(YourCloudRules.PutInCloudAgain);
@@ -36,12 +36,13 @@ public sealed class YourCloudPage : UserControl
   private readonly Grid listArea = new();
   private readonly Border pane = new() { Width = PaneWidth, Visibility = Visibility.Collapsed, Padding = new(16, 12, 16, 16) };
   private readonly TextBlock empty = new() { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, FontSize = 13, TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
+  private readonly DeckIcon emptyMark = new() { FontSize = 26, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Margin = new(0, -32, 0, 0), Visibility = Visibility.Collapsed };
   private readonly List<(string Place, string[] Folder)> history = [];
   private int at = -1;
   private CloudContentsSnapshot? snapshot;
   private string placeKey = nameof(CloudContentsKind.Memory);
   private string[] folder = [];
-  private bool rendering, working;
+  private bool rendering, working, showOn, showSize;
   /// The top bar and the column titles: hidden on the Bin, which draws its own one bar (C-3).
   private Grid bar = null!, heads = null!;
   /// The search words the list was last drawn with: TextBox raises TextChanged later, also for a reset to the same
@@ -49,7 +50,7 @@ public sealed class YourCloudPage : UserControl
   private string drawnSearch = "";
 
   /// One line of the list: a folder or an item.
-  private sealed record Entry(CloudContentsFolderRow? Folder, CloudContentsRow? Item, string? Group = null);
+  private sealed record Entry(CloudContentsFolderRow? Folder, CloudContentsRow? Item, string? Group = null, IReadOnlyList<CloudContentsRow>? Members = null);
 
   public YourCloudPage(CloudContents? contents, Action openCode, Action openSecret, Action<string> notice)
   {
@@ -75,6 +76,8 @@ public sealed class YourCloudPage : UserControl
     var arrows = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 }; arrows.Children.Add(back); arrows.Children.Add(forward);
     bar.Children.Add(arrows);
     Grid.SetColumn(crumbs, 1); bar.Children.Add(crumbs);
+    search.SetResourceReference(Control.BackgroundProperty, "DeckHoverBrush");
+    AutomationProperties.SetAutomationId(search, "cloud.manager.search");
     AutomationProperties.SetName(search, "Search"); Grid.SetColumn(search, 2); bar.Children.Add(search);
     var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
     foreach (var button in new[] { open, binCloud, binEverywhere, bringBack, putInCloud }) actions.Children.Add(button);
@@ -89,7 +92,9 @@ public sealed class YourCloudPage : UserControl
     list.DoubleTapped += (_, args) => { if (Clicked(args.OriginalSource) is { } entry) { Activate(entry); args.Handled = true; } };
     list.KeyDown += (_, args) => { if (args.Key is VirtualKey.Enter or VirtualKey.Space) { OpenSelection(); args.Handled = true; } else if (args.Key == VirtualKey.Back) { Go(-1); args.Handled = true; } };
     list.RightTapped += (_, args) => RowMenu(args);
-    listArea.Children.Add(list); listArea.Children.Add(empty);
+    listArea.Children.Add(list); listArea.Children.Add(emptyMark); listArea.Children.Add(empty);
+    emptyMark.SetResourceReference(Control.ForegroundProperty, "DeckSecondaryInkBrush");
+    empty.Margin = new(0, 28, 0, 0);
     empty.SetResourceReference(TextBlock.ForegroundProperty, "DeckSecondaryInkBrush");
     Grid.SetRow(listArea, 2); right.Children.Add(listArea);
     Grid.SetColumn(right, 1); page.Children.Add(right);
@@ -167,7 +172,7 @@ public sealed class YourCloudPage : UserControl
     var kept = Selected().Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
     try
     {
-      list.Items.Clear();
+      list.Items.Clear(); emptyMark.Visibility = Visibility.Collapsed;
       drawnSearch = search.Text.Trim();
       RenderCrumbs();
       back.IsEnabled = at > 0; forward.IsEnabled = at < history.Count - 1;
@@ -175,7 +180,7 @@ public sealed class YourCloudPage : UserControl
       list.Visibility = isBin ? Visibility.Collapsed : Visibility.Visible;
       bar.Visibility = heads.Visibility = YourCloudRules.ShowsListBar(placeKey) ? Visibility.Visible : Visibility.Collapsed;
       // The Bin is its own page (the Bin hand's CloudBinPage), drawn in this page's right side.
-      foreach (var child in listArea.Children.Where(c => c is not ListView && !ReferenceEquals(c, empty)).ToArray()) listArea.Children.Remove(child);
+      foreach (var child in listArea.Children.Where(c => c is not ListView && !ReferenceEquals(c, empty) && !ReferenceEquals(c, emptyMark)).ToArray()) listArea.Children.Remove(child);
       if (isBin)
       {
         empty.Visibility = Visibility.Collapsed;
@@ -203,18 +208,30 @@ public sealed class YourCloudPage : UserControl
         }
       }
       else entries.AddRange(listing.Items.Select(i => new Entry(null, i)));
+      var missing = entries.Where(e => e.Item is { } item && YourCloudRules.Nameless(item)).Select(e => e.Item!).ToArray();
+      if (missing.Length > 1)
+      {
+        entries.RemoveAll(e => e.Item is { } item && missing.Contains(item));
+        entries.Add(new(null, missing.OrderByDescending(i => i.ChangedAt).First() with { Name = YourCloudRules.MissingName(kind, missing.Length), CanOpen = false }, Members: missing));
+      }
+      showOn = listing.Items.Any(i => i.OnText.Length > 0);
+      showSize = listing.Items.Any(i => i.Bytes is not null || i.Kind == CloudContentsKind.Settings && YourCloudRules.Detail(i).Length > 0);
+      right.Children.Remove(heads);
+      heads = Columns(Head("Name"), Head("Changed"), Head("On"), Head("Size"));
+      heads.Padding = new(24, 0, 24, 2); Grid.SetRow(heads, 1); right.Children.Add(heads);
+      heads.Visibility = entries.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
       foreach (var entry in entries) list.Items.Add(ListRow(entry));
       // Through the list's own selection, not the row's IsSelected: a row not yet laid out drops IsSelected when the
       // list prepares it, so a redraw lost the selection (seen in the r7 pictures).
       foreach (var row in list.Items.OfType<ListViewItem>())
-        if ((row.Tag as Entry)?.Item is { } item && kept.Contains(item.Id)) list.SelectedItems.Add(row);
+        if (row.Tag is Entry entry && (entry.Members?.Any(i => kept.Contains(i.Id)) == true || entry.Item is { } item && kept.Contains(item.Id))) list.SelectedItems.Add(row);
       if (entries.Count == 0) Empty(CloudContentsWords.NothingYet); else empty.Visibility = Visibility.Collapsed;
     }
     finally { rendering = false; }
     UpdateActions();
   }
 
-  private void Empty(string words) { empty.Text = words; empty.Visibility = Visibility.Visible; UpdateActions(); }
+  private void Empty(string words) { heads.Visibility = Visibility.Collapsed; emptyMark.Glyph = PlaceGlyph(new YourCloudPlaceRow(placeKey, "", "", Enum.TryParse<CloudContentsKind>(placeKey, out var kind) ? kind : null)); emptyMark.Visibility = Visibility.Visible; empty.Text = words; empty.TextAlignment = TextAlignment.Center; empty.Visibility = Visibility.Visible; UpdateActions(); }
 
   private void RenderCrumbs()
   {
@@ -240,7 +257,17 @@ public sealed class YourCloudPage : UserControl
 
   // ---- the top bar's actions ----
 
-  private IReadOnlyList<CloudContentsRow> Selected() => list.SelectedItems.OfType<ListViewItem>().Select(i => (i.Tag as Entry)?.Item).OfType<CloudContentsRow>().ToArray();
+  private IReadOnlyList<CloudContentsRow> Selected()
+  {
+    var selected = new List<CloudContentsRow>();
+    foreach (var item in list.SelectedItems.OfType<ListViewItem>())
+    {
+      if (item.Tag is not Entry entry) continue;
+      if (entry.Members is not null) selected.AddRange(entry.Members);
+      else if (entry.Item is not null) selected.Add(entry.Item);
+    }
+    return selected.DistinctBy(i => i.Id).ToArray();
+  }
 
   private CloudContentsPlace? Place() => snapshot?.Places.FirstOrDefault(p => p.Kind.ToString() == placeKey);
 
@@ -328,7 +355,13 @@ public sealed class YourCloudPage : UserControl
   /// A double click: a folder opens in place; an item opens in the reading pane.
   private void Activate(Entry entry)
   {
-    if (entry.Folder is { } f) Visit(placeKey, [.. f.Path]);
+    if (entry.Members is not null)
+    {
+      var row = list.Items.OfType<ListViewItem>().FirstOrDefault(i => ReferenceEquals(i.Tag, entry));
+      if (row is not null) list.SelectedItem = row;
+      UpdateActions();
+    }
+    else if (entry.Folder is { } f) Visit(placeKey, [.. f.Path]);
     else if (entry.Item is { CanOpen: true } item) _ = ShowAsync(item);
   }
 
@@ -441,15 +474,14 @@ public sealed class YourCloudPage : UserControl
 
   // ---- drawing ----
 
-  private static Grid Columns(FrameworkElement name, FrameworkElement changed, FrameworkElement on, FrameworkElement size)
+  private Grid Columns(FrameworkElement name, FrameworkElement changed, FrameworkElement on, FrameworkElement size)
   {
     var row = new Grid { ColumnSpacing = 12 };
-    row.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); row.ColumnDefinitions.Add(new() { Width = new(ChangedWidth) });
-    row.ColumnDefinitions.Add(new() { Width = new(OnWidth) }); row.ColumnDefinitions.Add(new() { Width = new(SizeWidth) });
+    row.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star), MaxWidth = 520 }); row.ColumnDefinitions.Add(new() { Width = new(ChangedWidth) });
     row.Children.Add(name);
     Grid.SetColumn(changed, 1); row.Children.Add(changed);
-    Grid.SetColumn(on, 2); row.Children.Add(on);
-    size.HorizontalAlignment = HorizontalAlignment.Right; Grid.SetColumn(size, 3); row.Children.Add(size);
+    if (showOn) { row.ColumnDefinitions.Add(new() { Width = new(OnWidth) }); Grid.SetColumn(on, row.ColumnDefinitions.Count - 1); row.Children.Add(on); }
+    if (showSize) { row.ColumnDefinitions.Add(new() { Width = new(SizeWidth) }); size.HorizontalAlignment = HorizontalAlignment.Right; Grid.SetColumn(size, row.ColumnDefinitions.Count - 1); row.Children.Add(size); }
     return row;
   }
 
@@ -470,24 +502,27 @@ public sealed class YourCloudPage : UserControl
       var title = new TextBlock { Text = group, FontSize = 12, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new(0, 10, 0, 2) };
       return new ListViewItem { Tag = entry, Content = title, IsEnabled = false, MinHeight = 28, Padding = new(12, 0, 12, 0) };
     }
-    var name = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
+    var name = new Grid { ColumnSpacing = 8, VerticalAlignment = VerticalAlignment.Center };
+    name.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); name.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); name.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+    void Name(FrameworkElement title) { Grid.SetColumn(title, 1); name.Children.Add(title); }
+    void Detail(string text) { var detail = Secondary(text); detail.MaxWidth = 120; Grid.SetColumn(detail, 2); name.Children.Add(detail); }
     var glyph = new DeckIcon { Glyph = entry.Folder is not null ? "folder" : "", FontSize = 14, VerticalAlignment = VerticalAlignment.Center };
     glyph.SetResourceReference(Control.ForegroundProperty, "DeckSecondaryInkBrush");
     name.Children.Add(glyph);
     FrameworkElement changed, on, size;
     if (entry.Folder is { } f)
     {
-      name.Children.Add(new TextBlock { Text = f.Name, FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis });
-      name.Children.Add(Secondary(CloudContentsWords.Items(f.Items)));
+      Name(new TextBlock { Text = f.Name, FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis });
+      Detail(CloudContentsWords.Items(f.Items));
       changed = new Border(); on = new Border(); size = new Border();
     }
     else
     {
       var item = entry.Item!;
-      name.Children.Add(new TextBlock { Text = item.Name, FontSize = 13, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis });
+      Name(new TextBlock { Text = item.Name, FontSize = 13, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis });
       var detail = YourCloudRules.Detail(item);
       // A task's state follows its name; a setting's value sits at the right.
-      if (detail.Length > 0 && item.Kind != CloudContentsKind.Settings) name.Children.Add(Secondary(detail));
+      if (detail.Length > 0 && item.Kind != CloudContentsKind.Settings && entry.Members is null) Detail(detail);
       changed = Secondary(YourCloudRules.Changed(item.ChangedAt));
       on = Secondary(item.OnText);
       size = Secondary(item.Kind == CloudContentsKind.Settings ? detail : YourCloudRules.Size(item.Bytes));
@@ -495,6 +530,7 @@ public sealed class YourCloudPage : UserControl
     var row = Columns(name, changed, on, size);
     row.Height = RowHeight;
     var container = new ListViewItem { Tag = entry, Content = row, MinHeight = RowHeight, Height = RowHeight, Padding = new(12, 0, 12, 0), HorizontalContentAlignment = HorizontalAlignment.Stretch };
+    AutomationProperties.SetAutomationId(container, entry.Members is null ? "cloud.manager.item" : "cloud.manager.missingGroup");
     AutomationProperties.SetName(container, entry.Folder?.Name ?? entry.Item!.Name);
     return container;
   }

@@ -12,8 +12,11 @@ namespace TerminalDeck.Core.Cloud;
 /// neither input. MachineGuid (`HKLM\SOFTWARE\Microsoft\Cryptography`) is read on demand, only to compute this; it is
 /// never stored, logged or sent. A cloned Windows image shares it (accepted, as a restored Mac is on the Mac). The pair the
 /// service accepted is remembered only as a hash (device id, machine id, name).
-public sealed class CloudMachineFacts(Func<string?> hardwareId, Func<string> computerName, Func<string?> accepted, Action<string> remember, string copy = "")
+public sealed class CloudMachineFacts(Func<string?> hardwareId, Func<string> computerName, Func<string?> accepted, Action<string> remember, string copy = "", Action<string>? rename = null)
 {
+  private string? customName;
+  public void Rename(string name) { customName = DisplayName(name); rename?.Invoke(customName); }
+
   public sealed record Pair(string MachineId, string DisplayName, string? HostName = null);
 
   public Func<string?> HardwareId { get; } = hardwareId;
@@ -28,7 +31,7 @@ public sealed class CloudMachineFacts(Func<string?> hardwareId, Func<string> com
   public Pair? PairFor(string subject, string? hostName = null)
   {
     if (HardwareId() is not { } hardware || subject.Length == 0 || MachineId(hardware, subject, Copy) is not { } id) return null;
-    return new(id, DisplayName(ComputerName()), string.IsNullOrEmpty(hostName) ? null : hostName);
+    return new(id, DisplayName(customName ?? ComputerName()), string.IsNullOrEmpty(hostName) ? null : hostName);
   }
   public static string? MachineId(string hardwareId, string subject, string copy = "")
   {
@@ -65,13 +68,17 @@ public sealed class CloudMachineFacts(Func<string?> hardwareId, Func<string> com
   }
 
   /// The real PC: MachineGuid, the computer name, and the accepted mark in one small file of this copy's data folder.
-  public static CloudMachineFacts System(string markFile, string copy = "") => new(ReadMachineGuid, () => Environment.MachineName,
+  public static CloudMachineFacts System(string markFile, string copy = "") => new(ReadMachineGuid, () =>
+    {
+      try { var name = File.Exists(markFile + ".name") ? File.ReadAllText(markFile + ".name").Trim() : ""; return name.Length > 0 ? name : Environment.MachineName; }
+      catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Environment.MachineName; }
+    },
     () => { try { return File.Exists(markFile) ? File.ReadAllText(markFile).Trim() : null; } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; } },
     mark =>
     {
       try { Directory.CreateDirectory(Path.GetDirectoryName(markFile)!); var temporary = markFile + ".tmp"; File.WriteAllText(temporary, mark); File.Move(temporary, markFile, true); }
       catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-    }, copy);
+    }, copy, name => new CloudFileSlot(markFile + ".name").Write(Encoding.UTF8.GetBytes(name)));
 
   public static string? ReadMachineGuid()
   {

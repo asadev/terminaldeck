@@ -27,6 +27,10 @@ public sealed class KeeperClient(IKeeperConnector connector, ReadOnlyMemory<byte
   public ValueTask<KeeperResponse> UpdateConversationAsync(string id, string conversation, CancellationToken ct = default)
     => SendAsync(new() { Secret = credential, Operation = "conversation", Instance = Current(), Id = id, Conversation = conversation }, ct);
   public ValueTask<KeeperResponse> CreateAsync(SessionDefinition definition, CancellationToken cancellationToken = default) => SendAsync(new() { Secret = credential, Operation = "create", Instance = Current(), Launch = definition }, cancellationToken);
+  public ValueTask<KeeperResponse> ForgetHeldAsync(string id, CancellationToken ct = default)
+    => SendAsync(new() { Secret = credential, Operation = "forget-held", Instance = Current(), Id = id }, ct);
+  public ValueTask<KeeperResponse> ReopenAsync(string id, CancellationToken ct = default)
+    => SendAsync(new() { Secret = credential, Operation = "reopen", Instance = Current(), Id = id }, ct);
   public ValueTask<KeeperResponse> RollbackAccountAsync(SessionDefinition original, string transaction, CancellationToken ct = default)
     => SendAsync(new() { Secret = credential, Operation = "account-rollback", Instance = Current(), Id = original.Id, Launch = original, Transaction = transaction }, ct);
   public ValueTask<KeeperResponse> SwitchAccountAsync(SessionDefinition destination, long revision, string transaction, CancellationToken ct = default)

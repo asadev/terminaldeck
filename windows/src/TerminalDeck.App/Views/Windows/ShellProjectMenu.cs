@@ -11,13 +11,14 @@ public sealed partial class ShellWindow
 {
   private MenuFlyout ProjectMenu(Project project)
   {
-    var menu = new MenuFlyout();
+    var menu = DeckMenu.CreateFor(Root);
     void Add(string label, Func<Task> action)
     {
       var item = new MenuFlyoutItem { Text = label }; item.Click += async (_, _) =>
       { try { await action(); } catch (Exception ex) when (ex is not OutOfMemoryException) { Model.Notice = ex is ArgumentException or InvalidOperationException ? ex.Message : "The project action could not finish. Check the folder and try again."; } }; menu.Items.Add(item);
     }
     Add("New session here", () => { OpenNewSessionPage(project.Id); return Task.CompletedTask; });
+    Add("Earlier chats", () => ShowResumeHistoryAsync(Root, project.HomeFolder, null));
     Add("Project settings…", () => { Projects.OpenProject(project.Id, "Settings"); Model.Page = ViewModels.ShellPage.Projects; return Task.CompletedTask; });
     Add("Show in Explorer", async () =>
     {

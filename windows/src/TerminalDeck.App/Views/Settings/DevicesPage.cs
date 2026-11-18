@@ -42,7 +42,22 @@ public sealed class DevicePage : UserControl
       body.Children.Add(SettingsPanel.GroupRows([SettingsPanel.LinkRow("This device is no longer in your account", null, null, null, () => open("profile"))]));
       return;
     }
-    var facts = new List<FrameworkElement> { SettingsPanel.SettingRow("Name", "", SettingsPanel.StateText(device.Name)) };
+    var name = new TextBox { Text = device.Name, Width = 220, MinHeight = 24, Padding = new(6, 1, 6, 1), BorderThickness = new(0), CornerRadius = new(6), FontSize = 13, TextAlignment = TextAlignment.Right, MaxLength = 128, IsEnabled = !working };
+    name.SetResourceReference(Control.BackgroundProperty, "DeckHoverBrush");
+    AutomationProperties.SetAutomationId(name, "settings.device.name");
+    async Task SaveNameAsync()
+    {
+      if (working || name.Text.Trim() == device.Name) return;
+      var typed = name.Text.Trim();
+      await PressAsync(() => account.RenameDeviceAsync(deviceId, typed));
+    }
+    name.KeyDown += async (_, args) =>
+    {
+      if (args.Key == Windows.System.VirtualKey.Enter) { args.Handled = true; await SaveNameAsync(); }
+      else if (args.Key == Windows.System.VirtualKey.Escape) { name.Text = device.Name; args.Handled = true; }
+    };
+    name.LostFocus += async (_, _) => await SaveNameAsync();
+    var facts = new List<FrameworkElement> { SettingsPanel.SettingRow("Name", "", name) };
     if (device.Added is { } added) facts.Add(SettingsPanel.SettingRow("Added", "", SettingsPanel.StateText(AccountPages.Date(added))));
     facts.Add(SettingsPanel.SettingRow("Last seen", "", SettingsPanel.StateText(AccountPages.DeviceLine(device))));
     body.Children.Add(SettingsPanel.GroupRows(facts));
@@ -107,6 +122,7 @@ public sealed class DevicePage : UserControl
     if (working) return;
     working = true; pressProblem = null; Render();
     try { await press(); }
+    catch (CloudProfileRefusal refusal) { pressProblem = refusal.Words; }
     catch (CloudTrustRefusal refusal) { pressProblem = refusal.Words; }
     catch (Exception ex) when (ex is not OutOfMemoryException) { pressProblem = "Could not finish that change. Nothing was changed."; }
     finally { working = false; Render(); }

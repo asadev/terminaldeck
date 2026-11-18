@@ -70,8 +70,8 @@ internal sealed class CloudScreensProofWindow : Window
         // The window's own background for this page (Settings pages sit on the Settings window's grey, so their cards show).
         host.Background = (Brush)ShellTheme.Resource(host, background); host.UpdateLayout();
         var themeWord = theme == ElementTheme.Dark ? "dark" : "light";
-        await W10Proof.CaptureAsync(host, output, "r6-" + name, themeWord, "Made-up local data; no account, no network", _ => { });
-        written.Add("r6-" + name + "-" + themeWord + ".png");
+        await W10Proof.CaptureAsync(host, output, "r9-" + name, themeWord, "Made-up local data; no account, no network", _ => { });
+        written.Add("r9-" + name + "-" + themeWord + ".png");
       }
       catch (Exception error) when (error is not OutOfMemoryException) { failed.Add(name + " " + theme + ": " + error.Message); }
     }
@@ -113,7 +113,7 @@ internal sealed class CloudScreensProofWindow : Window
     await Page("your-cloud-not-on-this-pc", () => Shot("your-cloud-not-on-this-pc", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Memory", "Website"); Cloud().ProofSelect("Old pricing ideas"); return Task.CompletedTask; }));
     await Page("your-cloud-only-on-this-pc", () => Shot("your-cloud-only-on-this-pc", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Memory", "Website"); Cloud().ProofSelect("Kept notes"); return Task.CompletedTask; }));
     await Page("your-cloud-saved-passwords", () => Shot("your-cloud-saved-passwords", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Passwords"); return Task.CompletedTask; }));
-    await Page("your-cloud-tasks", () => Shot("your-cloud-tasks", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Tasks"); return Task.CompletedTask; }));
+    await Page("your-cloud-tasks", () => Shot("your-cloud-tasks", Cloud(), 1280, 760, dark: true, ready: () => { Cloud().ProofVisit("Tasks"); return Task.CompletedTask; }));
 
     // ---- the Bin* ----
     await Page("bin-empty", () =>
@@ -174,12 +174,14 @@ internal sealed class CloudScreensProofWindow : Window
       signedIn = true;
     });
     if (!signedIn) { failed.Add("settings-profile, settings-cloud-manage-files, settings-device: skipped, the made-up sign-in failed"); return; }
-    await Page("settings-profile", () => Shot("settings-profile", new ProfilePage(account, _ => { }), 760, 720, dark: true, settle: 800, background: "DeckRailBrush"));
-    await Page("settings-cloud-manage-files", () => Shot("settings-cloud-manage-files", new CloudPage(account, null, () => { }), 760, 520, settle: 800, background: "DeckRailBrush"));
+    await Page("settings-profile", () => Shot("settings-profile", new ProfilePage(account, _ => { }), 760, 960, dark: true, settle: 800, background: "DeckRailBrush"));
+    await Page("settings-cloud-manage-files", () => Shot("settings-cloud-manage-files", new CloudPage(account, null, () => { }), 760, 620, dark: true, settle: 800, background: "DeckRailBrush"));
+    await Page("settings-personal", () => Shot("settings-personal", new PersonalPage(account), 760, 480, dark: true, settle: 800, background: "DeckRailBrush"));
+    await Page("settings-sign-in", () => Shot("settings-sign-in", new SignInPage(account), 760, 620, dark: true, settle: 800, background: "DeckRailBrush"));
     await Page("settings-device", async () =>
     {
       if (account.Snapshot.DeviceRows.FirstOrDefault(d => !d.ThisDevice) is { } other)
-        await Shot("settings-device", new DevicePage(account, other.DeviceId, _ => { }), 760, 420, settle: 600, background: "DeckRailBrush");
+        await Shot("settings-device", new DevicePage(account, other.DeviceId, _ => { }), 760, 520, dark: true, settle: 600, background: "DeckRailBrush");
       else failed.Add("settings-device: the made-up account shows no other device");
     });
   }
@@ -360,6 +362,11 @@ internal sealed class CloudScreensProofWindow : Window
       if (path.EndsWith("/exchange", StringComparison.Ordinal))
         return Task.FromResult(Ok(new { accessToken = Jwt(), refreshToken = "made-up", expiresAt = DateTimeOffset.UtcNow.AddMinutes(60).ToUnixTimeMilliseconds(),
           user = new { id = UserId, displayName = "Sam Rivera", email = "sam@example.com", provider = "google" }, capabilities = new { features = new[] { "cloud" }, storageEntitled = true } }));
+      if (path == "/profile/v1/me") return Task.FromResult(Ok(new { name = "Sam Rivera", email = "sam@example.com", username = "sam", usernameCanChange = true, waysToSignIn = new[] {
+        new { id = "google", provider = "google", providerName = "Google", account = "sam@example.com", canRemove = true, connectedSince = "2026-11-01T00:00:00Z" },
+        new { id = "github", provider = "github", providerName = "GitHub", account = "samrivera", canRemove = true, connectedSince = "2026-11-03T00:00:00Z" }
+      }, addable = new[] { "apple" } }));
+      if (path == "/settings") return Task.FromResult(Ok(new { external = new { github = true, google = true, apple = true } }));
       if (path == "/v1/capabilities") return Task.FromResult(Ok(new { features = new[] { "cloud" }, storageEntitled = true, session = "valid" }));
       if (path == "/v1/devices" && request.Method == HttpMethod.Post)
       {
