@@ -17,5 +17,14 @@
         "WorkspaceTabSizingTests"
       ]
     }
-  ]
+  ],
+  "reuseFrom": {
+    "runId": 44240608454,
+    "artifactId": 14399596502,
+    "artifactSha256": "20be7b15295096e4b64c12f24850459433addda2f58058a620979c25859a9c14",
+    "runHead": "9518658856e7131819692d3e2fef89e682d0a1a4",
+    "testedSourceCommit": "050cdf0473aaace4e62ae5c357b4aa21f352db76",
+    "sourceTree": "35065a58eece3e52873cc1acc2ce60fb46fa280c",
+    "proofSourceCommit": "2da36690124ca18d29a382ffa20b241c5c4abd90"
+  }
 }
