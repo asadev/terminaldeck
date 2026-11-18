@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   mac:
@@ -135,7 +136,20 @@ jobs:
       - name: Focused tests for this Windows UI part
         if: needs.changes.outputs.ui == 'true'
         shell: pwsh
-        run: ./windows/scripts/windows/check-ui.ps1 -Configuration Release -Platform x64 -ScratchRoot "$env:RUNNER_TEMP\TD-test"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $scope = Get-Content windows/scripts/windows/ui-check-scope.json -Raw | ConvertFrom-Json
+          if ($scope.PSObject.Properties.Name -contains 'retainFrom') {
+            python windows/scripts/windows/ui-check-evidence.py preflight
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          ./windows/scripts/windows/check-ui.ps1 -Configuration Release -Platform x64 -ScratchRoot "$env:RUNNER_TEMP\TD-test"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($scope.PSObject.Properties.Name -contains 'retainFrom') {
+            python windows/scripts/windows/ui-check-evidence.py retain --root windows/.artifacts/windows-check/ui
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Keep focused UI receipts
         if: always() && needs.changes.outputs.ui == 'true'
         uses: actions/upload-artifact@v4
