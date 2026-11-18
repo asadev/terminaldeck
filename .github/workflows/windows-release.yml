@@ -23,15 +23,19 @@ on:
       mode:
         description: "release = build, test, sign and publish. dry-run = build and test only, nothing published. point-back = make installed apps stop being offered the newest version and offer the version below instead."
         type: choice
-        options: [release, dry-run, point-back]
+        options: [release, stage, publish-staged, dry-run, point-back]
         default: release
       checks:
-        description: "all = normal full release gate. accounts = focused account/usage/launch/chat/Hoot gate only; no RealPc, Unix or global vectors."
+        description: "all = normal full release gate. accounts = focused accounts gate; ui = reuse successful exact-commit CI focused UI checks, no tests rerun."
         type: choice
-        options: [all, accounts]
+        options: [all, accounts, ui]
         default: all
       version:
         description: "Windows version, four numbers (e.g. 0.21.5.0). Leave empty for the next one. For point-back: the earlier version to offer again."
+        required: false
+        default: ""
+      staged_run:
+        description: "For publish-staged only: successful stage run whose exact signed package was checked. No rebuild."
         required: false
         default: ""
       notes:
@@ -41,6 +45,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: windows-release
@@ -93,7 +98,7 @@ jobs:
           if [ "$WANT" = "$current" ] || [ "$newest" != "$WANT" ]; then
             echo "::error::$WANT is not newer than $current, which installed apps already have. Pick a higher number."; exit 1
           fi
-          if [ "$MODE" = release ] && gh release view "windows-v$WANT" -R "$repo" >/dev/null 2>&1; then
+          if [[ "$MODE" = release || "$MODE" = stage || "$MODE" = publish-staged ]] && gh release view "windows-v$WANT" -R "$repo" >/dev/null 2>&1; then
             echo "::error::windows-v$WANT already exists. Pick the next number."; exit 1
           fi
           echo "version=$WANT" >> "$GITHUB_OUTPUT"
@@ -101,13 +106,29 @@ jobs:
   build:
     name: Build, test and sign on Windows
     needs: plan
-    if: inputs.mode != 'point-back'
+    if: inputs.mode != 'point-back' && inputs.mode != 'publish-staged'
     runs-on: windows-2025
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+
+      - name: Reuse this exact commit's green focused UI CI
+        if: inputs.checks == 'ui'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=success&per_page=20")"
+          run="$(echo "$runs" | jq -r '.workflow_runs | map(select(.event == "push")) | first | .id // empty')"
+          [ -n "$run" ] || { echo '::error::This exact main commit needs green CI before UI packaging.'; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs" --jq '.jobs[] | [.name,.conclusion] | @tsv'
+          gh run download "$run" -R "$GITHUB_REPOSITORY" -n windows-ui-check -D "$RUNNER_TEMP/ui-ci-proof"
+          receipt="$(find "$RUNNER_TEMP/ui-ci-proof" -name receipt.json | head -1)"
+          [ -n "$receipt" ] && jq -e --arg commit "$GITHUB_SHA" '.sourceCommit == $commit and .outcome == "passed"' "$receipt"
+          echo "Reusing passed UI checks from $run; no test is rerun."
 
       - uses: actions/setup-dotnet@v5
         with:
@@ -130,7 +151,7 @@ jobs:
         run: ./windows/src/TerminalDeck.Link.Native/build.ps1 -Out "$env:RUNNER_TEMP\link-native"
 
       - name: Build every project and run every test project
-        if: inputs.checks != 'accounts'
+        if: inputs.checks == 'all'
         shell: pwsh
         run: ./windows/scripts/windows/build-and-test.ps1 -Configuration Release -Platform x64 -LinkNative "$env:RUNNER_TEMP\link-native"
 
@@ -158,7 +179,7 @@ jobs:
           $out = Join-Path $env:RUNNER_TEMP 'windows-release'
           $pfx = Join-Path $env:RUNNER_TEMP 'stable.pfx'
           try {
-            if ($env:MODE -eq 'release') {
+            if ($env:MODE -in @('release', 'stage')) {
               if (!$env:PFX_BASE64 -or !$env:WINDOWS_SIGNING_PFX_PASSWORD) { throw 'The signing secrets WINDOWS_SIGNING_PFX_BASE64 / WINDOWS_SIGNING_PFX_PASSWORD are not set (the repository owner adds them once).' }
               [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
               ./windows/scripts/windows/package-msix.ps1 -Version $env:VERSION -Out $out -PfxPath $pfx -LinkNative "$env:RUNNER_TEMP\link-native"
@@ -175,13 +196,13 @@ jobs:
         with:
           name: windows-package
           path: ${{ runner.temp }}/upload/
-          retention-days: ${{ inputs.mode == 'release' && 7 || 2 }}
+          retention-days: ${{ (inputs.mode == 'release' || inputs.mode == 'stage') && 7 || 2 }}
           compression-level: 0
 
   publish:
     name: Publish the Windows release (never "latest")
     needs: [plan, build]
-    if: inputs.mode == 'release'
+    if: always() && needs.plan.result == 'success' && ((inputs.mode == 'release' && needs.build.result == 'success') || inputs.mode == 'publish-staged')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -197,10 +218,27 @@ jobs:
             windows/scripts/windows
             windows/src/TerminalDeck.Core/Platform
 
+      - name: Verify the staged package belongs to this exact source commit
+        if: inputs.mode == 'publish-staged'
+        env:
+          STAGED_RUN: ${{ inputs.staged_run }}
+        run: |
+          set -euo pipefail
+          [[ "$STAGED_RUN" =~ ^[0-9]+$ ]] || { echo '::error::Supply the successful stage run number.'; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STAGED_RUN" > staged-run.json
+          jq -e --arg commit "$GITHUB_SHA" '.head_sha == $commit and .conclusion == "success" and .name == "Windows release"' staged-run.json
+
       - uses: actions/download-artifact@v4
         with:
           name: windows-package
           path: package
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.staged_run || github.run_id }}
+
+      - name: Check the staged version and signer file are present
+        run: |
+          test -f "package/TerminalDeck-$VERSION-x64.msix"
+          test -f package/TerminalDeck-Stable.cer
 
       - name: Sign the Windows update file with the Windows-only key
         env:
