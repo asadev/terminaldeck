@@ -55,6 +55,8 @@ struct NativeDevicesSettings: View {
         /// Signed out by another device: its name and when (both or neither; small fixes item 3).
         var signedOutBy: String? = nil
         var signedOutAtMs: Int64? = nil
+        /// The model the device reports about itself ("mac-mini", "MacBook Pro", "iPhone15,2" …); nil = it reports none.
+        var reportedModel: String? = nil
         var canDisconnect: Bool {
             switch source {
             case .account(let id): return !isThisMac && id != nil
@@ -78,8 +80,8 @@ struct NativeDevicesSettings: View {
         case .notReachable: return "Not reachable right now"
         }
     }
-    /// One state per row: "This Mac", "Waiting for you", "Active now" (seen in the last five minutes, or connected
-    /// now) or "Last seen <when>".
+    /// One state per row, in full: "This Mac", "Waiting for you", "Active now" (seen in the last five minutes, or
+    /// connected now) or "Last seen <day, time>". A device's own page says it this way.
     static func state(_ row: Row, waiting: Bool = false, now: Date = Date()) -> String {
         if row.isThisMac { return "This Mac" }
         if waiting { return waitingState }
@@ -90,6 +92,23 @@ struct NativeDevicesSettings: View {
     }
     static func state(_ device: DevicesPage.AccountDevice, now: Date = Date()) -> String {
         state(row(device), now: now)
+    }
+    /// The list's short form (18 Nov, DESIGN-settings 2): a day, never a clock time: "Last seen today", "Last seen
+    /// yesterday", "Last seen 14 Nov" (the year only when it is not this year).
+    static func shortState(_ row: Row, waiting: Bool = false, now: Date = Date(), calendar: Calendar = .current) -> String {
+        if row.isThisMac { return "This Mac" }
+        if waiting { return waitingState }
+        if row.connectedNow { return "Active now" }
+        guard let seen = row.lastSeenMs else { return "Not seen yet" }
+        if Int64(now.timeIntervalSince1970 * 1000) - seen < activeWindowMs { return "Active now" }
+        return "Last seen " + day(seen, now: now, calendar: calendar)
+    }
+    static func day(_ milliseconds: Int64, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let date = Date(timeIntervalSince1970: Double(milliseconds) / 1000)
+        if calendar.isDate(date, inSameDayAs: now) { return "today" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) { return "yesterday" }
+        let style = Date.FormatStyle(timeZone: calendar.timeZone).day().month(.abbreviated)
+        return date.formatted(calendar.isDate(date, equalTo: now, toGranularity: .year) ? style : style.year())
     }
     static func symbol(_ kind: DevicesPage.Kind) -> String {
         switch kind {
@@ -103,11 +122,15 @@ struct NativeDevicesSettings: View {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "A device" : trimmed
     }
+    /// SEAM (notes/review-20261118/LOGIC-HANDOFF.md, "device model"): the model a device reports about itself. No client
+    /// sends one today and the Cloud's device list carries none, so this answers nil and the picture falls back to
+    /// what the device's name and platform say. The logic job adds the field to the account's device and returns it here.
+    static var reportedModel: @MainActor (DevicesPage.AccountDevice) -> String? = { _ in nil }
     static func row(_ device: DevicesPage.AccountDevice) -> Row {
         Row(id: "account:" + (device.deviceId ?? (device.isThisMac ? "this-mac" : name(device.name))), name: name(device.name),
             symbol: symbol(device.kind), isThisMac: device.isThisMac, lastSeenMs: device.lastSeenAtMs, connectedNow: false,
             source: .account(deviceId: device.deviceId), kind: device.kind, addedMs: device.addedAtMs,
-            signedOutBy: device.signedOutBy, signedOutAtMs: device.signedOutAtMs)
+            signedOutBy: device.signedOutBy, signedOutAtMs: device.signedOutAtMs, reportedModel: reportedModel(device))
     }
     static func row(_ device: DevicesPage.OldDevice) -> Row {
         Row(id: "old:" + device.ref, name: name(device.name), symbol: device.source == .machine ? "desktopcomputer" : "iphone.gen3",
@@ -145,65 +168,51 @@ struct NativeDevicesSettings: View {
         }
     }
 
-    // MARK: Which devices are listed where (owner, 15 Nov, item 24)
+    // MARK: ONE list (owner, 18 Nov, item 24: "we don't need this older one ... We need everything at one place. Older,
+    // newer, how do you know what are older and what are newer? Just all here.")
 
-    /// A device not seen for longer than this is not in the main list (it moves behind "Older and browser sign-ins").
-    static let olderAfterMs: Int64 = 30 * 86_400_000
-    /// The two lists: the devices that matter, and the quiet "Older and browser sign-ins". Nothing is signed out by this.
-    struct Groups: Equatable {
-        let main: [Row]
-        let older: [Row]
-    }
-    /// THE RULE, in order:
-    /// 1. This Mac: always in the main list.
-    /// 2. A browser sign-in (the account says "Browser", or its name reads "Chrome / Safari / Firefox / Edge / Arc / Brave
-    ///    on …"): older list.
-    /// 3. A simulator or emulator (its name says so): older list.
-    /// 4. Not connected now and last seen more than 30 days ago: older list. A device connected before accounts that was
-    ///    never seen at all: older list. An account device not seen yet (just signed in): main list.
-    /// 5. The same device twice (same name, same kind, case and spaces ignored): the most recently seen stays, the
-    ///    others go to the older list.
-    /// Everything else (this Mac, his other computers, his phones): main list, once each, most recently seen first.
-    static func groups(_ rows: [Row], now: Date = Date()) -> Groups {
-        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
-        var main: [Row] = []
-        var older: [Row] = []
-        var seen = Set<String>()
-        for row in rows { // `rows` is already this Mac first, then most recently seen first
-            if row.isThisMac { main.append(row); seen.insert(sameKey(row)); continue }
-            if isBrowser(row) || isTestDevice(row) { older.append(row); continue }
-            let at = row.connectedNow ? nowMs : row.lastSeenMs
-            if let at, nowMs - at > olderAfterMs { older.append(row); continue }
-            if at == nil, case .old = row.source { older.append(row); continue }
-            let key = sameKey(row)
-            if seen.contains(key) { older.append(row); continue }
-            seen.insert(key)
-            main.append(row)
-        }
-        return Groups(main: main, older: older)
+    /// How many rows the list shows before "Show N more" (the rest opens in place).
+    static let firstRows = 8
+    static func moreTitle(_ count: Int) -> String { "Show \(count) more" }
+    static let fewerTitle = "Show fewer"
+    /// The list's ONE quiet action at its end (Decker, 18 Nov: he has many stale browser sign-ins): every other device
+    /// and browser is signed out in one press, 5 seconds behind one Undo. This Mac stays signed in.
+    static let signOutOthersTitle = "Sign out of all the others"
+    static func signingOutOthers(_ count: Int) -> String { count == 1 ? "Signing out 1 other…" : "Signing out \(count) others…" }
+    /// The rows that press acts on: everything but this Mac that can be signed out (or, connected before accounts, removed).
+    static func others(_ rows: [Row]) -> [Row] { rows.filter { !$0.isThisMac && $0.canDisconnect } }
+    /// Offered from two others on: one other device has its own "…".
+    static func offersSignOutOthers(_ rows: [Row]) -> Bool { others(rows).count > 1 }
+    /// The rows on show: all of them when open or when the list is short, else the first eight.
+    static func shown(_ rows: [Row], open: Bool) -> [Row] {
+        open || rows.count <= firstRows ? rows : Array(rows.prefix(firstRows))
     }
     static func isBrowser(_ row: Row) -> Bool {
         if row.kind == .browser { return true }
         let name = row.name.lowercased()
         return ["chrome on ", "safari on ", "firefox on ", "edge on ", "arc on ", "brave on ", "browser on "].contains { name.hasPrefix($0) }
     }
-    static func isTestDevice(_ row: Row) -> Bool {
-        let name = row.name.lowercased()
-        return name.contains("emulator") || name.contains("simulator")
-    }
-    private static func sameKey(_ row: Row) -> String {
-        row.name.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ") + "|" + kindWord(row)
-    }
 
-    /// The kind as a person says it ("Mac mini", "MacBook Pro", "iPhone", "Android phone", "PC", "Browser").
-    static func kindWord(_ row: Row) -> String {
-        let name = row.name.lowercased()
-        if isBrowser(row) { return "Browser" }
+    /// What the device's NAME says it is ("Mac mini", "MacBook Pro", "iPhone", "Android phone"); nil = the name says nothing.
+    static func nameKind(_ name: String) -> String? {
+        let name = name.lowercased()
         let named: [(String, String)] = [("mac mini", "Mac mini"), ("macbook air", "MacBook Air"), ("macbook pro", "MacBook Pro"),
                                          ("macbook", "MacBook"), ("imac", "iMac"), ("mac studio", "Mac Studio"), ("mac pro", "Mac Pro"),
                                          ("iphone", "iPhone"), ("ipad", "iPad"), ("pixel", "Android phone"), ("android", "Android phone"),
                                          ("galaxy", "Android phone")]
-        if let hit = named.first(where: { name.contains($0.0) }) { return hit.1 }
+        return named.first(where: { name.contains($0.0) })?.1
+    }
+    /// The kind as a person says it ("Mac mini", "MacBook Pro", "iPhone", "Android phone", "PC", "Browser"): what the
+    /// device reports (the seam) wins over its name; a name that agrees with the report keeps its finer word
+    /// ("MacBook Pro" for a reported MacBook).
+    static func kindWord(_ row: Row) -> String {
+        if isBrowser(row) { return "Browser" }
+        let named = nameKind(row.name)
+        if let model = NativeDeviceModel.from(reported: row.reportedModel) {
+            if let named, NativeDeviceModel.from(reported: named) == model { return named }
+            return model.word
+        }
+        if let named { return named }
         switch row.kind {
         case .mac: return "Mac"
         case .pc: return "PC"
@@ -214,28 +223,17 @@ struct NativeDevicesSettings: View {
             return "Device"
         }
     }
-    /// The 28 pt picture of its kind.
-    static func glyph(_ row: Row) -> String {
-        switch kindWord(row) {
-        case "Mac mini": return "macmini"
-        case "Mac Studio": return "macstudio"
-        case "Mac Pro": return "macpro.gen3"
-        case "iMac": return "desktopcomputer"
-        case "MacBook", "MacBook Air", "MacBook Pro", "Mac": return "laptopcomputer"
-        case "iPhone": return "iphone"
-        case "iPad": return "ipad"
-        case "Android phone": return "smartphone"
-        case "Phone": return "iphone.gen3"
-        case "PC": return "pc"
-        case "Browser": return "globe"
-        default: return row.symbol
-        }
-    }
-    /// The row's second line: "This Mac", "MacBook Pro · Active now", "iPhone · Last seen Today, 2:23 AM".
-    static func secondLine(_ row: Row, waiting: Bool = false, now: Date = Date()) -> String {
+    /// The name already says the kind ("iPhone 13 Pro Max" needs no "iPhone" under it).
+    static func nameSays(_ kind: String, _ name: String) -> Bool { name.localizedCaseInsensitiveContains(kind) }
+    /// The row's second line: "This Mac", "Active now", "Last seen 14 Nov"; the kind in front only when the name does not
+    /// say it ("Android phone · Last seen 14 Nov" for "ASAD Pixel8").
+    static func secondLine(_ row: Row, waiting: Bool = false, now: Date = Date(), calendar: Calendar = .current) -> String {
         if row.isThisMac { return "This Mac" }
         if !waiting, let line = signedOutLine(row) { return line }
-        return kindWord(row) + " · " + state(row, waiting: waiting, now: now)
+        let state = shortState(row, waiting: waiting, now: now, calendar: calendar)
+        if waiting { return state }
+        let kind = kindWord(row)
+        return nameSays(kind, row.name) ? state : kind + " · " + state
     }
     /// Small fixes item 3: a device another device signed out says so on its second line, "Signed out from <device> on
     /// <date>", only when the Cloud gives both who and when; otherwise the row is as before.
@@ -243,16 +241,15 @@ struct NativeDevicesSettings: View {
         guard let by = row.signedOutBy, !by.isEmpty, let at = row.signedOutAtMs, at > 0 else { return nil }
         return "Signed out from \(by) on \(NativeCloudTrustWords.day(at))"
     }
-    static func olderTitle(_ count: Int) -> String { "Older and browser sign-ins (\(count))" }
-    static let signOutAllTitle = "Sign out all of these"
 
     // MARK: The Devices page (only where this copy has no Profile: Cloud cannot be used here)
 
     var body: some View {
-        let groups = feed.groups
+        Group {
+            if NativeCloudOffers.shows(.devices) {
         DeckSettingsScaffold(title: "Devices") {
             NativeThisMacSwitches(feed: feed)
-            if !groups.main.isEmpty || !groups.older.isEmpty {
+            if !feed.rows.isEmpty {
                 NativeDevicesGroup(feed: feed, title: "Your devices")
             }
             if !feed.signedIn, NativeCloudDisplayGate.shared.shows, case .signedOut(waiting: false) = account.signInStage {
@@ -267,6 +264,8 @@ struct NativeDevicesSettings: View {
         .task { await feed.start() }
         .onDisappear { feed.stop() }
     }
+        }
+    }
 }
 
 /// Pictures and tests: the reach switch and the devices connected before accounts as given; no service is touched.
@@ -275,7 +274,7 @@ struct NativeDevicesFixture {
     var old: [DevicesPage.OldDevice] = []
 }
 
-/// What every page that lists devices reads (Profile's Devices group, a device's page, the older list, the Devices page):
+/// What every page that lists devices reads (Profile's Devices group, a device's page, the Devices page):
 /// the account's devices, the devices connected before accounts, the reach switch and the screen switch.
 @MainActor @Observable
 final class NativeDevicesFeed {
@@ -304,7 +303,6 @@ final class NativeDevicesFeed {
     var rows: [NativeDevicesSettings.Row] {
         NativeDevicesSettings.rows(account: signedIn ? DevicesPage.accountDevices(account.snapshot) : [], old: oldDevices)
     }
-    var groups: NativeDevicesSettings.Groups { NativeDevicesSettings.groups(rows) }
     var busy: Bool { reach.busy || account.busy || remote.busy != nil || machines.busy }
     /// One plain line when something did not work (no codes).
     var notice: String? {
@@ -366,40 +364,323 @@ final class NativeDevicesFeed {
     }
 }
 
-/// One device as a row (Apple's device list): the 28 pt picture of its kind, its name, "This Mac" or its kind and when
-/// it was seen, and a chevron; the row opens the device's page.
+/// A device row's rename, in place (owner, 18 Nov, item 26: "We need to be able to edit, sign out or disconnect").
+/// The name becomes a field in its row; Enter saves, Escape cancels; a small check shows for a moment when the Cloud
+/// took the name, "Could not rename" as the row's second line when it did not.
+@MainActor @Observable
+final class NativeDeviceRowEdits {
+    /// The row whose name is a field now, and its text.
+    var renaming: String?
+    var draft = ""
+    private(set) var saving: String?
+    /// The row that shows its small check (saved just now).
+    private(set) var saved: String?
+    private(set) var problems: [String: String] = [:]
+    /// The name the Cloud took, until the list says it too.
+    private(set) var names: [String: String] = [:]
+    /// The Cloud's rename (device id, name). The live group hands in the account's; pictures and tests their own.
+    @ObservationIgnored var send: @MainActor (String, String) async throws -> Void = { _, _ in }
+    @ObservationIgnored private var checkTimer: Task<Void, Never>?
+    @ObservationIgnored private var sends: [Task<Void, Never>] = []
+    nonisolated static let checkShows: Duration = .milliseconds(1600)
+
+    func name(_ row: NativeDevicesSettings.Row) -> String { names[row.id] ?? row.name }
+    func begin(_ row: NativeDevicesSettings.Row) {
+        guard NativeDevicePage.renameTarget(row) != nil else { return }
+        renaming = row.id; draft = name(row); problems[row.id] = nil
+    }
+    func cancel() { renaming = nil; draft = "" }
+    /// Enter, or the field losing the keyboard: the typed name goes to the Cloud; an empty or unchanged one changes nothing.
+    func commit(_ row: NativeDevicesSettings.Row) {
+        guard renaming == row.id else { return }
+        renaming = nil
+        guard let target = NativeDevicePage.renameTarget(row), let typed = CloudDeviceRename.cleaned(draft), typed != name(row) else { return }
+        saving = row.id
+        let id = row.id, send = send
+        sends.append(Task { [weak self] in
+            var failed = false
+            do { try await send(target, typed) } catch { failed = true }
+            guard let self else { return }
+            self.saving = nil
+            if failed { self.problems[id] = NativeDevicePage.renameFailed } else { self.names[id] = typed; self.showCheck(id) }
+        })
+    }
+    /// Tests: every rename sent has answered.
+    func settle() async { for task in sends { await task.value } }
+    private func showCheck(_ id: String) {
+        saved = id
+        checkTimer?.cancel()
+        checkTimer = Task { [weak self] in
+            try? await Task.sleep(for: Self.checkShows)
+            guard !Task.isCancelled else { return }
+            self?.saved = nil
+        }
+    }
+    /// Pictures: a row drawn while it is being renamed, or right after its name was saved.
+    func fixture(renaming id: String? = nil, draft: String = "", saved: String? = nil) {
+        renaming = id; self.draft = draft; self.saved = saved
+    }
+}
+
+/// One device as a row (18 Nov, DESIGN-settings 2): the 28 pt picture of its REAL kind, its name, one short line
+/// ("This Mac", "Active now", "Last seen 14 Nov") and ONE quiet "…" where the row is managed in place: Rename, Sign out
+/// (this Mac: Rename only). A click on the row itself opens the device's page, as before.
 struct NativeDeviceRow: View {
     let row: NativeDevicesSettings.Row
-    var waiting = false
+    let feed: NativeDevicesFeed
+    let signOut: NativeDeviceSignOut
+    @Bindable var edits: NativeDeviceRowEdits
     @Environment(\.deckSettingsOpen) private var open
+    @FocusState private var fieldFocused: Bool
+    @State private var menuOpen = false
+    static let height: CGFloat = 52
+    static let moreBox: CGFloat = 26
+    /// Where the row's text starts: the side padding, the picture and the gap after it. The group's hairlines start here.
+    static let textInset: CGFloat = DeckSettingsLook.rowPadding + DeckSettingsLook.deviceGlyph + DeckTokens.Spacing.s8 + 2
+    /// The name line keeps one height as text and as a field, so the row never moves when Rename is chosen.
+    static let nameLine: CGFloat = 20
+    static let renameTitle = "Rename"
+    static let trustTitle = "Trust"
+    /// The action's true name without "this device" ("Sign out", and for a device connected before accounts the other
+    /// word): in a row's own menu the row is the device.
+    static func short(_ title: String) -> String { title.replacingOccurrences(of: " this device", with: "") }
+
+    /// The row's "…" items, in order.
+    enum Action: Hashable { case trust, rename, signOut, remove }
+    static func actions(_ row: NativeDevicesSettings.Row, waiting: Bool) -> [Action] {
+        var made: [Action] = []
+        if waiting { made.append(.trust) }
+        if NativeDevicePage.renameTarget(row) != nil { made.append(.rename) }
+        if row.canDisconnect {
+            if case .old = row.source { made.append(.remove) } else { made.append(.signOut) }
+        }
+        return made
+    }
+    static func title(_ action: Action) -> String {
+        switch action {
+        case .trust: trustTitle
+        case .rename: renameTitle
+        case .signOut: short(NativeDevicesSettings.signOutTitle)
+        case .remove: short(NativeDevicesSettings.removeTitle)
+        }
+    }
+
+    static func symbol(_ action: Action) -> String {
+        switch action {
+        case .trust: "checkmark.shield"
+        case .rename: "pencil"
+        case .signOut: "rectangle.portrait.and.arrow.right"
+        case .remove: "minus.circle"
+        }
+    }
+
     var body: some View {
-        DeckSettingsLinkRow(title: row.name, subtitle: NativeDevicesSettings.secondLine(row, waiting: waiting),
-                            leading: AnyView(Image(systemName: NativeDevicesSettings.glyph(row))
-                                .font(.system(size: 20, weight: .light))
-                                .foregroundStyle(.primary)
-                                .frame(width: DeckSettingsLook.deviceGlyph, height: DeckSettingsLook.deviceGlyph)),
-                            value: waiting ? NativeDevicesSettings.waitingState : nil, valueColor: DeckTokens.warn,
-                            minHeight: 52) {
-            open(NativeSettingsNavigation.devicePage(row.id))
+        let waiting = feed.waiting(row) != nil
+        let pending = signOut.pending.contains(row.id)
+        let editing = edits.renaming == row.id
+        HStack(spacing: 0) {
+            if editing {
+                label(waiting: waiting, pending: pending, editing: true)
+            } else {
+                Button { open(NativeSettingsNavigation.devicePage(row.id)) } label: {
+                    label(waiting: waiting, pending: pending, editing: false).contentShape(.rect)
+                }
+                .buttonStyle(DeckSettingsPressStyle())
+                .accessibilityLabel(edits.name(row) + ", " + NativeDevicesSettings.secondLine(row, waiting: waiting))
+            }
+            trailing(waiting: waiting, pending: pending, editing: editing)
+                .padding(.leading, DeckTokens.Spacing.s4)
+                .padding(.trailing, DeckSettingsLook.rowPadding - 3)
+        }
+        .frame(maxWidth: .infinity, minHeight: Self.height, alignment: .leading)
+        // Clicking away from the field saves what was typed, as Enter does.
+        .onChange(of: fieldFocused) { _, focused in if !focused, edits.renaming == row.id { edits.commit(row) } }
+    }
+
+    private func label(waiting: Bool, pending: Bool, editing: Bool) -> some View {
+        HStack(spacing: DeckTokens.Spacing.s8 + 2) {
+            NativeDeviceGlyph(model: NativeDeviceModel.of(row), size: DeckSettingsLook.deviceGlyph)
+            VStack(alignment: .leading, spacing: 1) {
+                if editing {
+                    NativeSessionTextField("Name", text: Binding(get: { edits.draft }, set: { edits.draft = String($0.prefix(CloudDeviceRename.maxName)) }))
+                        .textFieldStyle(.plain)
+                        .sessionFocused($fieldFocused)
+                        .onSubmit { edits.commit(row) }
+                        .onExitCommand { edits.cancel() }
+                        .font(DeckSettingsLook.rowTitle)
+                        .frame(height: NativeProfileQuietField.line)
+                        .padding(.horizontal, 5)
+                        .frame(maxWidth: 260, minHeight: Self.nameLine, maxHeight: Self.nameLine, alignment: .leading)
+                        .background(DeckSettingsQuietField.fill, in: RoundedRectangle(cornerRadius: DeckSettingsQuietField.radius))
+                        // The fill grows around the text: the name itself stays where it was.
+                        .padding(.leading, -5)
+                        .onAppear { fieldFocused = true }
+                        .accessibilityLabel("Device name")
+                } else {
+                    HStack(spacing: 6) {
+                        Text(edits.name(row)).font(DeckSettingsLook.rowTitle).lineLimit(1).truncationMode(.tail)
+                        if edits.saving == row.id {
+                            ProgressView().controlSize(.mini)
+                        } else if edits.saved == row.id {
+                            Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(DeckTokens.good)
+                                .accessibilityLabel("Saved")
+                        }
+                    }
+                    .frame(height: Self.nameLine)
+                }
+                second(waiting: waiting, pending: pending)
+            }
+            Spacer(minLength: DeckTokens.Spacing.s8)
+        }
+        .padding(.leading, DeckSettingsLook.rowPadding)
+        .frame(maxWidth: .infinity, minHeight: Self.height, alignment: .leading)
+    }
+
+    /// The second line: the sign-out that is waiting or did not happen, a rename that did not happen, else the state.
+    @ViewBuilder private func second(waiting: Bool, pending: Bool) -> some View {
+        let problem = signOut.notes[row.id] ?? edits.problems[row.id]
+        Text(pending ? NativeDeviceSignOut.pendingWord(row) : problem ?? NativeDevicesSettings.secondLine(row, waiting: waiting))
+            .font(DeckSettingsLook.rowSecond)
+            .foregroundStyle(!pending && (problem != nil || waiting) ? DeckTokens.warn : Color.secondary)
+            .lineLimit(problem != nil && !pending ? 2 : 1).truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private func trailing(waiting: Bool, pending: Bool, editing: Bool) -> some View {
+        if pending {
+            Button("Undo") { signOut.undo(row.id) }.controlSize(.small).accessibilityIdentifier("devices.undo")
+        } else if !editing {
+            let actions = Self.actions(row, waiting: waiting)
+            if !actions.isEmpty {
+                // The plain three dots of the Settings pages (13 pt, secondary); the menu is the app's own DeckMenu.
+                Button { menuOpen.toggle() } label: {
+                    Image(systemName: NativeSettingsMoreGlyph.glyph).font(.system(size: NativeSettingsMoreGlyph.size)).foregroundStyle(.secondary)
+                        .frame(width: Self.moreBox, height: Self.moreBox).contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("More for \(edits.name(row))")
+                .deckMenu(isPresented: $menuOpen, alignment: .trailing) {
+                    NativeDeviceRowMenu(actions: actions) { perform($0) }
+                }
+            }
+        }
+    }
+
+    private func perform(_ action: Action) {
+        switch action {
+        case .trust: feed.trust(row.id)
+        case .rename: edits.begin(row)
+        case .signOut, .remove: feed.choose(row.id, with: signOut)
         }
     }
 }
 
-/// The "Devices" group: one row per device that matters, then the one quiet row "Older and browser sign-ins (7) ›".
+/// What a device row's "…" opens, in the app's shared menu (`DeckMenu`): Trust (only while it waits), Rename, then the
+/// one red row (Sign out; for a device connected before accounts, Remove).
+struct NativeDeviceRowMenu: View {
+    let actions: [NativeDeviceRow.Action]
+    let perform: (NativeDeviceRow.Action) -> Void
+    var body: some View {
+        ForEach(actions, id: \.self) { action in
+            DeckMenuRow(NativeDeviceRow.title(action), symbol: NativeDeviceRow.symbol(action),
+                        role: action == .signOut || action == .remove ? .destructive : .normal) { perform(action) }
+        }
+    }
+}
+
+/// The "Devices" group: ONE list of everything signed in, this Mac first, then most recently seen first. A long list
+/// shows its first eight rows and opens the rest in place ("Show 5 more" / "Show fewer").
 struct NativeDevicesGroup: View {
     let feed: NativeDevicesFeed
     var title: String = "Devices"
-    @Environment(\.deckSettingsOpen) private var open
+    /// Pictures: the rest of a long list drawn open, and a row drawn mid-rename or just saved.
+    var fixtureOpen = false
+    var fixtureEdits: NativeDeviceRowEdits? = nil
+    /// Pictures: the last row drawn while that many sign-outs wait behind Undo.
+    var fixtureSigningOut: Int? = nil
+    @State private var open = false
+    @State private var signOut = NativeDeviceSignOut()
+    @State private var edits = NativeDeviceRowEdits()
+
     var body: some View {
-        let groups = feed.groups
-        DeckSettingsGroup(title) {
-            ForEach(groups.main) { row in NativeDeviceRow(row: row, waiting: feed.waiting(row) != nil) }
-            if !groups.older.isEmpty {
-                DeckSettingsLinkRow(title: NativeDevicesSettings.olderTitle(groups.older.count), symbol: "clock.arrow.circlepath", tint: .gray) {
-                    open(NativeSettingsNavigation.olderDevicesID)
+        Group {
+            if NativeCloudOffers.shows(.devices) {
+        let rows = feed.rows
+        let isOpen = open || fixtureOpen
+        let rowEdits = fixtureEdits ?? self.edits
+        DeckSettingsGroup(title, separatorInset: NativeDeviceRow.textInset) {
+            ForEach(NativeDevicesSettings.shown(rows, open: isOpen)) { row in
+                NativeDeviceRow(row: row, feed: feed, signOut: signOut, edits: rowEdits)
+            }
+            if rows.count > NativeDevicesSettings.firstRows {
+                NativeDevicesMoreRow(count: rows.count - NativeDevicesSettings.firstRows, open: isOpen) { open.toggle() }
+            }
+            if NativeDevicesSettings.offersSignOutOthers(rows) {
+                NativeDevicesSignOutOthersRow(waiting: fixtureSigningOut ?? signOut.pending.count) {
+                    for row in NativeDevicesSettings.others(rows) { feed.choose(row.id, with: signOut) }
+                } undo: { signOut.cancelAll() }
+            }
+            if let done = signOut.doneLine { DeckSettingsProblem(text: done, warn: false) }
+        }
+        .onAppear {
+            guard !feed.isFixture else { return }
+            let account = feed.account
+            rowEdits.send = { try await account.renameDevice($0, name: $1) }
+        }
+        // Leaving the page cancels a sign-out still waiting behind its Undo: it never fires later by itself.
+        .onDisappear { signOut.cancelAll() }
+        }
+    }
+    }
+}
+
+/// The list's last row: "Sign out of all the others", quiet (secondary ink, no red, no border). Pressed, it says how many
+/// are being signed out, with ONE Undo for all of them, for 5 seconds.
+struct NativeDevicesSignOutOthersRow: View {
+    /// How many sign-outs wait behind Undo right now (two or more: this row shows them).
+    let waiting: Int
+    let action: () -> Void
+    let undo: () -> Void
+    var body: some View {
+        HStack(spacing: DeckTokens.Spacing.s8) {
+            if waiting > 1 {
+                Text(NativeDevicesSettings.signingOutOthers(waiting)).font(DeckSettingsLook.rowTitle).foregroundStyle(.secondary)
+                Spacer(minLength: DeckTokens.Spacing.s8)
+                Button("Undo", action: undo).controlSize(.small).accessibilityIdentifier("devices.undo-all")
+            } else {
+                Button(action: action) {
+                    Text(NativeDevicesSettings.signOutOthersTitle).font(DeckSettingsLook.rowTitle).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: NativeDevicesMoreRow.height, alignment: .leading)
+                        .contentShape(.rect)
                 }
+                .buttonStyle(.plain)
             }
         }
+        .padding(.leading, NativeDeviceRow.textInset).padding(.trailing, DeckSettingsLook.rowPadding)
+        .frame(maxWidth: .infinity, minHeight: NativeDevicesMoreRow.height, alignment: .leading)
+    }
+}
+
+/// The list's last row while it is long: "Show 5 more" (the rest opens in place), then "Show fewer".
+struct NativeDevicesMoreRow: View {
+    let count: Int
+    let open: Bool
+    let action: () -> Void
+    static let height: CGFloat = 40
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Text(open ? NativeDevicesSettings.fewerTitle : NativeDevicesSettings.moreTitle(count))
+                    .font(DeckSettingsLook.rowTitle).foregroundStyle(.secondary)
+                Image(systemName: open ? "chevron.up" : "chevron.down").font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor)).accessibilityHidden(true)
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, NativeDeviceRow.textInset).padding(.trailing, DeckSettingsLook.rowPadding)
+            .frame(maxWidth: .infinity, minHeight: Self.height, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(DeckSettingsPressStyle())
     }
 }
 
@@ -411,7 +692,7 @@ struct NativeThisMacSwitches: View {
     var body: some View {
         let reachNow = feed.reachNow
         DeckSettingsGroup {
-            if feed.signedIn, feed.fixture?.reach != nil || feed.reach.devicesReach.available {
+            if NativeCloudOffers.shows(.phoneAndWebReach), feed.signedIn, feed.fixture?.reach != nil || feed.reach.devicesReach.available {
                 DeckSettingsRow(DevicesPage.settingTitle, info: DevicesPage.settingOnDetail + "\n\n" + DevicesPage.settingOffDetail,
                                 state: NativeDevicesSettings.doorWord(reachNow),
                                 stateColor: reachNow.door == .notReachable ? DeckTokens.warn : .secondary) {
@@ -464,10 +745,12 @@ struct NativeDevicePage: View {
     }
 
     var body: some View {
+        Group {
+            if NativeCloudOffers.shows(.devices) {
         let listed = NativeDevicesSettings.target(rowID, in: feed.rows)
         let row = listed.map { NativeDevicesSettings.Row(id: $0.id, name: renamed ?? $0.name, symbol: $0.symbol, isThisMac: $0.isThisMac,
                                                          lastSeenMs: $0.lastSeenMs, connectedNow: $0.connectedNow, source: $0.source,
-                                                         kind: $0.kind, addedMs: $0.addedMs) }
+                                                         kind: $0.kind, addedMs: $0.addedMs, reportedModel: $0.reportedModel) }
         DeckSettingsScaffold(title: row?.name ?? "Device") {
             if let row {
                 header(row)
@@ -530,6 +813,8 @@ struct NativeDevicePage: View {
         .task { await feed.start() }
         // Leaving the page cancels a sign-out still waiting behind its Undo: it never fires later by itself.
         .onDisappear { signOut.cancelAll(); feed.stop() }
+            }
+        }
     }
 
     /// Enter in the Name row: the Cloud renames the device; anything but its ok shows the old name again and one
@@ -551,60 +836,12 @@ struct NativeDevicePage: View {
 
     private func header(_ row: NativeDevicesSettings.Row) -> some View {
         VStack(spacing: DeckTokens.Spacing.s4) {
-            Image(systemName: NativeDevicesSettings.glyph(row)).font(.system(size: 56, weight: .ultraLight))
-                .frame(height: 72).accessibilityHidden(true)
+            NativeDeviceGlyph(model: NativeDeviceModel.of(row), size: 64)
+                .frame(height: 72)
             Text(row.name).font(.system(size: 17, weight: .semibold)).lineLimit(1).truncationMode(.middle)
             Text(row.isThisMac ? "This Mac" : NativeDevicesSettings.kindWord(row)).font(DeckSettingsLook.rowTitle).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-    }
-}
-
-/// "Older and browser sign-ins": browsers, test devices, devices not seen for 30 days and second copies of a device.
-/// Each can be signed out; "Sign out all of these" does it in one click (5 seconds behind one Undo). Nothing here was
-/// signed out by itself.
-struct NativeOlderDevicesPage: View {
-    var account: NativeCloudAccount = .shared
-    var fixture: NativeDevicesFixture?
-    @State private var feed: NativeDevicesFeed
-    @State private var signOut = NativeDeviceSignOut()
-
-    init(account: NativeCloudAccount = .shared, fixture: NativeDevicesFixture? = nil) {
-        self.account = account; self.fixture = fixture
-        _feed = State(initialValue: NativeDevicesFeed(account: account, fixture: fixture))
-    }
-
-    var body: some View {
-        let older = feed.groups.older
-        DeckSettingsScaffold(title: "Older and browser sign-ins") {
-            if older.isEmpty {
-                DeckSettingsGroup { DeckSettingsProblem(text: "Nothing here.", warn: false) }
-            } else {
-                DeckSettingsGroup(info: "Browsers you signed in with, test devices, devices not seen for 30 days and second copies of a device. They stay signed in until you sign them out here.") {
-                    ForEach(older) { row in
-                        DeckSettingsRow(row.name, subtitle: NativeDevicesSettings.secondLine(row)) {
-                            if signOut.pending.contains(row.id) {
-                                Button("Undo") { signOut.undo(row.id) }
-                            } else if row.canDisconnect {
-                                Button("Sign out") { feed.choose(row.id, with: signOut) }.disabled(feed.busy)
-                            }
-                        }
-                        if let note = signOut.notes[row.id] { DeckSettingsProblem(text: note) }
-                    }
-                }
-                let open = older.filter { $0.canDisconnect && !signOut.pending.contains($0.id) }
-                if !open.isEmpty {
-                    DeckSettingsGroup {
-                        DeckSettingsButtonRow(title: NativeDevicesSettings.signOutAllTitle, role: .destructive) {
-                            for row in open { feed.choose(row.id, with: signOut) }
-                        }
-                        .disabled(feed.busy)
-                    }
-                }
-            }
-        }
-        .task { await feed.start() }
-        .onDisappear { signOut.cancelAll(); feed.stop() }
     }
 }
 

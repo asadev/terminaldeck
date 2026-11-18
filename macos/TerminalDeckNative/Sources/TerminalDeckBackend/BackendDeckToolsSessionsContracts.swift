@@ -55,6 +55,8 @@ public protocol BackendDeckToolsSessionsSurface: Sendable {
     func transcripts(cwd: String, context: BackendMCPCallContext) async throws -> [NativeRPCValue]
     func transcriptBytes(path: String, context: BackendMCPCallContext) async throws -> Int
     func transcriptMessages(path: String, fromByte: Int, context: BackendMCPCallContext) async throws -> [NativeRPCValue]
+    /// Same transcript reader, keeping separate API answers instead of merging a whole assistant turn.
+    func answerMessages(path: String, fromByte: Int, context: BackendMCPCallContext) async throws -> [NativeRPCValue]
     func start(input: BackendCreateSessionInput, deviceID: String?, context: BackendMCPCallContext) async throws -> NativeRPCValue
     /// A Codex or Gemini session's own conversation record (BackendDeckCoreAgentRecords); nil for every other session.
     func agentRecord(session: NativeRPCValue, windowBytes: Int, context: BackendMCPCallContext) async -> BackendDeckCoreAgentRecord?
@@ -63,6 +65,9 @@ public protocol BackendDeckToolsSessionsSurface: Sendable {
     func statusChange(sessionID: String, milliseconds: Int, context: BackendMCPCallContext) async -> Bool
 }
 public extension BackendDeckToolsSessionsSurface {
+    func answerMessages(path: String, fromByte: Int, context: BackendMCPCallContext) async throws -> [NativeRPCValue] {
+        try await transcriptMessages(path: path, fromByte: fromByte, context: context)
+    }
     func chatSnapshot(sessionID: String, context: BackendMCPCallContext) async throws -> NativeRPCValue? { nil }
     func agentRecord(session: NativeRPCValue, windowBytes: Int, context: BackendMCPCallContext) async -> BackendDeckCoreAgentRecord? { nil }
     func statusChange(sessionID: String, milliseconds: Int, context: BackendMCPCallContext) async -> Bool { false }

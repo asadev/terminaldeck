@@ -123,6 +123,10 @@ final class NativeCloudSecrets {
     @ObservationIgnored var pressAllowed: @MainActor () -> Bool = {
         NativeCloudSheetGuard.pagePressAllowed(remote: NativeCloudSheetGuard.shared.remote, at: NativeCloudSheetGuard.pressTime())
     }
+    /// Pictures and tests: the page as given (no saved passwords are wired, read or changed). It stays through the
+    /// Cloud page's own reload until it is taken away again with nil.
+    func fixture(page: BackendCloudSecretsPage?) { self.page = page; fixed = page != nil }
+    @ObservationIgnored private var fixed = false
     /// The shown page with the Undo wait folded in.
     var shown: BackendCloudSecretsPage? {
         guard var page else { return nil }
@@ -156,6 +160,7 @@ final class NativeCloudSecrets {
     /// `fresh`: his own look (the page opening, Check again, Sync now) asks the service; any other reload (the graph's
     /// own change notes) uses the kept answer, so nothing that repeats by itself reaches the service.
     func reload(fresh: String? = nil) {
+        guard !fixed else { return }
         guard let graph else { page = nil; return }
         if let fresh { statusCache?.invalidate(fresh) }
         loading?.cancel()
@@ -286,7 +291,8 @@ struct NativeCloudSecretsSection: View {
     /// the passkey spare, where they were last opened, this Mac only) goes into the rows' info buttons. Only a state he
     /// must act on stays as a line (a problem in orange, items closed without being applied, an approval, a waiting item).
     static func savedPasswordsInfo(_ page: BackendCloudSecretsPage) -> String? {
-        let lines = page.notSaved + page.openedOn + [page.spareMade, page.spareNote, page.spareReplaced].compactMap { $0 }
+        // 18 Nov: each kind that is not in the Cloud yet says so HERE (with its reason), never as a line on the page.
+        let lines = page.gaps + page.notSaved + page.openedOn + [page.spareMade, page.spareNote, page.spareReplaced].compactMap { $0 }
         return lines.isEmpty ? nil : lines.joined(separator: "\n\n")
     }
     static func askInfo(_ page: BackendCloudSecretsPage) -> String? {
@@ -296,9 +302,11 @@ struct NativeCloudSecretsSection: View {
     }
 
     var body: some View {
+        Group {
+            if NativeCloudOffers.shows(.savedPasswords) {
         if let page = model.shown {
             DeckSettingsGroup("Saved passwords") {
-                DeckSettingsRow("Saved passwords", info: Self.savedPasswordsInfo(page), state: BackendCloudSecretsWords.state(page)) {
+                DeckSettingsRow("Saved passwords", info: Self.savedPasswordsInfo(page), state: NativeCloudCalm.passwordsState(page)) {
                     control(page)
                 }
                 // The owner's stricter setting (off by default): its own row, shown where this Mac holds the key.
@@ -320,7 +328,6 @@ struct NativeCloudSecretsSection: View {
                 if let problem = page.problem ?? (page.turnOnFailed ? BackendCloudSecretsWords.stepNotFinished : nil) {
                     DeckSettingsProblem(text: problem)
                 }
-                ForEach(page.gaps, id: \.self) { gap in DeckSettingsProblem(text: gap) }
                 // Items from another device that were closed here without being applied (lane V's count and reason).
                 if !page.skipped.isEmpty {
                     DeckSettingsRow(page.skipped.first ?? "", info: page.skipped.count > 1 ? page.skipped.joined(separator: "\n\n") : nil) {
@@ -353,6 +360,8 @@ struct NativeCloudSecretsSection: View {
                 }
             }
             .disabled(model.busy)
+        }
+            }
         }
     }
     /// The ONE control for the state, or none.

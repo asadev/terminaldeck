@@ -266,7 +266,7 @@ import Testing
         await link.flushed()
         #expect(await w.receivers.typed == ["ls\r"])
         let sent = try #require(await w.wa.sent.first?.text)
-        #expect(sent.contains("README.md") && sent.contains("src") && sent.hasPrefix("```"))
+        #expect(sent == "```\nREADME.md\nsrc\n```")
         #expect(BackendWhatsAppLink.newLines(before: "a\n", after: "a\n" + (1...60).map(String.init).joined(separator: "\n")).split(separator: "\n").count == 40)
     }
 
@@ -639,6 +639,8 @@ actor FakeWhatsApp: WhatsAppTransport {
     private(set) var offsets: [Int64?] = []
     var queued: Int { polls.count }
     func poll(key: String, offset: Int64?, timeout: Int) async -> WhatsAppPoll {
+        // A cancelled reader must not consume the next scripted batch after its link has stopped.
+        guard !Task.isCancelled else { return .nothing }
         pollCount += 1
         offsets.append(offset)
         if !polls.isEmpty { return polls.removeFirst() }

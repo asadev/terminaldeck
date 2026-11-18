@@ -21,6 +21,8 @@ struct NativeServerHost: View {
 
     var body: some View {
         Group {
+            if NativeCloudOffers.shows(.phoneAndWebReach) {
+        Group {
             if let offer = model.offer {
                 hostPanel(offer)
                 if let machine = model.linkedMachine(offer) {
@@ -36,6 +38,8 @@ struct NativeServerHost: View {
         .onAppear { model.start(connected: connected) }
         .onChange(of: connected) { _, now in if now { model.look() } }
         .onDisappear { model.leave() }
+            }
+        }
     }
 
     @ViewBuilder private func hostPanel(_ offer: ServerHostOffer) -> some View {

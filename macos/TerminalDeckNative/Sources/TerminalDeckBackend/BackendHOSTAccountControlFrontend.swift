@@ -48,10 +48,11 @@ public actor BackendHOSTAccountControlFrontend: BackendHOSTAccountChannelInvokin
             try await authority.recheckExternal(channel: channel, args: args, context: context, mutation: false)
             guard let profile = try await find(id, context: context) else { throw BackendAccountFailure("Choose a saved API account.") }
             let record = try BackendAPIAccountRecord.read(profile)
-            let configured = record.map { !$0.requiresKey || BackendAPIAccountKeychain.contains($0) } ?? false
+            let availability = record.map { $0.requiresKey ? BackendAPIAccountKeychain.availability($0) : .available } ?? .missing
+            let configured = availability == .available
             return .object([.init("profileId", .string(id)), .init("provider", .string(profile.provider)),
-                .init("state", .string(configured ? "signed-in" : "signed-out")), .init("plan", .string("API key")),
-                .init("detail", .string(configured ? "API credential configured" : "Enter the API key in this account's secure field")),
+                .init("state", .string(configured ? "signed-in" : availability == .accessUnavailable ? "unknown" : "signed-out")), .init("plan", .string("API key")),
+                .init("detail", .string(availability.detail)),
                 .init("command", .string("")), .init("checkedAt", .number(Date().timeIntervalSince1970 * 1000))])
         }
         if channel == "profiles:delete", !BackendAPIAccountDeletion.insideCleanup,

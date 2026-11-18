@@ -11,6 +11,42 @@ import TerminalDeckNativeCore
 // reading pane (340 pt). Rows stay clean: the two bin actions live in the top bar and the right-click menu only, and
 // nothing changes on hover. The folder tree per kind is `BackendCloudManagerTree`.
 
+/// Rows that have no name on this Mac (owner, 18 Nov, item 30: nine rows all reading "A task not on this Mac"). A task,
+/// agent or project that is in the Cloud but not in this Mac's own list has no name here, so the list said the same
+/// stand-in words once per row. They are ONE quiet row per place now ("9 tasks that are not on this Mac"); a click
+/// selects all of them, so the bar's actions and the right-click menu still act on them. Real names are a logic job
+/// (notes/review-20261118/LOGIC-HANDOFF.md, "file manager names").
+enum NativeCloudNameless {
+    /// The stand-in name the contents builder gives a row of this kind that has no name on this Mac (nil: the kind has
+    /// none). Kept equal to `BackendCloudContents`'s own words by a test.
+    static func standIn(_ kind: BackendCloudContents.Kind) -> String? {
+        switch kind {
+        case .tasks: "A task not on this Mac"
+        case .agents: "An agent not on this Mac"
+        case .projects: "A project not on this Mac"
+        default: nil
+        }
+    }
+    static func isNameless(_ item: BackendCloudContents.Item) -> Bool { standIn(item.kind) == item.name }
+    /// The list's files as it shows them: the named rows, and the nameless ones apart when there are two or more (one
+    /// alone stays an ordinary row).
+    static func split(_ files: [BackendCloudContents.Item]) -> (named: [BackendCloudContents.Item], nameless: [BackendCloudContents.Item]) {
+        let nameless = files.filter(isNameless)
+        guard nameless.count > 1 else { return (files, []) }
+        return (files.filter { !isNameless($0) }, nameless)
+    }
+    /// "9 tasks that are not on this Mac".
+    static func title(_ kind: BackendCloudContents.Kind, count: Int) -> String {
+        let noun: String
+        switch kind {
+        case .agents: noun = count == 1 ? "agent" : "agents"
+        case .projects: noun = count == 1 ? "project" : "projects"
+        default: noun = count == 1 ? "task" : "tasks"
+        }
+        return BackendCloudPageCounts.number(count) + " " + noun + (count == 1 ? " that is not on this Mac" : " that are not on this Mac")
+    }
+}
+
 /// One place of the page: a kind and a folder inside it, the Bin, or Code. Back / forward walk these.
 struct NativeCloudPlace: Equatable {
     var kind: BackendCloudContents.Kind
@@ -39,6 +75,7 @@ extension NativeCloudContentsModel {
     /// Profile › Cloud › "Manage files" (another lane) calls this. `kind` opens that place at its top; nil keeps the place
     /// he left it on. The main window comes forward.
     static func openFileManager(kind: BackendCloudContents.Kind? = nil) {
+        guard NativeCloudOffers.shows(.fileManager) else { return }
         if let kind { shared.chooseShelf(kind: kind) }
         AppModel.shared.select(Sidebar21Pages.cloudID)
         NativeLaunchWindow.ensureShown(front: true)
@@ -86,12 +123,23 @@ extension NativeCloudContentsModel {
 
     // MARK: Selection (a click selects, Command adds, Shift takes a range, a double click opens)
 
-    /// The rows in the order the list shows them: folders, then files.
-    var rowKeys: [String] { let shown = listing; return shown.folders.map(\.id) + shown.files.map(\.id) }
+    /// The rows in the order the list shows them: folders, then files; the rows with no name on this Mac count as ONE
+    /// row (its key is the first of them).
+    var rowKeys: [String] {
+        let shown = listing
+        let parts = NativeCloudNameless.split(shown.files)
+        return shown.folders.map(\.id) + parts.named.map(\.id) + (parts.nameless.first.map { [$0.id] } ?? [])
+    }
+    /// The rows of the list on show that are drawn as the one "not on this Mac" row.
+    var namelessKeys: [String] { NativeCloudNameless.split(listing.files).nameless.map(\.id) }
     func isPicked(_ key: String) -> Bool { selection.contains(key) || folderSelection.contains(key) }
     var hasSelection: Bool { !selection.isEmpty || !folderSelection.isEmpty }
     func clearSelection() { selection.removeAll(); folderSelection.removeAll() }
     func setPicked(_ keys: Set<String>) {
+        var keys = keys
+        // Picking the one "not on this Mac" row picks every row it stands for.
+        let nameless = namelessKeys
+        if let first = nameless.first, keys.contains(first) { keys.formUnion(nameless) }
         folderSelection = keys.filter { $0.hasPrefix(BackendCloudManagerTree.folderPrefix) }
         selection = keys.subtracting(folderSelection)
     }
@@ -101,7 +149,8 @@ extension NativeCloudContentsModel {
             setPicked(Set(keys[min(from, to)...max(from, to)]))
         } else if command {
             var now = selection.union(folderSelection)
-            if now.contains(key) { now.remove(key) } else { now.insert(key) }
+            let nameless = namelessKeys
+            if now.contains(key) { now.remove(key); if nameless.first == key { now.subtract(nameless) } } else { now.insert(key) }
             setPicked(now)
             anchor = key
         } else {
@@ -160,6 +209,8 @@ extension NativeCloudContentsModel {
     /// The rows a right-click acts on: the selection when that row is in it, else that row alone.
     func menuRows(for key: String) -> [BackendCloudContents.Item] {
         if isPicked(key) { return selectedRows }
+        let nameless = namelessKeys
+        if nameless.first == key, let model { return model.items.filter { nameless.contains($0.id) } }
         if let folder = BackendCloudManagerTree.path(ofFolderId: key), let model {
             return BackendCloudManagerTree.items(under: folder, kind: kind, in: model, device: device)
         }
@@ -218,8 +269,8 @@ extension NativeCloudContentsModel {
 struct NativeCloudContentsBrowser: View {
     @Bindable var model: NativeCloudContentsModel
     let contents: BackendCloudContents
-    /// 215 pt, as the Settings list, so no place name is cut (DESIGN-FIXES CM-1).
-    static let sidebarWidth: CGFloat = 215
+    /// 232 pt (18 Nov; was 215): "Sessions and chats" beside a three-digit count was cut ("Sessions and ch…").
+    static let sidebarWidth: CGFloat = 232
     /// The reading pane (design section 9: 340 pt, closable).
     static let readerWidth: CGFloat = 340
     static let listMinimum: CGFloat = 300
@@ -350,8 +401,7 @@ struct NativeCloudTopBar: View {
             if model.showingCode {
                 NativeCodeBackupRefresh(model: model.code).controlSize(.small)
             } else {
-                NativeSessionTextField("Search", text: $model.search)
-                    .textFieldStyle(.roundedBorder)
+                NativeCloudSearchField(text: $model.search)
                     .frame(minWidth: 110, idealWidth: 180, maxWidth: 180)
                 if model.showingBin { binActions } else { actions }
             }
@@ -435,6 +485,29 @@ struct NativeCloudTopBar: View {
     }
 }
 
+/// The file manager's search (18 Nov): the Settings search look (magnifier, radius 8, a quiet fill), not the system's
+/// bordered box.
+struct NativeCloudSearchField: View {
+    @Binding var text: String
+    static let height: CGFloat = 26
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(DeckTokens.textSecondary).accessibilityHidden(true)
+            NativeSessionTextField("Search", text: $text)
+                .textFieldStyle(.plain)
+                .font(DeckTokens.Typography.body)
+                .accessibilityLabel("Search this place")
+            if !text.isEmpty {
+                Button { text = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(DeckTokens.textTertiary) }
+                    .buttonStyle(.plain).accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, DeckTokens.Spacing.s8)
+        .frame(height: Self.height)
+        .background(DeckTokens.textPrimary.opacity(0.06), in: RoundedRectangle(cornerRadius: DeckTokens.Metrics.rowRadius))
+    }
+}
+
 /// The top bar's two bin buttons for the selection (greyed with nothing selected, hidden where nothing can be removed).
 /// One selection is one press and one removal group.
 struct NativeCloudDeleteButtons: View {
@@ -464,32 +537,40 @@ struct NativeCloudManagerList: View {
     @FocusState private var focused: Bool
     var body: some View {
         let listing = model.listing
+        let parts = NativeCloudNameless.split(listing.files)
         GeometryReader { space in
-            let columns = NativeCloudColumnsShown(width: space.size.width)
+            // 18 Nov: "On" and "Size" are drawn only when a row of this list has something to say there.
+            let columns = NativeCloudColumnsShown(width: space.size.width,
+                                                  hasOn: listing.files.contains { !BackendCloudManagerWords.onColumn($0).isEmpty },
+                                                  hasSize: !listing.folders.isEmpty || listing.files.contains { !BackendCloudManagerWords.size($0).isEmpty })
             VStack(alignment: .leading, spacing: 0) {
                 if model.path.isEmpty, model.search.isEmpty { placeLines }
-                NativeCloudColumns(shown: columns) {
-                    Text(BackendCloudManagerWords.name)
-                } changed: { Text(BackendCloudManagerWords.changed) } on: { Text(BackendCloudManagerWords.on) } size: { Text(BackendCloudManagerWords.size) }
-                    .font(DeckTokens.Typography.caption).foregroundStyle(DeckTokens.textSecondary)
-                    .padding(.horizontal, DeckTokens.Spacing.s16)
-                    .frame(height: 24)
                 if listing.count == 0 {
-                    Text(!model.search.isEmpty || model.device != nil ? BackendCloudManagerWords.nothingMatches
-                         : model.path.isEmpty ? BackendCloudContentsWords.nothingYet : BackendCloudManagerWords.emptyFolder)
-                        .foregroundStyle(DeckTokens.textSecondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // No column titles over nothing: the place's own glyph and one line.
+                    NativeCloudEmptyList(symbol: !model.search.isEmpty ? "magnifyingglass" : model.path.isEmpty ? model.kind.symbol : "folder",
+                                         text: !model.search.isEmpty || model.device != nil ? BackendCloudManagerWords.nothingMatches
+                                             : model.path.isEmpty ? BackendCloudContentsWords.nothingYet : BackendCloudManagerWords.emptyFolder)
                 } else {
+                    NativeCloudColumns(shown: columns) {
+                        Text(BackendCloudManagerWords.name)
+                    } changed: { Text(BackendCloudManagerWords.changed) } on: { Text(BackendCloudManagerWords.on) } size: { Text(BackendCloudManagerWords.size) }
+                        .font(DeckTokens.Typography.caption).foregroundStyle(DeckTokens.textSecondary)
+                        .padding(.horizontal, DeckTokens.Spacing.s16)
+                        .frame(height: 24)
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(listing.folders) { folder in
                                 NativeCloudFolderRow(folder: folder, shown: columns, picked: model.isPicked(folder.id))
                                     .modifier(NativeCloudRowClicks(model: model, key: folder.id, focus: { focused = true }))
                             }
-                            ForEach(listing.files) { item in
+                            ForEach(parts.named) { item in
                                 NativeCloudContentsRow(item: item, model: model, shown: columns, picked: model.isPicked(item.id),
                                                        searching: !model.search.isEmpty)
                                     .modifier(NativeCloudRowClicks(model: model, key: item.id, focus: { focused = true }))
+                            }
+                            if let first = parts.nameless.first {
+                                NativeCloudNamelessRow(items: parts.nameless, shown: columns, picked: model.isPicked(first.id))
+                                    .modifier(NativeCloudRowClicks(model: model, key: first.id, focus: { focused = true }, opens: false))
                             }
                         }
                         .padding(.horizontal, DeckTokens.Spacing.s8)
@@ -553,19 +634,24 @@ struct NativeCloudRowClicks: ViewModifier {
     let model: NativeCloudContentsModel
     let key: String
     let focus: () -> Void
+    /// false for the one "not on this Mac" row: it stands for several rows with nothing to read, so a double click
+    /// selects it like a single one and its menu has no Open.
+    var opens = true
     func body(content: Content) -> some View {
         content
             .contentShape(Rectangle())
             .onTapGesture {
                 let event = NSApp?.currentEvent
                 let flags = event?.modifierFlags ?? []
-                if (event?.clickCount ?? 1) >= 2 { model.activate(key) }
+                if opens, (event?.clickCount ?? 1) >= 2 { model.activate(key) }
                 else { model.click(key, command: flags.contains(.command), shift: flags.contains(.shift)) }
                 focus()
             }
-            .contextMenu { NativeCloudRowMenu(model: model, key: key) }
+            .contextMenu { NativeCloudRowMenu(model: model, key: key, opens: opens) }
             .accessibilityAddTraits(model.isPicked(key) ? .isSelected : [])
-            .accessibilityAction(named: Text(BackendCloudManagerWords.open)) { model.activate(key) }
+            .accessibilityAction(named: Text(opens ? BackendCloudManagerWords.open : "Select")) {
+                if opens { model.activate(key) } else { model.click(key) }
+            }
     }
 }
 
@@ -573,22 +659,23 @@ struct NativeCloudRowClicks: ViewModifier {
 struct NativeCloudRowMenu: View {
     let model: NativeCloudContentsModel
     let key: String
+    var opens = true
     var body: some View {
         let rows = model.menuRows(for: key)
         let folder = BackendCloudManagerTree.path(ofFolderId: key)
-        Button(BackendCloudManagerWords.open) { model.activate(key) }
+        if opens { Button(BackendCloudManagerWords.open) { model.activate(key) } }
         let missing = model.marked(rows, .notOnThisMac)
         let local = model.marked(rows, .onlyOnThisMac)
         if !missing.isEmpty { Button(CloudDeleteWords.bringBack) { model.bringBack(missing, to: .thisMac) } }
         if !local.isEmpty { Button(CloudDeleteWords.putInCloudAgain) { model.bringBack(local, to: .cloud) } }
         if let choice = model.binChoice(for: rows), choice.enabled {
-            Divider()
+            if opens || !missing.isEmpty || !local.isEmpty { Divider() }
             if choice.scopes.contains(.cloud) {
                 Button { model.binRows(rows, scope: .cloud) } label: { Label(CloudDeleteWords.cloud + " (your devices keep their copies)", systemImage: "trash") }
             }
             Button { model.binRows(rows, scope: .everywhere) } label: { Label(CloudDeleteWords.everywhere + " (in the Bin for 30 days)", systemImage: "trash") }
         }
-        if folder == nil, let item = rows.first, rows.count == 1 {
+        if opens, folder == nil, let item = rows.first, rows.count == 1 {
             Divider()
             if model.localFile(item) != nil { Button("Show in Finder") { model.showInFinder(item) } }
             Button("Copy name") { model.copyName(item) }
@@ -596,16 +683,21 @@ struct NativeCloudRowMenu: View {
     }
 }
 
-/// The list's four columns: Name takes the room left; Changed, On and Size keep their width. In a narrow list Size, then
-/// On, step aside (never squeezed or cut).
+/// The list's four columns (18 Nov, DESIGN-settings 6): the table is packed to the LEFT, as in Finder: Name is at most
+/// 520 pt wide and Changed, On and Size follow it directly, so a date is read beside its name (before, Name stretched
+/// over the whole window and the date sat a thousand points away). On and Size are drawn only when a row of the list
+/// has something to say there; in a narrow list Size, then On, step aside (never squeezed or cut).
 struct NativeCloudColumnsShown: Equatable {
     var on = true
     var size = true
     init(on: Bool = true, size: Bool = true) { self.on = on; self.size = size }
-    init(width: CGFloat) { on = width >= 520; size = width >= 640 }
+    init(width: CGFloat, hasOn: Bool = true, hasSize: Bool = true) { on = hasOn && width >= 520; size = hasSize && width >= 640 }
+    static let nameMax: CGFloat = 520
+    static let nameMin: CGFloat = 100
     static let changedWidth: CGFloat = 150
     static let onWidth: CGFloat = 130
-    static let sizeWidth: CGFloat = 76
+    /// Fits "47,927 entries" (76 pt cut it to "47,927 en…").
+    static let sizeWidth: CGFloat = 104
 }
 
 struct NativeCloudColumns<Name: View, Changed: View, On: View, Size: View>: View {
@@ -616,11 +708,56 @@ struct NativeCloudColumns<Name: View, Changed: View, On: View, Size: View>: View
     @ViewBuilder let size: () -> Size
     var body: some View {
         HStack(spacing: DeckTokens.Spacing.s12) {
-            name().frame(maxWidth: .infinity, alignment: .leading)
+            name().frame(minWidth: NativeCloudColumnsShown.nameMin, maxWidth: NativeCloudColumnsShown.nameMax, alignment: .leading)
             changed().lineLimit(1).frame(width: NativeCloudColumnsShown.changedWidth, alignment: .leading)
             if shown.on { on().lineLimit(1).frame(width: NativeCloudColumnsShown.onWidth, alignment: .leading) }
             if shown.size { size().lineLimit(1).monospacedDigit().frame(width: NativeCloudColumnsShown.sizeWidth, alignment: .trailing) }
+            Spacer(minLength: 0)
         }
+    }
+}
+
+/// An empty place, folder or search: the place's glyph (26 pt, tertiary) over one line. No column titles over nothing.
+struct NativeCloudEmptyList: View {
+    let symbol: String
+    let text: String
+    var body: some View {
+        VStack(spacing: DeckTokens.Spacing.s8 + 2) {
+            Image(systemName: symbol).font(.system(size: 26, weight: .light)).foregroundStyle(DeckTokens.textTertiary).accessibilityHidden(true)
+            Text(text).font(DeckTokens.Typography.body).foregroundStyle(DeckTokens.textSecondary).multilineTextAlignment(.center)
+        }
+        .padding(DeckTokens.Spacing.s24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// The rows with no name on this Mac, as ONE quiet row: the place's glyph, "9 tasks that are not on this Mac" in
+/// secondary ink, their newest change. A click selects all of them.
+struct NativeCloudNamelessRow: View {
+    let items: [BackendCloudContents.Item]
+    let shown: NativeCloudColumnsShown
+    let picked: Bool
+    var body: some View {
+        let kind = items.first?.kind ?? .tasks
+        let title = NativeCloudNameless.title(kind, count: items.count)
+        let newest = items.map(\.changedAt).max() ?? 0
+        NativeCloudColumns(shown: shown) {
+            HStack(spacing: DeckTokens.Spacing.s8) {
+                Image(systemName: "square.stack").foregroundStyle(DeckTokens.textTertiary).frame(width: DeckTokens.Metrics.iconColumn)
+                    .accessibilityHidden(true)
+                Text(title).foregroundStyle(DeckTokens.textSecondary).lineLimit(1).truncationMode(.tail)
+            }
+        } changed: {
+            Text(newest > 0 ? BackendCloudContentsWords.time(newest) : "").foregroundStyle(DeckTokens.textSecondary)
+        } on: {
+            Text("")
+        } size: {
+            Text("")
+        }
+        .font(DeckTokens.Typography.body)
+        .modifier(NativeCloudRowLook(picked: picked))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(title)
     }
 }
 
@@ -756,7 +893,18 @@ struct NativeCloudStatusBar: View {
             if model.pending[.cleanUp] != nil {
                 NativeCloudUndoLine(model: model, what: .cleanUp)
             } else if !model.showingBin, !model.showingCode, model.kind == .memory, contents.versionsToClean > 0 {
-                Button(BackendCloudFilesWords.cleanUp(contents.versionsToClean)) { model.startCleanUp() }.fixedSize()
+                // 18 Nov: a quiet text button (it was the only bordered thing on the bottom line).
+                Button { model.startCleanUp() } label: {
+                    HStack(spacing: DeckTokens.Spacing.s4) {
+                        Image(systemName: "clock.arrow.circlepath").font(.system(size: 11)).accessibilityHidden(true)
+                        Text(BackendCloudFilesWords.cleanUp(contents.versionsToClean))
+                    }
+                    .foregroundStyle(DeckTokens.textSecondary)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .pointerStyle(.link)
+                .fixedSize()
             }
         }
         .font(DeckTokens.Typography.callout)

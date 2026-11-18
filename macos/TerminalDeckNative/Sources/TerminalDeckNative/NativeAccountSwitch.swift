@@ -91,6 +91,15 @@ final class NativeAccountSwitcher {
         note = nil
     }
 
+    func editAPIKey() {
+        guard let asked = asking,
+              let id = AccountSwitchWords.apiAccountToEdit(accountID: asked.accountId,
+                  refused: asked.plan?.refusal != nil || asked.problem != nil) else { return }
+        cancel()
+        NativeAPIAccounts.shared.requestedEditorID = id
+        NativeChatAccount.openSettings(provider: asked.plan?.toProvider)
+    }
+
     /// The tick and the sentence under the chip, for a moment.
     private func settle(_ sessionId: String, _ text: String) {
         let done = AccountSwitchNote(sessionId: sessionId, state: .done, text: text)
@@ -230,6 +239,8 @@ struct NativeAccountChipSwitchSheet: ViewModifier {
                             : SwitchAccountRestartOffer.sentence(accountName: asked.to, carriesOn: Self.carries(asked.plan)) },
                     warning: AccountSwitchWords.warning(offer: asked.plan?.notice != nil,
                                                         status: AppModel.shared.tabs?.tabs.first(where: { $0.id == asked.sessionId })?.status),
+                    repairAPIKey: AccountSwitchWords.apiAccountToEdit(accountID: asked.accountId,
+                        refused: asked.plan?.refusal != nil || asked.problem != nil) == nil ? nil : { switcher.editAPIKey() },
                     answer: { action in
                         switch action {
                         case "confirm": switcher.confirm()

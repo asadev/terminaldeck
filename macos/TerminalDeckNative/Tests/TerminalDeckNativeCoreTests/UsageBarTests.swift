@@ -23,6 +23,28 @@ struct UsageBarTests {
         #expect(UsageReport.decode(["readings": "no"]) == nil)
     }
 
+    @Test func nativeBackendNumbersResetsAndPushesUseTheActualWireContract() throws {
+        let raw: [String: Any] = ["sessionId": "own", "account": ["id": "work", "name": "Work", "provider": "claude"], "readings": [
+            ["id": "week", "window": "weekly", "used": ["kind": "reported", "fraction": 0.42],
+             "resets": ["kind": "at", "at": 9_000_000], "reportedAt": 1_000, "source": "claude-usage-api"],
+            ["id": "scoped", "window": "weekly", "used": ["kind": "not-reported"],
+             "resets": ["kind": "described", "text": "Monday"], "source": "claude-warning"],
+        ]]
+        let report = try #require(UsageReport.update([raw], sessionID: "own"))
+        #expect(report.readings.first?.used == 0.42)
+        #expect(report.readings.first?.resets == .at(9_000_000))
+        #expect(report.readings.last?.resets == .described("Monday"))
+        #expect(report.numberedReadings.count == 1)
+        #expect(report.missingNumbersNote != nil)
+        #expect(UsageReadout.of(report.numberedReadings[0], now: 2_000).value == "42%")
+        #expect(UsageReport.update(["own", raw], sessionID: "own") == report)
+        #expect(UsageReport.update([raw], sessionID: "someone-else") == nil)
+        #expect(UsageReport.update(["someone-else", raw], sessionID: "own") == nil)
+        #expect(report.accountLabel == "Work")
+        let privateName = UsageReport(readings: [], account: .init(provider: "claude", id: "p", name: "private@example.invalid"))
+        #expect(privateName.accountLabel == nil)
+    }
+
     @Test func windowNames() {
         func reading(_ window: UsageWindowReading.Window, minutes: Double? = nil, label: String = "") -> UsageWindowReading {
             UsageWindowReading(id: "r", window: window, windowMinutes: minutes, label: label, used: nil, resets: .notReported)

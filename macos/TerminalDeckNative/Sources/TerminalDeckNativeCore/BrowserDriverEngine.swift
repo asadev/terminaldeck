@@ -188,6 +188,7 @@ public final class BrowserDriverEngine {
             value["window"] = name ?? NSNull()
             var summary: [String: Any] = ["attached": true]
             if let name { summary["window"] = name }
+            addPageRequests(id, to: &value)
             return BrowserDriverResult.value(value, summary: summary)
 
         case .own:
@@ -206,8 +207,9 @@ public final class BrowserDriverEngine {
                 created = true
             }
             let settled = await host.settle(id, timeoutMs: BrowserStepRules.settleMs)
-            let value: [String: Any] = ["url": host.pageURL(id), "title": host.title(id), "settled": settled,
+            var value: [String: Any] = ["url": host.pageURL(id), "title": host.title(id), "settled": settled,
                                         "created": created, "window": NSNull()]
+            addPageRequests(id, to: &value)
             return BrowserDriverResult.value(value, summary: ["url": host.pageURL(id), "title": host.title(id), "settled": settled])
 
         case .window(let window, _):
@@ -215,10 +217,22 @@ public final class BrowserDriverEngine {
             try refuseWhileHuman(id)
             host.load(id, url: url)
             let settled = await host.settle(id, timeoutMs: BrowserStepRules.settleMs)
-            let value: [String: Any] = ["url": host.pageURL(id), "title": host.title(id), "settled": settled,
+            var value: [String: Any] = ["url": host.pageURL(id), "title": host.title(id), "settled": settled,
                                         "created": false, "window": window.name]
+            addPageRequests(id, to: &value)
             return BrowserDriverResult.value(value, summary: ["url": host.pageURL(id), "title": host.title(id),
                                                               "settled": settled, "window": window.name])
+        }
+    }
+
+    /// A load may have reached a native question rather than a finished page.
+    /// Preserve that distinction in browser_open as well as browser_step.
+    private func addPageRequests(_ id: String, to value: inout [String: Any]) {
+        let notes = host.takePageNotes(id)
+        if !notes.isEmpty { value["pageAsked"] = notes }
+        if notes.contains(where: { $0["answer"] as? String == "waiting for the person" }) {
+            value["status"] = "waiting for the person"
+            value["line"] = "Waiting for the person. Open the tab and review its request; do not repeat the action."
         }
     }
 
@@ -468,11 +482,15 @@ public final class BrowserDriverEngine {
             _ = try? await host.evaluate(id, BrowserDriverScripts.with(BrowserDriverScripts.activeSecret, args: [:]))
         }
         let notes = host.takePageNotes(id)
-        if notes.contains(where: { $0["kind"] as? String == "file-chooser" }) {
+        if notes.contains(where: { $0["kind"] as? String == "file-chooser" && $0["answer"] as? String == "not opened" }) {
             throw BrowserDriverRefusal(BrowserPagePersonRule.fileChooserRefusal)
         }
         var result: [String: Any] = ["verb": verb, "selector": said, "label": label, "url": host.pageURL(id)]
         if !notes.isEmpty { result["pageAsked"] = notes }
+        if notes.contains(where: { $0["answer"] as? String == "waiting for the person" }) {
+            result["status"] = "waiting for the person"
+            result["line"] = "Waiting for the person. Open the tab and review its request; do not repeat the action."
+        }
         for (key, item) in extra where result[key] == nil { result[key] = item }
         result["window"] = windowName ?? NSNull()
         var summary: [String: Any] = ["verb": verb, "selector": said, "label": label, "url": host.pageURL(id)]

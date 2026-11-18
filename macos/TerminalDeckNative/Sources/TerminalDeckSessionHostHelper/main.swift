@@ -310,7 +310,8 @@ if (CommandLine.arguments.count == 4 || CommandLine.arguments.count == 5), Comma
             let parent = getppid()
             guard parent > 1 else { throw BackendHOSTFailure.unavailable }
             let watch = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .global())
-            watch.setEventHandler {
+            // Dispatch runs this on a worker queue. Do not inherit main.swift's MainActor isolation.
+            watch.setEventHandler { @Sendable in
                 runtime.stopAccepting()
                 manager.beginShutdown()
                 Task {

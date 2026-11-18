@@ -124,6 +124,8 @@ enum SHELLRoutes {
 
     static func detail(kind: String, id: String) -> AnyView? {
         guard kind == "panel", owns(id) else { return nil }
+        if id == Sidebar21Pages.cloudID && !NativeCloudOffers.shows(.fileManager) { return AnyView(EmptyView()) }
+        if (id.hasPrefix(SIDEBARCloudRows.sessionPrefix) || id.hasPrefix(SIDEBARCloudRows.earlierPrefix)) && !NativeCloudOffers.shows(.otherComputerSessions) { return AnyView(EmptyView()) }
         switch id {
         case NativeLanding.pageID:
             // Owner, 14 Nov: the app opens here; nothing is made until he sends his first message.

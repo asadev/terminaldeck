@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import TerminalDeckNativeCore
 
-// Lane BR (browser parity): the browser window's Session button (attach this
+// Lane BR (browser parity): the browser window's Connect pill (attach this
 // window to a session, or disconnect it — BindChip.tsx ConnectSessionButton over
 // browser-binding-ipc.ts connectMenuItems), the Bn chips on session and browser
 // rows (SessionBindChips / WindowBindChip), Annotate's first click on the live
@@ -150,92 +150,60 @@ struct NativeBRBindChips: View {
     }
 }
 
-// MARK: - The Session button (beside Home, before the address field)
+// MARK: - Connect (one pill in the toolbar's right group; NativeBrowserChrome.swift draws it)
 
+/// 18 Nov 2026 (owner: "Why do we have two icons here to disconnect? ... keep one icon only, disconnect and connect,
+/// not two"): the link button and the link-with-a-slash button are ONE pill. Not connected: "Connect". Connected: the
+/// session's chip and name, with the x that disconnects inside the same pill. A press opens our own card of sessions.
 struct NativeBrowserConnectButton: View {
     let tabId: String
+    var compact = false
+    var open = false
+    let showMenu: () -> Void
     @State private var store = NativeBRBindings.shared
 
     var body: some View {
         let held = store.view.holder(of: tabId)
-        let tint = held.map { NativeBRBindColour.color($0.session.colour) }
-        HStack(spacing: 1) {
-            Button {
-                NativeBRConnectMenu.popUp(tabId: tabId)
-            } label: {
-                HStack(spacing: 3) {
-                    if let held {
-                        Text(held.window.slot).font(.system(size: 10, weight: .semibold).monospacedDigit())
-                    }
-                    Image(systemName: "link").font(.system(size: 12))
-                }
-                .padding(.horizontal, held == nil ? 0 : 5)
-                .frame(minWidth: 26, minHeight: 26)
-                .foregroundStyle(.primary)
-                .overlay {
-                    if let tint { RoundedRectangle(cornerRadius: 6).strokeBorder(tint, lineWidth: 1) }
-                }
-                .contentShape(.rect)
-            }
-            .help("Session")
-            .accessibilityLabel(BRBindChips.connectLabel(slot: held?.window.slot))
-
-            if let held {
-                Button {
-                    let command = BRConnectMenu.command(.detach, tabId: tabId)
-                    EngineBridge.shared.send(command.channel, [command.argument])
-                } label: {
-                    NativeBRUnlinkGlyph()
-                        .frame(width: 26, height: 26)
-                        .contentShape(.rect)
-                }
-                .help("Disconnect")
-                .accessibilityLabel("Disconnect \(held.window.slot)")
-            }
-        }
-        .task { store.start() }
+        BrowserConnectPill(state: BrowserConnectState(slot: held?.window.slot,
+                                                      sessionName: held.flatMap { NativeBRBindings.sessionName($0.session.sessionId) } ?? "",
+                                                      colour: held?.session.colour ?? 0),
+                           compact: compact, open: open, showMenu: showMenu,
+                           disconnect: { NativeBRConnectMenu.press(.detach, tabId: tabId) })
+            .task { store.start() }
     }
 }
 
-/// The link glyph with a slash through it (BindChip.tsx LINK + UNLINK_SLASH).
-struct NativeBRUnlinkGlyph: View {
+/// The Connect card with the live sessions (read when it opens).
+struct NativeBrowserConnectCard: View {
+    let tabId: String
+    @State private var rows: [BRConnectRow]?
+
     var body: some View {
-        Image(systemName: "link")
-            .font(.system(size: 12))
-            .overlay {
-                GeometryReader { box in
-                    Path { path in
-                        path.move(to: CGPoint(x: 1, y: box.size.height - 1))
-                        path.addLine(to: CGPoint(x: box.size.width - 1, y: 1))
-                    }
-                    .stroke(.primary, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-                }
-            }
+        // One container, so the read runs once (a modifier on the bare rows would run once per row).
+        VStack(alignment: .leading, spacing: 0) {
+            BrowserConnectMenu(rows: rows) { NativeBRConnectMenu.press($0, tabId: tabId) }
+        }
+        .task { rows = await NativeBRConnectMenu.rows(tabId: tabId) }
     }
 }
 
-/// The Session button's menu, read when it is pressed and popped where the pointer is.
+/// The Connect card's rows, read when it opens, and what a press sends.
 @MainActor
 enum NativeBRConnectMenu {
-    static func popUp(tabId: String) {
-        NativeActionMenu.popUp(load: {
-            var sessions: [BrowserSessionChoice] = []
-            if EngineBridge.shared.isReady, let list = try? await EngineBridge.shared.invoke("session:list") {
-                sessions = BrowserSessionChoice.read(list)
-            }
-            if EngineBridge.shared.isReady, let value = try? await EngineBridge.shared.invoke("browser:bindings") {
-                NativeBRBindings.shared.view = BRBindingView.read(value)
-            }
-            let rows = BRConnectMenu.rows(tabId: tabId, sessions: sessions, view: NativeBRBindings.shared.view)
-            return rows.map { row in
-                NativeActionMenu.Row(separator: row.kind == .separator, label: row.label,
-                    enabled: row.enabled, checked: row.kind == .checkbox ? row.checked : nil,
-                    action: row.act.map { act in {
-                        let command = BRConnectMenu.command(act, tabId: tabId)
-                        EngineBridge.shared.send(command.channel, [command.argument])
-                    } })
-            }
-        })
+    static func rows(tabId: String) async -> [BRConnectRow] {
+        var sessions: [BrowserSessionChoice] = []
+        if EngineBridge.shared.isReady, let list = try? await EngineBridge.shared.invoke("session:list") {
+            sessions = BrowserSessionChoice.read(list)
+        }
+        if EngineBridge.shared.isReady, let value = try? await EngineBridge.shared.invoke("browser:bindings") {
+            NativeBRBindings.shared.view = BRBindingView.read(value)
+        }
+        return BRConnectMenu.rows(tabId: tabId, sessions: sessions, view: NativeBRBindings.shared.view)
+    }
+
+    static func press(_ act: BRConnectRow.Act, tabId: String) {
+        let command = BRConnectMenu.command(act, tabId: tabId)
+        EngineBridge.shared.send(command.channel, [command.argument])
     }
 }
 

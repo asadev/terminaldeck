@@ -78,18 +78,62 @@ struct SIDEBARSessionTypeIcon: View {
     /// A chat session; anything else (an AI in a terminal, a shell) is a terminal.
     let chat: Bool
     var onAccent = false
+    /// 18 Nov (Asad: "if something is running inside a session, so it can keep blinking"): the session's AI is at work.
+    var working = false
     static let size: CGFloat = 14
-    /// SR-2: the outline symbols, never the filled ones.
+    /// SR-2: the outline symbols, never the filled ones. (The terminal is drawn by `DeckPromptGlyph`, without its box.)
     static func symbol(chat: Bool) -> String { chat ? "bubble.left" : "terminal" }
     static func words(chat: Bool) -> String { chat ? "Chat" : "Terminal" }
+    /// A row's own status word says the AI in it is working.
+    static func working(status: String?) -> Bool { StatusMeaning(status) == .working }
 
     var body: some View {
-        Image(systemName: Self.symbol(chat: chat))
-            .symbolVariant(.none)
-            .font(.system(size: Self.size, weight: .regular))
-            .foregroundStyle(onAccent ? AnyShapeStyle(Color.white.opacity(0.85)) : AnyShapeStyle(.secondary))
-            .frame(width: 18, height: 18)
-            .accessibilityLabel(Self.words(chat: chat))
+        Group {
+            if chat {
+                Image(systemName: Self.symbol(chat: true))
+                    .symbolVariant(.none)
+                    .font(.system(size: Self.size, weight: .regular))
+            } else {
+                DeckPromptGlyph().stroke(style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+            }
+        }
+        .foregroundStyle(onAccent ? AnyShapeStyle(Color.white.opacity(working ? 1 : 0.85))
+                         : working ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+        .frame(width: 18, height: 18)
+        .modifier(DeckWorkingPulse(on: working))
+        .accessibilityLabel(Self.words(chat: chat) + (working ? ", working" : ""))
+    }
+}
+
+/// The terminal's mark (Asad, 18 Nov: "don't give this full box ... only that arrow shape and line under that ...
+/// make that one bigger"): a prompt chevron and an underline, 14 x 9, centred. Stroked at 1.6 it weighs the same as
+/// the chat bubble's outline beside it.
+struct DeckPromptGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        let width: CGFloat = 14, height: CGFloat = 9
+        let x = rect.midX - width / 2, y = rect.midY - height / 2
+        var path = Path()
+        path.move(to: CGPoint(x: x, y: y))
+        path.addLine(to: CGPoint(x: x + 6, y: y + height / 2))
+        path.addLine(to: CGPoint(x: x, y: y + height))
+        path.move(to: CGPoint(x: x + 8, y: y + height))
+        path.addLine(to: CGPoint(x: x + width, y: y + height))
+        return path
+    }
+}
+
+/// A slow breath (opacity 1 to 0.35 and back, 1.1 s each way) while something is at work. Still with Reduce Motion.
+struct DeckWorkingPulse: ViewModifier {
+    let on: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var low = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(on && low && !reduceMotion ? 0.35 : 1)
+            .animation(on && !reduceMotion ? .easeInOut(duration: 1.1).repeatForever(autoreverses: true) : .default, value: low)
+            .onAppear { low = on }
+            .onChange(of: on) { _, now in low = now }
     }
 }
 

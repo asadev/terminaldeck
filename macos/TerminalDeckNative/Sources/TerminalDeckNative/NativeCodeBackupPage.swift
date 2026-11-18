@@ -442,7 +442,7 @@ struct NativeCodeBackupContent: View {
     /// Delete rule (L3): the secret files that travel with his saved passwords, each with the two delete buttons;
     /// none while an older Mac exists.
     @ViewBuilder private func secretFiles(_ names: [String], owner: String, folderHint: String?) -> some View {
-        if model.secretGateOpen, !names.isEmpty, !model.fixture {
+        if NativeCloudOffers.shows(.projectCloudActions), model.secretGateOpen, !names.isEmpty, !model.fixture {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(names, id: \.self) { name in
                     HStack(spacing: 8) {

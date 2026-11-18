@@ -64,6 +64,7 @@ public extension TerminalControlCatalog {
         switch source {
         case "screen": return "read from this session"
         case "transcript": return "from the last reply"
+        case "launch": return "from this session’s launch"
         case "settings": return "from Claude settings"
         case "env": return "set by CLAUDE_CODE_EFFORT_LEVEL"
         default: return "not known"
@@ -72,7 +73,7 @@ public extension TerminalControlCatalog {
 
     /// `unreadLabel` / `displayValue`.
     static func value(_ reading: TerminalControlReading?, control: String) -> String {
-        guard let label = reading?.label else { return control == "permission" ? "Not reported" : "Unknown" }
+        guard let label = reading?.label else { return control == "permission" ? "Not reported" : control == "effort" ? "Not known yet" : "Unknown" }
         return label
     }
 

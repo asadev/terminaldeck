@@ -16,40 +16,63 @@ import TerminalDeckNativeCore
     /// One plain line for the Runs on page when this Mac cannot reach his other Macs at all (its key was refused).
     private(set) var problem: String?
     @ObservationIgnored private var guest: BackendReachGuest?
-    /// The last dial asked for each machine name (a page that opens again within 20 s does not dial again).
+    @ObservationIgnored private var wanted: Set<String> = []
     @ObservationIgnored private var asked: [String: Date] = [:]
+    @ObservationIgnored private var dialing: Set<String> = []
+    @ObservationIgnored private var ready = false
+    @ObservationIgnored private var epoch = UUID()
 
-    /// Signed in (NativeReachAccount.assemble): his other machines can be reached from here.
-    func signedIn(_ guest: BackendReachGuest) { self.guest = guest; problem = nil; push() }
-    /// Signed out: every machine reached by sign-in is let go at once.
+    func signedIn(_ guest: BackendReachGuest) {
+        epoch = UUID(); asked = [:]; dialing = []
+        self.guest = guest; problem = nil; push()
+    }
     func signedOut() {
         let old = guest
-        guest = nil; asked = [:]; problem = nil; push()
+        guest = nil; asked = [:]; dialing = []; wanted = []; problem = nil; epoch = UUID(); push()
         if let old { Task { await old.forget() } }
     }
-    /// The machine links exist (production composition).
-    func machinesReady() { push() }
+    /// Called after the machine coordinator is open, not merely constructed.
+    func machinesReady() { ready = true; push() }
+    /// Retry unresolved demand on the existing Cloud list refresh; no extra timer or session polling.
+    func accountRefreshed() { if !wanted.isEmpty { push() } }
 
     private func push() {
         guard let coordinator = NativeRemoteMacs.shared.coordinator else { return }
-        let guest = self.guest
-        Task { await coordinator.setReachGuest(guest) }
+        let guest = self.guest, epoch = self.epoch
+        Task {
+            guard epoch == self.epoch else { return }
+            await coordinator.setReachGuest(guest)
+            guard epoch == self.epoch, ready, guest != nil else { return }
+            for name in wanted { dial(name, coordinator: coordinator) }
+        }
     }
 
-    /// A Cloud page of a session on `machine` opened while that machine is on: dial it (by sign-in, no question).
+    /// Preserve demand while sign-in and machine composition finish. They replay it once their doors are ready.
     func want(machine name: String?) {
+        guard NativeCloudOffers.shows(.otherComputerSessions) else { return }
         // The page follows the machine links (a paired machine's live twin counts too).
         NativeMachineLinks.shared.start()
-        guard guest != nil, let coordinator = NativeRemoteMacs.shared.coordinator else { return }
         let key = name ?? ""
-        if let at = asked[key], Date().timeIntervalSince(at) < 20 { return }
-        asked[key] = Date()
-        let guest = self.guest
+        wanted.insert(key)
+        guard ready, guest != nil else { return }
+        push()
+    }
+
+    private func dial(_ name: String, coordinator: BackendMachineCoordinator) {
+        guard !dialing.contains(name), asked[name].map({ Date().timeIntervalSince($0) < 20 }) != true else { return }
+        dialing.insert(name)
+        asked[name] = Date()
+        let guest = self.guest, epoch = self.epoch
         Task {
-            _ = try? await coordinator.openReach(name: name)
+            var failure: String?
+            do {
+                let ids = try await coordinator.openReach(name: name.isEmpty ? nil : name)
+                if ids.isEmpty { failure = "That Mac is not reachable yet. Its saved conversation is shown here." }
+            } catch { failure = RemoteCall.text(error, "That Mac could not be reached. Its saved conversation is shown here.") }
             let refused = await guest?.keyRefused == true
-            guard self.guest === guest else { return }
-            problem = refused ? BackendReachGuest.keyRefusedLine : nil
+            guard epoch == self.epoch, self.guest === guest else { return }
+            dialing.remove(name)
+            problem = refused ? BackendReachGuest.keyRefusedLine : failure
         }
     }
 }
@@ -67,17 +90,26 @@ enum NativeCloudLiveChoice: Equatable {
     }
 
     static func choose(row: BackendCloudSessionsRead.Row?, links: MachinesSnapshot) -> NativeCloudLiveChoice {
-        guard let row, row.closedAt == nil, row.machineOn != false,
+        guard let row, row.closedAt == nil,
               let twin = links.liveTwin(sessionId: row.sessionId, machineRef: row.machine, machineName: row.machineName) else { return .cloud }
         // An exited session is history: the Cloud copy says it all.
         guard twin.session.exitCode == nil, twin.session.status != "exited" else { return .cloud }
-        if twin.session.chat || row.kind == "chat" { return .chat(machineId: twin.machineId, chatId: twin.session.id) }
+        if twin.session.chat { return .chat(machineId: twin.machineId, chatId: twin.session.id) }
         return .terminal(tabId: twin.tabId)
     }
 
+    var tabId: String? {
+        switch self {
+        case .cloud: return nil
+        case .terminal(let tabId): return tabId
+        case .chat(let machine, let chat): return MachinesRules.tabId(machineId: machine, sessionId: chat)
+        }
+    }
+
     /// The side panel's one-row rule: a Cloud row whose live twin is already open here (its own row) is not listed.
-    static func shownOthers(_ others: [BackendCloudSessionsRead.Row], ownIDs: Set<String>, links: MachinesSnapshot) -> [BackendCloudSessionsRead.Row] {
+    static func shownOthers(_ others: [BackendCloudSessionsRead.Row], ownIDs: Set<String>, links: MachinesSnapshot, liveRefs: [String: String] = [:]) -> [BackendCloudSessionsRead.Row] {
         others.filter { row in
+            if ownIDs.contains(where: { liveRefs[$0] == row.ref }) { return false }
             guard let twin = links.liveTwin(sessionId: row.sessionId, machineRef: row.machine, machineName: row.machineName) else { return true }
             return !ownIDs.contains(twin.tabId)
         }
@@ -91,22 +123,60 @@ final class NativeMachineChatLive {
     private(set) var events: [HootChatEvent] = []
     private(set) var busy = false
     private(set) var problem: String?
+    private(set) var options: NativeRPCValue = .object([])
+    private(set) var sending = false
+    private(set) var unsentText: String?
+    @ObservationIgnored private var linked = false
+    @ObservationIgnored private var pendingText: [String: String] = [:]
+    @ObservationIgnored private var stateSubscription: EngineSubscription?
     @ObservationIgnored private var subscription: EngineSubscription?
     @ObservationIgnored private(set) var machineId = ""
     @ObservationIgnored private(set) var chatId = ""
     @ObservationIgnored var send: @MainActor (_ args: [Any?]) async throws -> Void = { args in _ = try await RemoteCall.invoke("machines:chats", args) }
 
+    @ObservationIgnored var readOptions: @MainActor (_ args: [Any?]) async throws -> NativeRPCValue = { args in
+        try NativeRPCValue.fromFoundation(await RemoteCall.invoke("machines:chats", args))
+    }
+
     func open(machineId: String, chatId: String) async {
+        if self.machineId == machineId, self.chatId == chatId, subscription != nil { return }
         close()
+        events = []; busy = false; options = .object([]); problem = nil; unsentText = nil; pendingText = [:]
         self.machineId = machineId; self.chatId = chatId
         subscription = EngineBridge.shared.on("machines:chats:events") { [weak self] args in
             guard let self, let raw = args.first as? [String: Any] else { return }
             self.receive(raw)
         }
+        stateSubscription = EngineBridge.shared.on("machines:state") { [weak self] args in
+            guard let self, let snapshot = MachinesSnapshot.decode(args.first) else { return }
+            self.connectionChanged(snapshot.links[self.machineId]?.state == .online)
+        }
+        linked = true
+        await watch()
+    }
+    func connectionChanged(_ online: Bool) {
+        let before = linked
+        linked = online
+        if !online { busy = false; problem = "Reconnecting to that Mac…" }
+        if online, !before { Task { await watch() } }
+    }
+    private func watch() async {
         await call("watch")
+        await loadOptions()
+    }
+    func loadOptions(patch: NativeRPCValue? = nil) async {
+        let machine = machineId, chat = chatId
+        guard !chat.isEmpty else { return }
+        problem = nil
+        do {
+            let next = try await readOptions([machine, patch == nil ? "options" : "set", chat, patch?.foundation])
+            guard machine == machineId, chat == chatId else { return }
+            options = next
+        } catch { problem = RemoteCall.text(error, "That Mac could not read or change this chat’s choices.") }
     }
     func close() {
         subscription?.cancel(); subscription = nil
+        stateSubscription?.cancel(); stateSubscription = nil
         guard !chatId.isEmpty else { return }
         let args: [Any?] = [machineId, "unwatch", chatId]
         let send = self.send
@@ -116,7 +186,18 @@ final class NativeMachineChatLive {
 
     /// One `machines:chats:events` push: {machineId, frame}. A reset frame replaces what is shown; an older page goes first.
     func receive(_ raw: [String: Any]) {
-        guard raw["machineId"] as? String == machineId, let frame = raw["frame"] as? [String: Any], frame["id"] as? String == chatId else { return }
+        guard raw["machineId"] as? String == machineId, let frame = raw["frame"] as? [String: Any] else { return }
+        if frame["t"] as? String == "error" {
+            guard let rid = frame["rid"] as? String, let text = pendingText.removeValue(forKey: rid) else { return }
+            unsentText = text
+            problem = frame["message"] as? String ?? "That Mac did not take the message."
+            return
+        }
+        guard frame["id"] as? String == chatId else { return }
+        if frame["t"] as? String == "chats.options" {
+            if let value = frame["options"], let next = try? NativeRPCValue.fromFoundation(value) { options = next }
+            return
+        }
         let parsed = (frame["events"] as? [Any] ?? []).compactMap { item -> HootChatEvent? in
             guard let value = try? NativeRPCValue.fromFoundation(item) else { return nil }
             return try? HootChatEvent(wire: value)
@@ -130,7 +211,10 @@ final class NativeMachineChatLive {
         } else {
             events = parsed
         }
-        busy = frame["busy"] as? Bool == true
+        if frame["older"] as? Bool != true { busy = frame["busy"] as? Bool == true }
+        // A user event is the receipt the phone also observes. Retain only unresolved sends, bounded below.
+        let heard = Set(events.filter { $0.record.kind == .user }.compactMap { $0.record.value["text"].string })
+        pendingText = pendingText.filter { !heard.contains($0.value) }
     }
 
     /// The question it waits on: an approval with no answer after it (its id is the request the answer names).
@@ -156,7 +240,18 @@ final class NativeMachineChatLive {
         HootChatProjection.rows(events).filter { [.user, .message, .textDelta, .error].contains($0.kind) && !($0.value["text"].string ?? "").isEmpty }
     }
 
-    func say(_ text: String) async { await call("say", text) }
+    @discardableResult
+    func say(_ text: String) async -> Bool {
+        guard !sending, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        sending = true
+        defer { sending = false }
+        let rid = UUID().uuidString.lowercased()
+        if pendingText.count >= 32 { problem = "That Mac has not confirmed the earlier messages yet."; return false }
+        pendingText[rid] = text
+        problem = nil; unsentText = nil
+        do { try await send([machineId, "say", chatId, text, nil, rid]); return true }
+        catch { pendingText[rid] = nil; problem = RemoteCall.text(error, "That Mac did not take the message."); return false }
+    }
     func stop() async { await call("interrupt") }
     func answer(_ request: String, allowed: Bool) async {
         answering = true
@@ -165,9 +260,14 @@ final class NativeMachineChatLive {
     }
 
     private func call(_ op: String, _ more: Any?...) async {
+        let machine = machineId, chat = chatId
+        guard !chat.isEmpty else { return }
         problem = nil
-        do { try await send(([machineId, op, chatId] as [Any?]) + more) }
-        catch { problem = RemoteCall.text(error, "That Mac did not take it. Check that it is still on.") }
+        do { try await send(([machine, op, chat] as [Any?]) + more) }
+        catch {
+            guard machine == machineId, chat == chatId else { return }
+            problem = RemoteCall.text(error, "That Mac did not take it. Check that it is still on.")
+        }
     }
 }
 
@@ -186,9 +286,20 @@ struct NativeMachineChatLivePage: View {
     let chatId: String
     /// Pictures only: a filled chat drawn as is (nothing is watched or sent).
     var preview: NativeMachineChatLive? = nil
+    var model: NativeMachineChatLive? = nil
+    var enabled = true
     @State private var own = NativeMachineChatLive()
     @State private var draft = HootComposerDraft()
-    private var live: NativeMachineChatLive { preview ?? own }
+    private var live: NativeMachineChatLive { preview ?? model ?? own }
+    private var catalogue: HootComposerCatalogue {
+        var result = HootComposerCatalogue()
+        result.models = (live.options["models"].elements ?? []).compactMap { row in
+            guard let id = row["id"].string else { return nil }
+            return HootComposerModel(id: id, provider: row["provider"].string ?? "", name: row["name"].string ?? id)
+        }
+        result.efforts = (live.options["efforts"].elements ?? []).compactMap(\.string)
+        return result
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -202,7 +313,7 @@ struct NativeMachineChatLivePage: View {
             .defaultScrollAnchor(.bottom)
             // The app's own chat parts (Decker, 15 Nov): what it asks drawn with the local chat's question card, in the
             // same place (right above the box), and the local chat's composer (its arrow is Stop while it answers).
-            // No model, effort or permission menus: the other Mac does not take them from here.
+            // Choices are the same chats.options / chats.set requests the phone uses.
             VStack(spacing: DeckTokens.Spacing.s4) {
                 let pending = live.pending
                 if !pending.isEmpty {
@@ -222,23 +333,41 @@ struct NativeMachineChatLivePage: View {
                 if let problem = live.problem {
                     Text(problem).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                HootComposer(draft: $draft, ownerID: "machine " + machineId + "/" + chatId, showMeta: false,
-                             busy: live.busy, placeholder: "Message the AI on that Mac", agentName: "the AI",
+                HootComposer(draft: $draft, ownerID: "machine " + machineId + "/" + chatId, catalogue: catalogue, showMeta: !catalogue.models.isEmpty,
+                             busy: live.busy, enabled: enabled && !live.sending, placeholder: "Message the AI on that Mac", agentName: "the AI",
                              onSend: { sent in send(sent) }, onStop: { Task { await live.stop() } },
-                             canStop: live.busy, showsPermission: false)
+                             onModelChange: { id in Task {
+                                 await live.loadOptions(patch: .object([.init("model", .string(id))]))
+                                 draft.modelID = live.options["model"].string ?? ""
+                             } },
+                             onEffortChange: { effort in Task {
+                                 await live.loadOptions(patch: .object([.init("effort", .string(effort))]))
+                                 draft.effort = live.options["effort"].string ?? ""
+                             } },
+                             canStop: enabled && live.busy, showsPermission: false)
             }
             .padding(.horizontal, 24).padding(.bottom, 12)
             .hootColumn(false)
         }
         .task(id: machineId + " " + chatId) { if preview == nil { await live.open(machineId: machineId, chatId: chatId) } }
-        .onDisappear { if preview == nil { live.close() } }
+        .onDisappear { if preview == nil, model == nil { live.close() } }
+        .onChange(of: live.options, initial: true) { _, next in
+            draft.modelID = next["model"].string ?? ""
+            draft.effort = next["effort"].string ?? ""
+        }
+        .onChange(of: live.unsentText) { _, text in
+            if let text, draft.plainText.isEmpty { draft.text = text }
+        }
     }
 
     private func send(_ sent: HootComposerDraft) {
         let text = sent.plainText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        draft = HootComposerDraft()
-        Task { await live.say(text) }
+        guard enabled, !text.isEmpty else { return }
+        Task {
+            if await live.say(text), draft.plainText.trimmingCharacters(in: .whitespacesAndNewlines) == text {
+                draft.text = ""
+            }
+        }
     }
 }
 
@@ -260,5 +389,14 @@ struct NativeMachineChatRow: View {
         default:
             NativeChatMarkdown(text: text).frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// Cloud rows and account-switch replacements use the explicit machine action, which first creates its tab.
+@MainActor
+enum NativeMachineSessionRoute {
+    static func open(tabId: String, perform: @MainActor (PageCommand) -> Void = { AppModel.shared.runButton($0) }) {
+        guard case .machine = SessionTarget(tabId: tabId) else { return }
+        perform(.selectTab(tabId))
     }
 }

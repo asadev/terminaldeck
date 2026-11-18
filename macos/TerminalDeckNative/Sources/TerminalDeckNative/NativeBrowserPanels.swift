@@ -553,96 +553,72 @@ struct NativeBrowserShotView: View {
 
 // MARK: - Downloads
 
+/// The toolbar's Downloads button; its list opens in the app's own menu. A download that starts opens it too
+/// (`store.downloadsShown`).
 struct NativeBrowserDownloadsButton: View {
     @Bindable var store: NativeBrowserTabs
 
     var body: some View {
         let downloads = store.downloads
-        Button {
-            store.downloadsShown.toggle()
-        } label: {
-            ZStack {
-                Image(systemName: "arrow.down.to.line")
-                    .font(.system(size: 13))
-                if downloads.runningCount > 0 {
-                    Circle()
-                        .trim(from: 0, to: downloads.overallFraction ?? 0.15)
-                        .stroke(NativeSessionChrome.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .frame(width: 22, height: 22)
-                }
-            }
-            .frame(width: 26, height: 26)
-            .contentShape(.rect)
+        BrowserToolbarButton(label: "Downloads", help: "Downloads", active: store.downloadsShown,
+                             action: { store.downloadsShown.toggle() }) {
+            BrowserDownloadsGlyph(badge: downloads.badge, running: downloads.runningCount > 0, fraction: downloads.overallFraction)
         }
-        .overlay(alignment: .topTrailing) {
-            // The web button's badge: how many are moving, "!" when the newest
-            // failed, else how many there are.
-            if let badge = downloads.badge {
-                Text(badge.label)
-                    .font(.system(size: 9, weight: .bold).monospacedDigit())
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 3.5)
-                    .frame(minWidth: 14, minHeight: 14)
-                    .background(badge.tone == "bad" ? Color.red : badge.tone == "busy" ? NativeSessionChrome.accent : Color.secondary,
-                                in: .capsule)
-                    .offset(x: 3, y: -2)
-                    .allowsHitTesting(false)
-            }
-        }
-        .help("Downloads")
-        .foregroundStyle(.secondary)
-        .accessibilityLabel("Downloads")
-        .popover(isPresented: Binding(get: { store.downloadsShown },
-                                      set: { store.downloadsShown = $0 }), arrowEdge: .bottom) {
-            NativeBrowserDownloadsList(downloads: downloads)
+        .deckMenu(isPresented: $store.downloadsShown, alignment: .trailing, width: BrowserToolbarMetrics.downloadsWidth) {
+            NativeBrowserDownloadsList(downloads: store.downloads)
         }
     }
 }
 
 // MARK: - Profile
 
-/// Who you are while you browse: the profile's letter, and the menu to switch.
+/// Who you are while you browse: the profile's round avatar in the toolbar; a press opens the profile card.
 /// The profiles are the engine's (`browser-profile:list`), so both browsers list
 /// the same names; each profile's cookies live in its own website-data store.
 struct NativeBrowserProfileButton: View {
-    @Environment(\.nativeScreenActive) private var screenActive
-    @Environment(\.nativeSessionInputScope) private var inputScope
     let store: NativeBrowserTabs
     let tab: NativeBrowserTab
+    var open = false
+    let toggle: () -> Void
+    @State private var hovering = false
 
     var body: some View {
         let current = store.profile(tab.profile)
-        Menu {
-            ForEach(store.profiles) { profile in
-                Button {
-                    store.choose(profile: profile.id, for: tab)
-                } label: {
-                    if profile.id == (current?.id ?? "") {
-                        Label(profile.name, systemImage: "checkmark")
-                    } else {
-                        Text(profile.name)
-                    }
-                }
-            }
-            if !store.profiles.isEmpty { Divider() }
-            NativeSessionButton("New Profile…") { askForNewProfile() }
-                .disabled(!EngineBridge.shared.isReady)
-            Divider()
-            NativeBrowserMenuActions(store: store, tab: tab)
-        } label: {
-            Text(current?.badge.isEmpty == false ? current!.badge : "·")
-                .font(.system(size: 11, weight: .semibold))
-                .frame(width: 20, height: 20)
-                .background(Color.primary.opacity(0.08), in: .circle)
-                .foregroundStyle(.secondary)
-                .frame(width: 26, height: 26)
+        NativeSessionButton(action: toggle) {
+            BrowserProfileAvatar(badge: current?.badge ?? "", colour: BrowserProfileLook.colour(current, among: store.profiles),
+                                 size: 22, isolated: tab.isolated)
+                .frame(width: BrowserToolbarMetrics.button, height: BrowserToolbarMetrics.button)
+                .background(Color.primary.opacity(open ? 0.14 : (hovering ? 0.09 : 0)), in: .circle)
+                .contentShape(.circle)
         }
-        .menuIndicator(.hidden)
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help(current.map { "Profile — \($0.name)" } ?? "Profile")
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(current.map { "Profile: \($0.name)" } ?? "Profile")
         .accessibilityLabel("Profile")
+    }
+}
+
+/// The profile card with the live profiles (owner, 18 Nov: "This is very ugly profile. Look how Google Chrome looks
+/// like ... very nicely box opens"). The other actions the old menu had are in More (three dots).
+/// `screenActive` and `inputScope` are the toolbar's own (the card is drawn in the menu's panel, outside the screen).
+struct NativeBrowserProfileCard: View {
+    let store: NativeBrowserTabs
+    let tab: NativeBrowserTab
+    let screenActive: Bool
+    let inputScope: NativeSessionInputScope?
+
+    var body: some View {
+        let current = store.profile(tab.profile)
+        BrowserProfileCard(model: BrowserProfileCardModel(current: current, all: store.profiles, isolated: tab.isolated,
+                                                          canCreate: EngineBridge.shared.isReady)) { action in
+            switch action {
+            case .choose(let id): store.choose(profile: id, for: tab)
+            case .newProfile: askForNewProfile()
+            // History and Passwords belong to the tab's profile, which an Isolated tab does not save to.
+            case .passwords: NativeBRSettingsLink.open("browser", passwords: true)
+            case .history: tab.historyShown = true
+            }
+        }
     }
 
     private func askForNewProfile() {

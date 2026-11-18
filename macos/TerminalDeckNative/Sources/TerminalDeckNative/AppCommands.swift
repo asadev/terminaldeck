@@ -50,7 +50,11 @@ struct AppCommands: Commands {
 
     @ViewBuilder
     private func items(_ menu: AppMenuCommand.Menu) -> some View {
-        ForEach(AppCommandCatalog.commands(in: menu), id: \.title) { command in
+        let _ = NativeCloudAccount.shared.snapshot
+        ForEach(AppCommandCatalog.commands(in: menu).filter { command in
+            if case .page(let id) = command.action { return CloudSubscriptionOffers.shared.showsCommand(id) }
+            return true
+        }, id: \.title) { command in
             if command.dividerBefore { Divider() }
             item(command)
         }
@@ -77,6 +81,7 @@ private extension View {
 enum AppCommandRunner {
     static func perform(_ command: AppMenuCommand, model: AppModel) {
         if case .page(let id) = command.action, !UIGMemoryVisibility.showsCommand(id) { NSSound.beep(); return }
+        if case .page(let id) = command.action, !CloudSubscriptionOffers.shared.showsCommand(id) { return }
         switch command.action {
         case .page(let id) where id == "view.browser" && BrowserTabsHook.provider != nil:
             // Lane BR: View ▸ Browser is "New browser tab" (App.tsx view.browser). The page's own

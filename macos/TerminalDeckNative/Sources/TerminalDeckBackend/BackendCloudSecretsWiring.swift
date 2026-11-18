@@ -458,20 +458,31 @@ actor BackendCloudSecretsRegistrar {
     private let outbox: any CloudOutboxPort
     private let adapters: [CloudSecretsLogicalAdapter]
     private var joined: Set<String> = []
-    private var running: Task<Void, Error>?
+    private var running: Task<[String: any Error], Never>?
     init(outbox: any CloudOutboxPort, adapters: [CloudSecretsLogicalAdapter]) { self.outbox = outbox; self.adapters = adapters }
+    /// Unlock still requires every source to be preserved before remote values may be merged.
     func registerAll() async throws {
-        if let running { return try await running.value }
-        let task = Task { try await self.registerPending() }
+        let failures = await registerAvailable()
+        if let error = adapters.compactMap({ failures[$0.sourceId] }).first { throw error }
+    }
+    /// A source whose inventory cannot be read must not stop the other kinds joining or saving.
+    /// Concurrent reconnect/change callbacks share one pass, so a successful adapter never joins twice.
+    func registerAvailable() async -> [String: any Error] {
+        if let running { return await running.value }
+        let task = Task { await self.registerPending() }
         running = task
         defer { running = nil }
-        try await task.value
+        return await task.value
     }
-    private func registerPending() async throws {
+    private func registerPending() async -> [String: any Error] {
+        var failures: [String: any Error] = [:]
         for adapter in adapters where !joined.contains(adapter.sourceId) {
-            try await outbox.register(adapter: adapter)
-            joined.insert(adapter.sourceId)
+            do {
+                try await outbox.register(adapter: adapter)
+                joined.insert(adapter.sourceId)
+            } catch { failures[adapter.sourceId] = error }
         }
+        return failures
     }
     func joinedSources() -> Set<String> { joined }
 }
@@ -1066,27 +1077,32 @@ public actor BackendCloudSecretsGraph {
     /// own stores open: with a lost or blocked local key nothing joins and nothing is captured.
     private func captureAll() async {
         guard await localStanding() == .ready else { return }
-        do {
-            try await registrar.registerAll()
-            for id in sourceIds { await capture(id) }
-            note(nil)
-        } catch {
-            note(error)
-            for id in sourceIds { failed(id, error) }
+        let failures = await registrar.registerAvailable()
+        for id in sourceIds {
+            if let error = failures[id] { note(error); failed(id, error) }
+            else { await capture(id) }
         }
+        if failures.isEmpty { note(nil) }
     }
     /// One source's save to Cloud. A failure is kept and named on the page (review B-M2), never dropped.
     private func capture(_ id: String) async {
         do {
             _ = try await service.captureChanged(sourceId: id)
-            saveFailures[id] = nil
+            if saveFailures.removeValue(forKey: id) != nil {
+                log.say("saving " + BackendCloudSecretsLeanCoverage.title(id) + " works again")
+            }
         } catch { failed(id, error) }
     }
     private func failed(_ id: String, _ error: any Error) {
         // A blocked login store and a lost local key have their own state line; they are not a failed save.
         guard !(error is BackendCloudRecoveryBlocked), !(error is BackendCloudRecoveryKeyLost), !(error is BackendCloudRecoveryNotConverted), !(error is CancellationError) else { return }
         let reason = (error as? LocalizedError)?.errorDescription
-        saveFailures[id] = BackendCloudSecretsWords.notSavedToCloud(BackendCloudSecretsLeanCoverage.title(id), reason: reason)
+        let words = BackendCloudSecretsWords.notSavedToCloud(BackendCloudSecretsLeanCoverage.title(id), reason: reason)
+        if saveFailures[id] != words {
+            // Only a fixed kind name and the secret-safe classification, never the error's text or a record.
+            log.say("saving " + BackendCloudSecretsLeanCoverage.title(id) + " did not finish: " + Self.cause(error))
+        }
+        saveFailures[id] = words
     }
     /// "Sync now" on the Cloud page: the voice key and a renamed server have no change signal of their own.
     public func syncNow() async {
@@ -1190,11 +1206,9 @@ public actor BackendCloudSecretsGraph {
     public func sourceChanged(_ sourceId: String) async {
         guard !sealed, sourceIds.contains(sourceId) else { return }
         guard await service.protection() == .protected, await localStanding() == .ready else { return }
-        do {
-            try await registrar.registerAll()
-            await capture(sourceId)
-            note(nil)
-        } catch { note(error); failed(sourceId, error) }
+        let failures = await registrar.registerAvailable()
+        if let error = failures[sourceId] { note(error); failed(sourceId, error) }
+        else { await capture(sourceId); note(nil) }
         changed()
     }
     /// A press on the Cloud page. Each opens lane V's own sheet; the person finishes there.

@@ -19,57 +19,17 @@ extension NativeSafariRuntime {
     // MARK: Parking (a real viewport for pages nobody is looking at)
 
     func parkingSize(_ id: String) -> CGSize {
-        guard let tab = tabs.tab(id) else { return CGSize(width: 1280, height: 800) }
-        if let size = tab.automation.viewport { return size }
-        if let frame = BRDeviceSize.frame(deviceID: tab.deviceID, customWidth: tab.customWidth, customHeight: tab.customHeight) {
-            return tab.deviceLandscape ? CGSize(width: frame.height, height: frame.width) : CGSize(width: frame.width, height: frame.height)
-        }
-        return CGSize(width: 1280, height: 800)
+        tabs.tab(id)?.backgroundHost?.size ?? CGSize(width: 1280, height: 800)
     }
 
-    /// Give a page that is in no window an off-screen one, so layout, hit tests,
-    /// screenshots and real mouse input all work as on screen. The person's
-    /// browser takes the page back the moment it shows that tab.
-    func parkIfHidden(_ id: String) {
-        guard let tab = tabs.tab(id), let view = tab.webView else { return }
-        if let window = tab.automation.parkingWindow, view.window !== window { window.close(); tab.automation.parkingWindow = nil }
-        guard view.window == nil else { return }
-        let size = parkingSize(id)
-        let window = NativeBrowserParkingWindow(contentRect: NSRect(x: -32_000, y: -32_000, width: size.width, height: size.height),
-                                                styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = view
-        // Not throttled like a hidden page while a tool drives it: timers, animation frames and loads at full speed.
-        view.configuration.preferences.inactiveSchedulingPolicy = .none
-        window.orderBack(nil)
-        tab.automation.parkingWindow = window
-    }
+    func parkIfHidden(_ id: String) { tabs.tab(id)?.backgroundHost?.refresh() }
 
-    /// How long a parked page runs at full speed after the last tool call that touched it.
-    static let parkIdleSeconds = 60
-
-    /// Every tool call on a page comes through here (settle, readyForInput, captures). A page nobody shows is parked;
-    /// one an AI opened in the background and he never had in front of him is SILENT (sound suspended until he opens
-    /// it himself), while a page he left playing in another tab keeps its sound (B3, MAC-NEXT-13); after `parkIdleSeconds` with no tool call its
-    /// parking window closes, so it is a plain hidden page again under WebKit's normal background throttling, and no
-    /// hidden windows pile up (at most one per open tab, and only while a tool works on it). The next call parks it again.
+    /// Loaded pages remain active until closed, including between tool calls.
     func parkForTool(_ id: String) {
-        // (Reads, screenshots and state queries come here too: they never make the page "driven by a tool". Only input
-        // and navigation do, through `drove(_:)`, MAC-NEXT-15b.)
         parkIfHidden(id)
         guard let tab = tabs.tab(id), let view = tab.webView else { return }
         if NativeBackgroundToolsPolicy.silencesParkedPage(shownToPerson: tab.shownToPerson, inWindow: tab.pageInWindow) {
             view.setAllMediaPlaybackSuspended(true)
-        }
-        parkIdle[id]?.cancel()
-        guard tab.automation.parkingWindow != nil else { parkIdle[id] = nil; return }
-        parkIdle[id] = Task { [weak self] in
-            guard (try? await Task.sleep(for: .seconds(Self.parkIdleSeconds))) != nil, let self else { return }
-            self.parkIdle[id] = nil
-            if let view = self.tabs.tab(id)?.webView, view.window is NativeBrowserParkingWindow {
-                self.unpark(id)
-                view.configuration.preferences.inactiveSchedulingPolicy = .throttle
-            }
         }
     }
 
@@ -89,13 +49,21 @@ extension NativeSafariRuntime {
 
     /// A page script never holds a tool (or the page's lock) forever: a document
     /// replaced mid-call, or stuck behind a dialog, answers with a refusal instead.
+    func pageOperation<T: Sendable>(_ view: WKWebView, timeoutMs: Int,
+                                   _ operation: @escaping @MainActor () async throws -> T) async throws -> T {
+        guard let tab = tabs.tabs.first(where: { $0.webView === view }) else { throw refusal("This browser page is no longer open.") }
+        parkForTool(tab.id)
+        try requireBackgroundRendering(tab.id)
+        return try await tab.pageRequests.perform(timeoutMs: timeoutMs, operation)
+    }
+
     func js(_ view: WKWebView, _ script: String, world: WKContentWorld, ms: Int = 15_000) async throws -> Any? {
-        try await NativeBrowserRace.within(ms) { NativeBrowserUnchecked(try await view.evaluateJavaScript(script, in: nil, contentWorld: world)) }.value
+        try await pageOperation(view, timeoutMs: ms) { NativeBrowserUnchecked(try await view.evaluateJavaScript(script, in: nil, contentWorld: world)) }.value
     }
 
     func asyncJS(_ view: WKWebView, _ body: String, _ arguments: [String: Any], world: WKContentWorld, ms: Int = 15_000) async throws -> Any? {
         let args = NativeBrowserUnchecked(arguments)
-        return try await NativeBrowserRace.within(ms) {
+        return try await pageOperation(view, timeoutMs: ms) {
             NativeBrowserUnchecked(try await view.callAsyncJavaScript(body, arguments: args.value as? [String: Any] ?? [:], in: nil, contentWorld: world))
         }.value
     }
@@ -248,6 +216,10 @@ extension NativeSafariRuntime {
     // MARK: Full page, one element, PDF
 
     func screenshot(_ id: String, options: BrowserScreenshotOptions) async throws -> (path: String, width: Int, height: Int, masked: Int) {
+        let tab = try requireTab(id)
+        return try await tab.pageRequests.perform(timeoutMs: 30_000) { try await self.makeScreenshot(id, options: options) }
+    }
+    private func makeScreenshot(_ id: String, options: BrowserScreenshotOptions) async throws -> (path: String, width: Int, height: Int, masked: Int) {
         if options.isPlain { return try await screenshot(id) }
         let view = try requireView(id)
         guard handoverPrompt(id) == nil else { throw refusal("The person has this page.") }

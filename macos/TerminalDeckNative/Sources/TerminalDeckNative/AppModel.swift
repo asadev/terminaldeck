@@ -828,7 +828,7 @@ final class AppModel {
         }
             + stripBrowserTabs.map { tab in
                 TabItem(id: tab.id, title: tab.title, symbol: "globe", kind: "browser",
-                        active: tab.id == browserSelected, status: tab.loading ? "loading" : nil, closable: true)
+                        active: tab.id == browserSelected, unread: tab.needsAttention, status: tab.loading ? "loading" : nil, closable: true)
             }
             + NativeFIXESDeviceTabs.shared.tabs.map { $0.with(active: browserSelected == nil && $0.id == NativeFIXESDeviceTabs.shared.selectedID) }
         var state = TabsState(tabs: merged, canNewTerminal: page.canNewTerminal,

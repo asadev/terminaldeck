@@ -660,7 +660,10 @@ final class NativeCompositionBrowser: BackendRemoteServeBrowserDocumentPicking {
             }
             return view
         }
-        catch { report(.wrapping(error)); return nil }
+        catch {
+            opener.pageRequests.unavailable(kind: "popup", reason: "The built-in browser could not open the page's pop-up: " + error.localizedDescription)
+            report(.wrapping(error)); return nil
+        }
     }
     func suggest(profile: String, typed: String) async throws -> [BrowserVisit] {
         try await profiles.suggest(profileID: BackendBrowserProfiles.normalizedID(profile), typed: typed)

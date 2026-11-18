@@ -35,6 +35,8 @@ struct SessionChromeTests {
                 == "Model, effort and fast mode — model Opus 5, effort High")
         #expect(TerminalControlCatalog.value(nil, control: "permission") == "Not reported")
         #expect(TerminalControlCatalog.value(nil, control: "model") == "Unknown")
+        #expect(TerminalControlCatalog.value(nil, control: "effort") == "Not known yet")
+        #expect(TerminalControlCatalog.sourceNote("launch") == "from this session’s launch")
         #expect(TerminalControlCatalog.foreignAgentNote("codex")?.contains("Codex has its own") == true)
         #expect(TerminalControlCatalog.foreignAgentNote("claude") == nil)
         let models = [TerminalControlOption(id: "live-model", label: "Live model"),

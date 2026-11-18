@@ -2,15 +2,104 @@ import SwiftUI
 import TerminalDeckBackend
 import TerminalDeckNativeCore
 
+/// 18 Nov (owner, item 29: "It is still showing the yellow one. Why? ... See all of this"; DESIGN-settings 5): what the
+/// Cloud page's ONE top row says and what sits folded under it. Before, one cause (saved passwords not sent) was said
+/// four times: the orange line "Something needs you: saved passwords", a grey box, a cut-off state and nine orange
+/// sentences. Now it is said once, in plain words, and the rest is behind a click. Pure, so it is tested without a page.
+enum NativeCloudCalm {
+    static let passwordsGapsID = "passwords:gaps"
+    static let passwordsHeadline = "Some saved passwords are not in your Cloud yet"
+    /// The Saved passwords row's state while some are not in the Cloud (short, never cut off).
+    static let passwordsShort = "Not all in Cloud yet"
+    static let triedAgain = "This Mac tries again at every sync."
+    static let needsPrefix = "Something needs you: "
+    static let somethingWaits = "Something is waiting for you"
+    static let notSavedPrefix = "Not saved to Cloud from this Mac: "
+
+    /// The row's words: the line's own state, said plainly. A wait is named without "Something needs you: " in front;
+    /// saved passwords that are not in the Cloud are named as that.
+    static func headline(_ line: BackendCloudStatusLine, passwordGaps: Bool) -> String {
+        guard line.kind == .needsYou, line.text.hasPrefix(needsPrefix) else {
+            return line.kind == .needsYou && line.text == "Something needs you" ? somethingWaits : line.text
+        }
+        var words = String(line.text.dropFirst(needsPrefix.count))
+        if passwordGaps, words.hasPrefix(BackendCloudStatusLineWords.passwords),
+           !words.hasPrefix(BackendCloudStatusLineWords.passwords + " ") {
+            words = passwordsHeadline + words.dropFirst(BackendCloudStatusLineWords.passwords.count)
+        }
+        if words.hasPrefix(BackendCloudStatusLineWords.other) {
+            words = somethingWaits + words.dropFirst(BackendCloudStatusLineWords.other.count)
+        }
+        return words.prefix(1).uppercased() + words.dropFirst()
+    }
+
+    /// A kind's title inside a sentence: "Project secret files" reads "project secret files"; names and short forms
+    /// ("API keys", "MCP servers", "WhatsApp keys", "Receiver secrets") stay as they are; "The voice key" reads "the …".
+    static func inSentence(_ title: String) -> String {
+        let first = title.prefix { !$0.isWhitespace && $0 != "-" }
+        if ["WhatsApp", "Receiver", "Hoot"].contains(String(first)) { return title }
+        if first.dropFirst().contains(where: \.isUppercase) { return title }
+        return title.prefix(1).lowercased() + title.dropFirst()
+    }
+    /// The saved passwords that are not in the Cloud, as the details say them: ONE sentence naming the kinds whose save
+    /// did not get through, then any other line the saved passwords report (a key too large to save) as it is.
+    static func passwordLines(_ page: BackendCloudSecretsPage?) -> [String] {
+        guard let page, !page.gaps.isEmpty else { return [] }
+        var kinds: [String] = []
+        var others: [String] = []
+        for gap in page.gaps {
+            if gap.hasPrefix(notSavedPrefix), let end = gap.dropFirst(notSavedPrefix.count).firstIndex(of: ".") {
+                kinds.append(String(gap[gap.index(gap.startIndex, offsetBy: notSavedPrefix.count)..<end]))
+            } else {
+                others.append(gap)
+            }
+        }
+        var lines: [String] = []
+        if !kinds.isEmpty {
+            let named = kinds.enumerated().map { $0.offset == 0 ? $0.element : inSentence($0.element) }
+            let joined = named.count == 1 ? named[0] : named.dropLast().joined(separator: ", ") + " and " + named[named.count - 1]
+            lines.append("Not in your Cloud yet from this Mac: " + joined + ". " + triedAgain)
+        }
+        return lines + others
+    }
+    /// The summary's lines that still need drawing under the row (the saved-passwords sentence is said by
+    /// `passwordLines`, never twice).
+    static func hasSummary(_ overview: BackendCloudOverview?, changes: Int) -> Bool {
+        guard let overview else { return false }
+        return overview.notUsedHere || overview.later != nil || changes > 0
+            || overview.notices.contains { NativeCloudOverviewSection.shownHere($0.action) }
+            || NativeCloudOverviewSection.shownWaiting(overview).contains { $0.id != passwordsGapsID }
+    }
+    /// The details start OPEN only when one of them carries a button he must press (a file to review, a folder to
+    /// choose, a device to trust again, Cloud not used here yet); plain information stays folded.
+    static func startsOpen(_ overview: BackendCloudOverview?) -> Bool {
+        guard let overview else { return false }
+        if overview.notUsedHere { return true }
+        if overview.notices.contains(where: { NativeCloudOverviewSection.shownHere($0.action) }) { return true }
+        return NativeCloudOverviewSection.shownWaiting(overview).contains { $0.id != passwordsGapsID && $0.action != .none }
+    }
+    /// The Saved passwords row's one state: short while some are not in the Cloud, else the state's own words.
+    static func passwordsState(_ page: BackendCloudSecretsPage) -> String {
+        if case .protected = page.standing, !page.gaps.isEmpty { return passwordsShort }
+        return BackendCloudSecretsWords.state(page)
+    }
+}
+
 struct NativeCloudSettings: View {
     let model: NativeCloudAccount
     let secrets: NativeCloudSecrets
     let parts: NativeCloudFeatureParts
+    /// Pictures: the details under the top row drawn open or folded (nil = as the state says).
+    var fixtureDetailsOpen: Bool? = nil
     @Environment(\.deckSettingsOpen) private var openSettings
-    init(model: NativeCloudAccount = .shared, secrets: NativeCloudSecrets = .shared, parts: NativeCloudFeatureParts = .shared) {
+    /// His own press on the row's words; nil = as the state says (`NativeCloudCalm.startsOpen`).
+    @State private var detailsOpen: Bool?
+    init(model: NativeCloudAccount = .shared, secrets: NativeCloudSecrets = .shared, parts: NativeCloudFeatureParts = .shared,
+         fixtureDetailsOpen: Bool? = nil) {
         self.model = model
         self.secrets = secrets
         self.parts = parts
+        self.fixtureDetailsOpen = fixtureDetailsOpen
     }
     /// Review B-M4: the switch says both directions, like the question it changes.
     static let useCloudToggle = "Use Cloud on this Mac"
@@ -41,6 +130,7 @@ struct NativeCloudSettings: View {
     /// The status group's one line opens the side panel's Cloud page; "Manage files" opens the same page (its file
     /// manager), in the main window.
     static func openFiles(bin: Bool = false) {
+        guard NativeCloudOffers.shows(.fileManager) else { return }
         if bin { NativeCloudContentsModel.shared.chooseShelf(kind: nil) }
         NativeLaunchWindow.ensureShown(front: true)
         AppModel.shared.select(Sidebar21Pages.cloudID)
@@ -71,20 +161,28 @@ struct NativeCloudSettings: View {
     }
 
     /// Owner, 15 Nov (DESIGN.md section 3): calm. The status with Sync now · Keep in sync on this Mac · Manage files ·
-    /// Saved passwords · the phones' copy and Space used. Every explanation sits behind an info button.
+    /// Saved passwords · the phones' copy and Space used. Every explanation sits behind an info button. 18 Nov: what
+    /// waits is ONE row at the top in plain words with its details folded under it; when nothing waits, nothing more.
     var body: some View {
         DeckSettingsScaffold(title: "Cloud") {
             let overview = NativeCloudOverview.current(model: model, secrets: secrets, parts: parts)
             // Owner, 15 Nov: the Cloud line and its Sync now left the side panel and live here, at the top. While Cloud
             // is paused here the one button is Resume (pausing stays with the cloud.sync tool and "Use Cloud on this Mac").
-            if NativeCloudDisplayGate.shared.shows || model.snapshot.phase != .signedOut {
+            if NativeCloudOffers.shows(.syncSwitches), NativeCloudDisplayGate.shared.shows || model.snapshot.phase != .signedOut {
                 let line = NativeCloudStatusLineModel.shared.current()
                 let preparing = Self.syncNowWaits(model.snapshot)
-                // SW-1: new devices are ONE line here (orange dot, "4 new devices need a look") with Review, which
-                // opens the devices list (Profile); their sentences are never written out on this page.
+                // SW-1: new devices are ONE line here ("4 new devices need a look") with Review, which opens the devices
+                // list (Profile); their sentences are never written out on this page.
                 let devices = NativeCloudOverviewSection.devicesNeedALook(overview)
+                let passwordLines = NativeCloudCalm.passwordLines(secrets.shown)
+                let summary = NativeCloudCalm.hasSummary(overview, changes: parts.changes.count)
+                let hasDetails = summary || !passwordLines.isEmpty
+                let open = fixtureDetailsOpen ?? detailsOpen ?? NativeCloudCalm.startsOpen(overview)
                 DeckSettingsGroup {
-                    NativeCloudSettingsStatusRow(line: Self.statusLine(line, devices: devices), open: { Self.openFiles(bin: line.opensBin) }) {
+                    NativeCloudSettingsStatusRow(line: Self.statusLine(line, devices: devices),
+                                                 words: NativeCloudCalm.headline(Self.statusLine(line, devices: devices), passwordGaps: !passwordLines.isEmpty),
+                                                 detailsOpen: hasDetails ? open : nil, toggleDetails: { detailsOpen = !open },
+                                                 open: { Self.openFiles(bin: line.opensBin) }) {
                         if devices != nil {
                             Button(Self.review) { openSettings(Self.devicesListID) }
                         }
@@ -100,18 +198,28 @@ struct NativeCloudSettings: View {
                     }
                     .onAppear { NativeCloudStatusLineModel.shared.noted(line.kind) }
                     .onChange(of: line.kind) { _, kind in NativeCloudStatusLineModel.shared.noted(kind) }
+                    // The details, folded under the row: what is not in the Cloud yet (one sentence) and only what
+                    // needs him from the summary (never the per-kind "All saved" rows: the list below has the counts).
+                    if hasDetails, open {
+                        VStack(alignment: .leading, spacing: DeckTokens.Spacing.s8) {
+                            ForEach(passwordLines, id: \.self) { text in
+                                Text(text).font(DeckTokens.Typography.callout).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            if let overview, summary {
+                                NativeCloudOverviewSection(overview: overview, model: model, secrets: secrets, parts: parts, compact: true,
+                                                           hiding: [NativeCloudCalm.passwordsGapsID])
+                            }
+                        }
+                        .font(DeckSettingsLook.rowTitle)
+                        // Under the words, not under the dot.
+                        .padding(.leading, DeckSettingsLook.rowPadding + NativeCloudSettingsStatusRow<EmptyView>.dotSize + DeckTokens.Spacing.s8)
+                        .padding(.trailing, DeckSettingsLook.rowPadding)
+                        .padding(.vertical, DeckTokens.Spacing.s8 + 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     // The summary carries the "can't reach Cloud" line; without a summary it is said here.
                     if let text = model.notice ?? (overview == nil ? model.snapshot.problem : nil) { DeckSettingsProblem(text: text, warn: false) }
-                }
-            }
-            // Only what needs him from the summary (never the per-kind "All saved" rows: the list below has the counts).
-            if let overview, Self.summaryNeedsHim(overview, changes: parts.changes.count) {
-                DeckSettingsGroup {
-                    VStack(alignment: .leading, spacing: DeckTokens.Spacing.s8) {
-                        NativeCloudOverviewSection(overview: overview, model: model, secrets: secrets, parts: parts, compact: true)
-                    }
-                    .font(DeckSettingsLook.rowTitle)
-                    .padding(DeckSettingsLook.rowPadding)
                 }
             }
             // Same everywhere (owner, 15 Nov): one switch per kind, all on by default, this Mac only; "Use Cloud on this
@@ -126,6 +234,7 @@ struct NativeCloudSettings: View {
             }
             // Saved passwords (lean scope item 3): present only while this identity's saved passwords are wired.
             NativeCloudSecretsSection(model: secrets)
+            if NativeCloudOffers.shows(.phonesCopy) {
             DeckSettingsGroup {
                 // Mac shelf (owner, 15 Nov): ON by default. Off empties what the Cloud keeps for the phones and stops.
                 DeckSettingsToggleRow(NativeCloudShelf.switchTitle, info: NativeCloudShelf.switchInfo,
@@ -137,6 +246,7 @@ struct NativeCloudSettings: View {
                 if let space = NativeCloudPageCounts.shared.counts?.space, space.total > 0 || !space.parts.isEmpty {
                     DeckSettingsRow(BackendCloudSpace.title, info: Self.spaceBreakdown(space), state: Self.spaceTotal(space))
                 }
+            }
             }
         }
         .onAppear { model.pageShown(true); model.refreshDevices(); NativeCloudBrainRegistration.pageOpened(); secrets.reload(fresh: "opened Cloud page"); NativeCloudRecords.shared.refresh() }
@@ -220,7 +330,11 @@ struct NativeCloudDevicePlainRow: View {
 struct NativeCloudPage: View {
     var model: NativeCloudAccount = .shared
     var body: some View {
+        Group {
+            if NativeCloudOffers.shows(.settingsCloud) {
         if model.visible { NativeCloudSettings(model: model) } else { NativeCloudSignInPage(model: model) }
+            }
+        }
     }
 }
 

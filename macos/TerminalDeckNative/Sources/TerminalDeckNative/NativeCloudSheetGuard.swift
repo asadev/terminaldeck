@@ -79,6 +79,7 @@ final class NativeCloudSheetGuard {
     }
     /// Runs `work` only when the press may be taken as the person's own; otherwise says why nothing happened.
     func pagePress(model: NativeCloudAccount = .shared, _ work: () -> Void) {
+        guard model.snapshot.subscription.offers(.syncSwitches) else { return }
         guard Self.pagePressAllowed(remote: remote, at: Self.pressTime()) else { model.say(Self.pressRefused); return }
         work()
     }

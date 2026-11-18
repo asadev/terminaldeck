@@ -50,20 +50,28 @@ struct NativeProfileFacts: Equatable {
         let symbol: String
         let account: String?
         let connected: Bool
+        /// The service's handle for removing this way; never shown. nil = it cannot be removed from here.
+        var wayID: String? = nil
+        /// The service's own word on whether it may be removed now; nil = it did not say.
+        var canRemove: Bool? = nil
     }
     /// Bio, links, country… in order, once the edit slice reads them. Empty today.
     var details: [Detail] = []
     var signInRows: [SignInRow] = []
     /// The account's profile answered (15 Nov): his name and picture are changed right on the page.
     var editable = false
+    /// The account lets the username be changed now (18 Nov: typed in place on Personal information).
+    var usernameCanChange = true
     /// He chose this picture himself (not the sign-in's own): "Remove picture" is offered.
     var pictureRemovable = false
     /// The picture he just chose, from this Mac's own copy, until the account's address for it loads.
     var localPicture: NSImage?
 
     var signedIn: Bool { name != nil }
-    /// The Settings list's top row: his name, else "Profile".
-    var sidebarTitle: String { name ?? "Profile" }
+    /// The Settings list's top row: his name; with nobody signed in it invites ("Sign in"), it never says "Profile" over
+    /// an empty picture (owner, 18 Nov, item 14).
+    var sidebarTitle: String { name ?? NativeProfileFacts.signInTitle }
+    static let signInTitle = "Sign in"
 
     static func symbol(_ provider: String) -> String { SignIn.from(provider)?.symbol ?? "person.badge.key" }
     static func title(_ provider: String) -> String { SignIn.from(provider)?.title ?? provider.capitalized }
@@ -77,7 +85,7 @@ struct NativeProfileFacts: Equatable {
         }
         let linked = profile.ways.map { way in
             SignInRow(id: "linked:" + way.provider + ":" + (way.account ?? ""), title: way.providerName.isEmpty ? title(way.provider) : way.providerName,
-                      symbol: symbol(way.provider), account: way.account, connected: true)
+                      symbol: symbol(way.provider), account: way.account, connected: true, wayID: way.id, canRemove: way.canRemove)
         }
         let have = Set(profile.ways.map(\.provider))
         let addable = profile.addable.filter { !have.contains($0) }.map { provider in
@@ -103,6 +111,7 @@ struct NativeProfileFacts: Equatable {
                          picture: profile?.picture, signedInWith: way, needsSignInAgain: phase == .needsSignIn)
         facts.signInRows = rows(profile: profile, signedInWith: way)
         facts.editable = profile != nil
+        facts.usernameCanChange = profile?.usernameCanChange ?? false
         facts.pictureRemovable = profile?.pictureSource == "uploaded" && profile?.picture != nil
         if let local = model.localPicture, local.url == nil || local.url == profile?.picture { facts.localPicture = local.image }
         return facts
@@ -148,11 +157,13 @@ struct NativeProfileAvatar: View {
     private var initials: some View {
         let letters = NativeProfileFacts.initials(name)
         return ZStack {
-            Circle().fill(LinearGradient(colors: [Color.accentColor.opacity(0.85), Color.accentColor],
-                                         startPoint: .top, endPoint: .bottom))
             if letters.isEmpty {
-                Image(systemName: "person.fill").font(.system(size: size * 0.5, weight: .medium)).foregroundStyle(.white)
+                // Nobody signed in (18 Nov, item 14): a quiet grey picture, never the accent colour over an empty account.
+                Circle().fill(DeckTokens.avatarTile)
+                Image(systemName: "person.fill").font(.system(size: size * 0.46, weight: .regular)).foregroundStyle(.secondary)
             } else {
+                Circle().fill(LinearGradient(colors: [Color.accentColor.opacity(0.85), Color.accentColor],
+                                             startPoint: .top, endPoint: .bottom))
                 Text(letters).font(.system(size: size * (letters.count > 1 ? 0.38 : 0.46), weight: .semibold))
                     .foregroundStyle(.white).minimumScaleFactor(0.5)
             }
@@ -163,26 +174,31 @@ struct NativeProfileAvatar: View {
     }
 }
 
-/// Settings → Profile (owner, 15 Nov: like Apple Account; DESIGN.md section 2): his picture 96 pt in the centre, his
-/// name (22 pt) and e-mail under it; then the rows he goes into (Personal information, Sign-in, Cloud) and his devices.
-/// Name and picture change in place, here (15 Nov, lane/profile-edit). Signed out: one sentence and Sign in.
+/// Settings → Profile (owner, 15 Nov: like Apple Account): his picture 96 pt in the centre, his name (22 pt) and e-mail
+/// under it; then the rows he goes into (Personal information, Sign-in, Cloud) and ONE list of his devices. Name and
+/// picture change in place. Nobody signed in: the page invites (18 Nov, item 14), it never looks switched off.
 struct NativeProfileSettings: View {
     var model: NativeCloudAccount = .shared
-    /// The website's account page: username, bio, links, country (and everything while the profile could not be read).
-    static let accountPage = URL(string: "https://terminaldeck.dev/account")!
-    /// The live site's "Ways you sign in" section, where "Add another way to sign in" is (tds-cloud-app-callback 2652b19).
+    /// The account's "Ways you sign in" step, where another way is added (tds-cloud-app-callback 2652b19).
     static let addWayPage = URL(string: "https://terminaldeck.dev/account#ways")!
     static var openURL: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
-    static func openAccountPage() { openURL(accountPage) }
-    static let signedOutLine = "Sign in with your Terminal Deck account to see your profile and keep your work on all your devices."
-    /// Once his name and picture change here, the website keeps only the rest (username, bio, links, country).
-    static let moreButton = "More on the website"
+    static let signedOutTitle = "Terminal Deck account"
+    static let signedOutLine = "Sign in once and your sessions, memory and settings are on every device you use."
+    static let signedOutPicture: CGFloat = 72
     static let nameFont = DeckSettingsLook.profileName
+    /// Pictures: the photo drawn as while the pointer is over it; the long devices list drawn open.
+    var fixtureHover = false
+    var fixtureDevicesOpen = false
+    var fixtureEdits: NativeDeviceRowEdits? = nil
+    var fixtureSigningOut: Int? = nil
     @State private var feed: NativeDevicesFeed
     @Environment(\.deckSettingsOpen) private var open
 
-    init(model: NativeCloudAccount = .shared, devicesFixture: NativeDevicesFixture? = nil) {
+    init(model: NativeCloudAccount = .shared, devicesFixture: NativeDevicesFixture? = nil, fixtureHover: Bool = false,
+         fixtureDevicesOpen: Bool = false, fixtureEdits: NativeDeviceRowEdits? = nil, fixtureSigningOut: Int? = nil) {
         self.model = model
+        self.fixtureHover = fixtureHover; self.fixtureDevicesOpen = fixtureDevicesOpen; self.fixtureEdits = fixtureEdits
+        self.fixtureSigningOut = fixtureSigningOut
         _feed = State(initialValue: NativeDevicesFeed(account: model, fixture: devicesFixture))
     }
 
@@ -199,7 +215,7 @@ struct NativeProfileSettings: View {
 
     @ViewBuilder private func signedIn(_ facts: NativeProfileFacts) -> some View {
         VStack(spacing: DeckTokens.Spacing.s4) {
-            NativeProfilePicture(model: model, facts: facts, size: DeckSettingsLook.profilePicture)
+            NativeProfilePicture(model: model, facts: facts, size: DeckSettingsLook.profilePicture, fixtureHover: fixtureHover)
                 .padding(.bottom, DeckTokens.Spacing.s8)
             if facts.editable {
                 NativeProfileNameField(model: model, alignment: .center, font: Self.nameFont)
@@ -226,19 +242,28 @@ struct NativeProfileSettings: View {
                                 value: facts.needsSignInAgain ? "Sign in again" : nil, valueColor: DeckTokens.warn) {
                 open(NativeSettingsNavigation.signInID)
             }
-            DeckSettingsLinkRow(title: "Cloud", symbol: "cloud.fill", tint: .blue) { open(NativeSettingsNavigation.cloudID) }
+            let plan = NativeCloudPlanSeam.shown()
+            if model.snapshot.subscription.offers(.settingsCloud) {
+                DeckSettingsLinkRow(title: "Cloud", symbol: "cloud.fill", tint: .blue) { open(NativeSettingsNavigation.cloudID) }
+            }
+            if let plan { NativeCloudPlanRow(facts: plan) { open(NativeSettingsNavigation.planID) } }
         }
-        if !feed.groups.main.isEmpty || !feed.groups.older.isEmpty {
-            NativeDevicesGroup(feed: feed)
+        if model.snapshot.subscription.offers(.devices), !feed.rows.isEmpty {
+            NativeDevicesGroup(feed: feed, fixtureOpen: fixtureDevicesOpen, fixtureEdits: fixtureEdits, fixtureSigningOut: fixtureSigningOut)
         }
         if let notice = model.notice { DeckSettingsGroup { DeckSettingsProblem(text: notice, warn: false) } }
     }
 
+    /// Nobody signed in (owner, 18 Nov, item 14: the profile stays in Settings "so they can feel it", in a form that
+    /// invites and does not nag): a quiet picture, what the account is, ONE sentence and the one blue button. Nothing
+    /// is dimmed, nothing is orange, no word about versions or paying.
     @ViewBuilder private var signedOut: some View {
         let stage = model.signInStage
         let content = NativeCloudSignInPage.content(stage)
-        VStack(spacing: DeckTokens.Spacing.s12) {
-            NativeProfileAvatar(name: nil, size: DeckSettingsLook.profilePicture).opacity(0.55)
+        VStack(spacing: DeckTokens.Spacing.s8) {
+            NativeProfileAvatar(name: nil, size: Self.signedOutPicture)
+                .padding(.bottom, DeckTokens.Spacing.s4)
+            Text(Self.signedOutTitle).font(.system(size: 17, weight: .semibold))
             Text(Self.line(stage)).font(DeckSettingsLook.rowTitle).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 380)
             Button(content.button) {
@@ -247,11 +272,13 @@ struct NativeProfileSettings: View {
                 else { model.pressSignIn() }
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .disabled(!content.enabled || model.busy)
+            .padding(.top, DeckTokens.Spacing.s8)
             if let text = model.notice { Text(text).font(DeckSettingsLook.rowTitle).foregroundStyle(.secondary) }
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, DeckTokens.Spacing.s16)
+        .padding(.top, DeckTokens.Spacing.s24)
     }
 
     /// Signed out: the one sentence of this page; the other in-between states say what the Cloud page says.
@@ -307,47 +334,97 @@ struct NativeProfileSettings: View {
     }
 }
 
-/// His picture, changed in place: a click opens the picture chooser (or, once he chose one himself, a menu with
-/// "Choose picture…" and "Remove picture"); a picture dragged onto it is taken too.
+/// What the pointer over his picture shows (owner, 18 Nov, item 27: "when you hover over, it should show you that,
+/// okay, you can change it"): a dark band across the bottom third of the circle with a camera and the word "Change",
+/// and the faintest veil over the rest. The band never sits on his face or on the initials. Nothing moves or grows.
+struct NativeProfilePictureVeil: View {
+    let size: CGFloat
+    static let title = "Change"
+    /// The whole picture, faintly; the band's own ink; the band's share of the picture's height.
+    static let veil: Double = 0.12
+    static let band: Double = 0.6
+    static let bandShare: CGFloat = 0.34
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(Self.veil)
+            HStack(spacing: 4) {
+                Image(systemName: "camera.fill").font(.system(size: 10, weight: .medium))
+                Text(Self.title).font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            // The circle narrows towards its bottom: the words sit a little above the band's middle.
+            .padding(.bottom, 5)
+            .frame(maxWidth: .infinity, minHeight: size * Self.bandShare, maxHeight: size * Self.bandShare)
+            .background(Color.black.opacity(Self.band))
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// His picture, changed in place: the pointer over it shows that it can be changed; only a CLICK opens the picture
+/// chooser (or, once he chose one himself, a menu with "Choose picture…" and "Remove picture"); a picture dragged onto
+/// it is taken too.
 struct NativeProfilePicture: View {
     let model: NativeCloudAccount
     let facts: NativeProfileFacts
     let size: CGFloat
+    /// Pictures: drawn as while the pointer is over it.
+    var fixtureHover = false
     @State private var dropping = false
+    @State private var hovering = false
+    @State private var menuOpen = false
 
     var body: some View {
+        let uploading = model.localPicture != nil && model.localPicture?.url == nil
         let avatar = NativeProfileAvatar(name: facts.name, picture: facts.picture, local: facts.localPicture, size: size)
+            .overlay { if uploading { ProgressView().controlSize(.small) } }
             .overlay {
-                if model.localPicture != nil, model.localPicture?.url == nil { ProgressView().controlSize(.small) }
+                NativeProfilePictureVeil(size: size)
+                    .opacity(facts.editable && (hovering || fixtureHover) && !uploading ? 1 : 0)
+                    .animation(.easeOut(duration: 0.12), value: hovering)
             }
             .overlay(Circle().stroke(Color.accentColor, lineWidth: 2).opacity(dropping ? 1 : 0))
+            .contentShape(Circle())
         if !facts.editable {
             avatar
-        } else if facts.pictureRemovable {
-            Menu {
-                Button("Choose picture…") { NativeProfileSettings.choosePicture(model) }
-                Button("Remove picture") { Task { await model.removeProfilePicture() } }
-            } label: { avatar }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-            .help("Change your picture")
-            .onDrop(of: NativeProfileSettings.dropTypes, isTargeted: $dropping) { NativeProfileSettings.take($0, model) }
         } else {
-            Button { NativeProfileSettings.choosePicture(model) } label: { avatar }
-                .buttonStyle(.plain)
-                .help("Choose a picture")
-                .accessibilityLabel("Choose a picture")
-                .onDrop(of: NativeProfileSettings.dropTypes, isTargeted: $dropping) { NativeProfileSettings.take($0, model) }
+            // No picture of his own yet: the click opens the chooser. Once he chose one: the app's menu (DeckMenu) with
+            // "Choose picture…" and "Remove picture".
+            Button {
+                if facts.pictureRemovable { menuOpen.toggle() } else { NativeProfileSettings.choosePicture(model) }
+            } label: { avatar }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            .pointerStyle(.link)
+            .accessibilityLabel("Change your picture")
+            .onDrop(of: NativeProfileSettings.dropTypes, isTargeted: $dropping) { NativeProfileSettings.take($0, model) }
+            .deckMenu(isPresented: $menuOpen, alignment: .center) { NativeProfilePictureMenu(model: model) }
         }
+    }
+}
+
+/// The picture's menu once he chose one himself.
+struct NativeProfilePictureMenu: View {
+    let model: NativeCloudAccount
+    static let choose = "Choose picture…"
+    static let remove = "Remove picture"
+    var body: some View {
+        DeckMenuRow(Self.choose, symbol: "photo") { NativeProfileSettings.choosePicture(model) }
+        DeckMenuRow(Self.remove, symbol: "trash", role: .destructive) { Task { await model.removeProfilePicture() } }
     }
 }
 
 /// His name as a plain field he clicks and types into (Profile's big name, Personal information's Name row). Return or
 /// clicking away saves; Escape puts the name back; leaving the page while typing saves too. Never more than the
-/// service takes (60 characters).
+/// service takes (60 characters). `onSaved` is told when the account took a CHANGED name (the row's small check).
 struct NativeProfileNameField: View {
     let model: NativeCloudAccount
     var alignment: TextAlignment = .leading
     var font: Font = DeckSettingsLook.rowTitle
+    var onSaved: (@MainActor () -> Void)? = nil
     @State private var draft = ""
     @FocusState private var nameFocused: Bool
 
@@ -373,58 +450,253 @@ struct NativeProfileNameField: View {
     }
 
     private func commitName() {
-        let typed = draft, model = model
+        let typed = draft, model = model, onSaved = onSaved
+        let before = NativeProfileFacts.current(model).name ?? ""
         Task {
-            await model.saveProfileName(typed)
+            let took = await model.saveProfileName(typed)
             // Saved: the account's cleaned name; not saved: the old name is back.
-            if !nameFocused { draft = NativeProfileFacts.current(model).name ?? "" }
+            let after = NativeProfileFacts.current(model).name ?? ""
+            if !nameFocused { draft = after }
+            if took, after != before { onSaved?() }
         }
     }
 }
 
-/// Profile › Personal information: Name (typed in place), Username, E-mail, and "More on the website" as the last row.
+/// His username as a field (18 Nov, item 28): "@" in front, Enter or clicking away saves it to the account, Escape puts
+/// the old one back. `save` answers nil when the account took it, else the one sentence to show.
+struct NativeProfileUsernameField: View {
+    let current: String
+    let save: @MainActor (String) async -> String?
+    var onSaved: @MainActor () -> Void = {}
+    var onProblem: @MainActor (String?) -> Void = { _ in }
+    @State private var draft = ""
+    @State private var saving = false
+    @FocusState private var focused: Bool
+
+    /// What goes to the account: no "@" in front, no spaces, at most 40 characters (the service cleans the rest).
+    static func cleaned(_ typed: String) -> String { NativeCloudAccount.cleanedUsername(typed) }
+
+    /// The field's own text: the username with its "@" in front, always (typing over it puts it back).
+    static func shown(_ username: String) -> String { "@" + cleaned(username) }
+
+    var body: some View {
+        NativeSessionTextField("@username", text: $draft)
+            .textFieldStyle(.plain)
+            .lineLimit(1)
+            .sessionFocused($focused)
+            .onSubmit { commit(); focused = false }
+            .onExitCommand { draft = Self.shown(current); focused = false }
+            .font(DeckSettingsLook.rowTitle)
+            .multilineTextAlignment(.trailing)
+            .onChange(of: focused) { _, now in if !now { commit() } }
+            .onChange(of: draft) { _, text in
+                let kept = Self.shown(text)
+                if kept != text { draft = kept }
+            }
+            .onChange(of: current) { _, value in if !focused { draft = Self.shown(value) } }
+            .onAppear { draft = Self.shown(current) }
+            .disabled(saving)
+            .accessibilityLabel("Your username")
+    }
+
+    private func commit() {
+        let typed = Self.cleaned(draft)
+        guard !saving, typed != current else { draft = Self.shown(current); return }
+        saving = true
+        let save = save, onSaved = onSaved, onProblem = onProblem, current = current
+        Task {
+            let problem = await save(typed)
+            saving = false
+            if let problem { draft = Self.shown(current); onProblem(problem) } else { onProblem(nil); onSaved() }
+        }
+    }
+}
+
+/// The look of a value he can type into on a Settings row (18 Nov): it reads as "type here" without a hover. 220 pt
+/// wide, 24 pt high, the group's fill one step darker, radius 6, no outline.
+struct NativeProfileQuietField: ViewModifier {
+    static let width: CGFloat = 220
+    static let height: CGFloat = 24
+    static let line: CGFloat = 17
+    func body(content: Content) -> some View {
+        content
+            // The field keeps its own line height and is centred in the 24 pt box (it drew its text at the box's top).
+            .frame(height: Self.line)
+            .padding(.horizontal, 8)
+            .frame(width: Self.width, height: Self.height)
+            .background(DeckSettingsQuietField.fill, in: RoundedRectangle(cornerRadius: DeckSettingsQuietField.radius))
+    }
+}
+
+/// The small green check a field shows for a moment after the account took its value.
+struct NativeProfileSavedCheck: View {
+    let shown: Bool
+    static let shows: Duration = .milliseconds(1600)
+    var body: some View {
+        Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(DeckTokens.good)
+            .opacity(shown ? 1 : 0)
+            .animation(.easeOut(duration: 0.15), value: shown)
+            .accessibilityLabel("Saved").accessibilityHidden(!shown)
+    }
+}
+
+/// Profile › Personal information (owner, 18 Nov, item 28: "why it is taking you to more on website? We don't need this
+/// option. Just give everything here and editable directly from here"): Name and Username typed in place, the e-mail
+/// shown. Nothing sends him to the website.
 struct NativeProfilePersonalPage: View {
     var model: NativeCloudAccount = .shared
+    enum Field: Equatable { case name, username }
+    /// The username is typed in place when the account's profile answered and lets it change; otherwise it is text.
+    static func usernameIsField(_ facts: NativeProfileFacts) -> Bool { facts.editable && facts.usernameCanChange }
+    /// Pictures: a field drawn right after its value was saved.
+    var fixtureSaved: Field? = nil
+    @State private var saved: Field?
+    @State private var usernameProblem: String?
+    @State private var checkTimer: Task<Void, Never>?
+
     var body: some View {
         let facts = NativeProfileFacts.current(model)
+        let shownCheck = saved ?? fixtureSaved
         DeckSettingsScaffold(title: "Personal information") {
             DeckSettingsGroup {
                 DeckSettingsRow("Name") {
                     if facts.editable {
-                        NativeProfileNameField(model: model, alignment: .trailing).frame(maxWidth: 260)
+                        HStack(spacing: DeckTokens.Spacing.s8) {
+                            NativeProfileSavedCheck(shown: shownCheck == .name)
+                            NativeProfileNameField(model: model, alignment: .trailing, onSaved: { flash(.name) })
+                                .modifier(NativeProfileQuietField())
+                        }
                     } else {
                         Text(facts.name ?? "").foregroundStyle(.secondary)
                     }
                 }
-                if let username = facts.username { DeckSettingsRow("Username", state: "@" + username) }
-                if let email = facts.email { DeckSettingsRow("E-mail", state: email) }
-                ForEach(facts.details) { row in DeckSettingsRow(row.label, state: row.value) }
-                // Name and picture change right here; the website keeps the rest (and everything while the account's
-                // profile could not be read).
-                DeckSettingsLinkRow(title: facts.editable ? NativeProfileSettings.moreButton : "Edit profile on the website") {
-                    NativeProfileSettings.openAccountPage()
+                if Self.usernameIsField(facts) {
+                    DeckSettingsRow("Username") {
+                        HStack(spacing: DeckTokens.Spacing.s8) {
+                            NativeProfileSavedCheck(shown: shownCheck == .username)
+                            NativeProfileUsernameField(current: facts.username ?? "", save: { await model.saveProfileUsername($0) },
+                                                       onSaved: { flash(.username) }, onProblem: { usernameProblem = $0 })
+                                .modifier(NativeProfileQuietField())
+                        }
+                    }
+                } else if let username = facts.username {
+                    // The account does not let it change now (it is in the address of his Store listings): plain text.
+                    DeckSettingsRow("Username", state: "@" + username)
                 }
+                if let email = facts.email {
+                    DeckSettingsRow("E-mail") { Text(email).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(1).truncationMode(.middle) }
+                }
+                ForEach(facts.details) { row in DeckSettingsRow(row.label, state: row.value) }
             }
-            if let problem = model.profileProblem { DeckSettingsGroup { DeckSettingsProblem(text: problem) } }
+            if let problem = model.profileProblem ?? usernameProblem { DeckSettingsGroup { DeckSettingsProblem(text: problem) } }
         }
         .disabled(model.busy)
         .onAppear { model.refreshProfile() }
+        .onDisappear { checkTimer?.cancel() }
+    }
+
+    private func flash(_ field: Field) {
+        saved = field
+        checkTimer?.cancel()
+        checkTimer = Task {
+            try? await Task.sleep(for: NativeProfileSavedCheck.shows)
+            guard !Task.isCancelled else { return }
+            saved = nil
+        }
     }
 }
 
-/// Profile › Sign-in: the ways he signs in (their marks, "Connected" or Add), then Sign out on its own (the only red
-/// text on the page).
+/// "Disconnect" on a way to sign in, with the app's 5-second Undo (no sheet): the row says "Disconnecting…" with Undo,
+/// then the way is removed once. Undo and leaving the page cancel it; nothing is saved, so it never fires later.
+@MainActor @Observable
+final class NativeSignInWayRemoval {
+    nonisolated static let undoDelay: Duration = .seconds(5)
+    static let pendingWord = "Disconnecting…"
+    /// Rows waiting behind Undo, and rows whose removal is travelling (no Undo any more).
+    private(set) var pending: Set<String> = []
+    private(set) var removing: Set<String> = []
+    /// The one sentence after a removal the account refused.
+    private(set) var problem: String?
+    private let wait: @Sendable (Duration) async throws -> Void
+    @ObservationIgnored private var timers: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var started: [Task<Void, Never>] = []
+
+    init(wait: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) { self.wait = wait }
+
+    func choose(_ row: NativeProfileFacts.SignInRow, remove: @escaping @MainActor (NativeProfileFacts.SignInRow) async -> String?) {
+        guard timers[row.id] == nil, !removing.contains(row.id) else { return }
+        let id = row.id, wait = wait
+        pending.insert(id); problem = nil
+        let timer = Task { [weak self] in
+            do { try await wait(Self.undoDelay) } catch { return }
+            guard !Task.isCancelled, let self, self.pending.contains(id) else { return }
+            self.pending.remove(id); self.timers[id] = nil
+            self.removing.insert(id)
+            let answer = await remove(row)
+            self.removing.remove(id)
+            self.problem = answer
+        }
+        timers[id] = timer
+        started.append(timer)
+    }
+    func undo(_ id: String) {
+        timers[id]?.cancel(); timers[id] = nil
+        pending.remove(id)
+    }
+    func cancelAll() { for id in Array(pending) + Array(timers.keys) { undo(id) } }
+    /// Tests: every chosen removal has finished or was cancelled.
+    func settle() async { for task in started { await task.value } }
+    /// Pictures: a row drawn while it waits behind Undo.
+    func fixture(pending ids: Set<String>) { pending = ids }
+}
+
+/// Profile › Sign-in (owner, 18 Nov, item 26: "Sign-ins should be able to control here, not just look at them"): each
+/// way he signs in with can be acted on in its row: Disconnect while another way remains, Connect when it is not
+/// connected. Then Sign out on its own (the only red text on the page).
 struct NativeProfileSignInPage: View {
     var model: NativeCloudAccount = .shared
+    var fixtureRemoval: NativeSignInWayRemoval? = nil
+    @State private var removal = NativeSignInWayRemoval()
+    static let connected = "Connected"
+    static let disconnect = "Disconnect"
+    static let connect = "Connect"
+
+    /// The ONE control at a row's right end.
+    enum Control: Equatable { case undo, removing, disconnect, connected, connect }
+    static func control(_ row: NativeProfileFacts.SignInRow, among rows: [NativeProfileFacts.SignInRow],
+                        pending: Set<String>, removing: Set<String>) -> Control {
+        if pending.contains(row.id) { return .undo }
+        if removing.contains(row.id) { return .removing }
+        guard row.connected else { return .connect }
+        return canDisconnect(row, among: rows) ? .disconnect : .connected
+    }
+    /// A connected way can be disconnected while another connected way remains (the account refuses the last one), the
+    /// account gave its handle, and the account does not say it may not be removed.
+    static func canDisconnect(_ row: NativeProfileFacts.SignInRow, among rows: [NativeProfileFacts.SignInRow]) -> Bool {
+        row.connected && row.wayID != nil && row.canRemove != false && rows.filter(\.connected).count > 1
+    }
+
     var body: some View {
         let facts = NativeProfileFacts.current(model)
+        let removal = fixtureRemoval ?? self.removal
         DeckSettingsScaffold(title: "Sign-in") {
             if !facts.signInRows.isEmpty {
-                DeckSettingsGroup {
+                DeckSettingsGroup(separatorInset: DeckSettingsLook.rowPadding + DeckSettingsLook.rowTile + DeckTokens.Spacing.s8 + 2) {
                     ForEach(facts.signInRows) { row in
-                        DeckSettingsRow(row.title, subtitle: row.account) {
-                            if row.connected { Text("Connected").foregroundStyle(.secondary) }
-                            else { Button("Add") { NativeProfileSettings.openURL(NativeProfileSettings.addWayPage) } }
+                        let control = Self.control(row, among: facts.signInRows, pending: removal.pending, removing: removal.removing)
+                        DeckSettingsRow(row.title, subtitle: control == .undo || control == .removing ? NativeSignInWayRemoval.pendingWord : row.account) {
+                            switch control {
+                            case .undo: Button("Undo") { removal.undo(row.id) }.controlSize(.small)
+                            case .removing: ProgressView().controlSize(.small)
+                            case .disconnect:
+                                Button(Self.disconnect) {
+                                    removal.choose(row) { row in await model.removeSignInWay(row.wayID ?? "") }
+                                }
+                                .controlSize(.small)
+                            case .connected: Text(Self.connected).foregroundStyle(.secondary)
+                            // Adding a way is the account's own step in the browser (it signs him in at Google, GitHub or Apple).
+                            case .connect: Button(Self.connect) { NativeProfileSettings.openURL(NativeProfileSettings.addWayPage) }.controlSize(.small)
+                            }
                         }
                         .modifier(NativeSignInMarkLeading(id: row.id))
                     }
@@ -438,10 +710,12 @@ struct NativeProfileSignInPage: View {
                 }
                 DeckSettingsButtonRow(title: "Sign out", role: .destructive) { Task { await model.pressSignOut() } }
             }
+            if let problem = removal.problem { DeckSettingsGroup { DeckSettingsProblem(text: problem) } }
             if let notice = model.notice { DeckSettingsGroup { DeckSettingsProblem(text: notice, warn: false) } }
         }
         .disabled(model.busy)
         .onAppear { model.refreshProfile() }
+        .onDisappear { removal.cancelAll() }
     }
 }
 

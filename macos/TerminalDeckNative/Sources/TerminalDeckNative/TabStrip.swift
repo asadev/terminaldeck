@@ -25,14 +25,28 @@ enum NativeSessionChrome {
 // The session tabs, inside the toolbar row itself (one slim 40 pt header).
 //
 // SwiftUI toolbar items take their ideal width and will not stretch, so the strip
-// is given an explicit width: from where it actually starts in the window (read by
-// a tiny AppKit anchor, because that moves when the sidebar is shown or hidden) to
-// just before the New Session / Settings buttons. Measured on macOS 27: those two
-// glass buttons need 100 pt at the right edge; 104 keeps a little air.
+// is given an explicit width: from where it starts in the window to the window's
+// right edge, less only the room a toolbar button there needs while one shows.
+//
+// 18 Nov 2026 (owner: "it should spread in overall the space in the header, but it is keep squeezing here, and we
+// have a lot of empty space"): 17 tabs were 68 pt each beside an empty third of the bar. Two causes. The strip's
+// start was taken from an AppKit reading that is made only on a resize and stayed stale after the toolbar moved the
+// strip; a stale reading can no longer shorten the strip (see `start`). And 104 pt were always kept free at the
+// right for two toolbar buttons that left the app on 7 Oct; now only what shows there is given room.
 
 enum TabStripLayout {
-    /// Room kept at the window's right edge for the New Session + Settings buttons.
+    // Room kept free at the window's right edge, for what shows there and only that. Measured in a real toolbar on
+    // macOS 27.3 (18 Nov, BrowserHeaderRoomProbe): with less, the toolbar pushes the button or the Cloud word (or, when
+    // the side panel is hidden, the whole strip) into its overflow menu.
+    /// The side panel is hidden: the Cloud line's short form sits there (its longest word needs 104).
     static let trailingReserve: CGFloat = 104
+    /// A page's "Move to new window" button shows there (it needs 40).
+    static let trailingButton: CGFloat = 48
+    /// Both (they need 140 together; with 104 the toolbar dropped both).
+    static let trailingReserveAndButton: CGFloat = 140
+    /// Nothing shows there (a session, a browser or a device tab is on show): the window's own margin (the toolbar
+    /// needs 4; 12 is the margin the rest of the frame uses).
+    static let trailingMargin: CGFloat = 12
     static let minimumWidth: CGFloat = 0
     /// The toolbar's own height: the selected tab runs the full way down, into the page.
     static let height: CGFloat = 36
@@ -40,17 +54,27 @@ enum TabStripLayout {
     static let topInset: CGFloat = 5
     /// The selected tab's outward curves at its foot reach this far past each side.
     static let flare: CGFloat = 8
-    static let buttonWidth: CGFloat = 28
+    /// The one "+" at the strip's right end (a new browser tab).
+    static let plusWidth: CGFloat = 30
+    /// How far right of its expected start a reading of the strip's own position may be and still count.
+    static let anchorTolerance: CGFloat = 40
 
-    /// The strip never starts left of the page column (4 pt in from it); the anchor's
-    /// reading counts only when it is further right than that — e.g. after the traffic
-    /// lights when the sidebar is hidden. (While the strip sits in the toolbar's overflow
-    /// menu the anchor reads nonsense such as -80, which this ignores.)
-    /// `leadingFloor` is the first x the strip may start at: right of the traffic lights and the sidebar toggle,
-    /// whatever the anchor last read (a resize, a sidebar collapse or full screen can leave that stale).
-    static func width(windowWidth: CGFloat, detailMinX: CGFloat, anchorMinX: CGFloat?, leadingFloor: CGFloat = 0) -> CGFloat {
-        let stripMinX = max(detailMinX + 4, anchorMinX ?? 0, leadingFloor)
-        return max(minimumWidth, (windowWidth - stripMinX - trailingReserve).rounded(.down))
+    /// Where the strip starts in the window. Never left of the page column (4 pt in from it) nor of `leadingFloor`
+    /// (right of the traffic lights and the sidebar toggle when the side panel is hidden). The strip's own reading
+    /// (`anchorMinX`) refines that only when it is a little further right: while the strip sits in the toolbar's
+    /// overflow menu it reads nonsense such as -80, and after the toolbar has moved the strip it can be hundreds of
+    /// points stale, which squeezed the tabs.
+    static func start(detailMinX: CGFloat, anchorMinX: CGFloat?, leadingFloor: CGFloat = 0) -> CGFloat {
+        let expected = max(detailMinX + 4, leadingFloor)
+        guard let anchorMinX, anchorMinX > expected, anchorMinX <= expected + anchorTolerance else { return expected }
+        return anchorMinX
+    }
+
+    /// `trailing`: the room kept free at the window's right edge (one of the four above).
+    static func width(windowWidth: CGFloat, detailMinX: CGFloat, anchorMinX: CGFloat?, leadingFloor: CGFloat = 0,
+                      trailing: CGFloat = trailingReserve) -> CGFloat {
+        let stripMinX = start(detailMinX: detailMinX, anchorMinX: anchorMinX, leadingFloor: leadingFloor)
+        return max(minimumWidth, (windowWidth - stripMinX - trailing).rounded(.down))
     }
 }
 
@@ -63,6 +87,8 @@ final class StripAnchorBox {
 
     /// Where the window's traffic lights and the sidebar toggle end: the strip never starts left of this.
     var leadingFloor: CGFloat = 0
+    /// The window's own width, read from the window (nil until the strip is in one).
+    var windowWidth: CGFloat?
     /// Space between the strip's foot and the top of the page (the toolbar is taller than the
     /// strip). The selected tab reaches down across it, so it meets the page with no line.
     var footGap: CGFloat = 0
@@ -71,6 +97,8 @@ final class StripAnchorBox {
         guard let view, let window = view.window else { return }
         let x = view.convert(view.bounds, to: nil).minX.rounded()
         if x != minX { minX = x }
+        let width = window.frame.width.rounded()
+        if width != windowWidth { windowWidth = width }
         // The three lights (not there in full screen), then the system's sidebar toggle (~34 pt) and a little air.
         var floor: CGFloat = 0
         if !window.styleMask.contains(.fullScreen), let zoom = window.standardWindowButton(.zoomButton) {
@@ -146,41 +174,47 @@ struct TabStrip: View {
     /// Whether a tab's menu offers "Open in Split View" (a session or browser tab not on show, not in a pane yet).
     var splitOffered: (TabItem) -> Bool = { _ in false }
     var openInSplit: (TabItem) -> Void = { _ in }
+    /// Wide tabs show their project picture, status mark and browser chips (false only in pictures drawn without the app).
+    var details = true
 
     var body: some View {
-        let buttons = (state.canNewTerminal ? 1 : 0) + (state.canNewBrowser ? 1 : 0)
-        let buttonsWidth = CGFloat(buttons) * TabStripLayout.buttonWidth + (buttons > 0 ? 4 : 0)
-        // The selected tab joins the page; the other tabs stay on the header glass.
+        // ONE "+" (owner, 18 Nov: "remove this terminal icon from the header ... one plus icon in this right corner").
+        let plusWidth = state.canNewBrowser ? TabStripLayout.plusWidth : 0
+        // The selected tab's pill wears the page's colour; the other pills stay quiet on the header glass.
         let activeTab = state.tabs.first(where: \.active)
         let paper = activeTab.map { NativeChrome.usesPaper(kind: $0.kind, id: $0.id) } ?? false
         let flare = TabStripLayout.flare
-        let available = max(0, width - buttonsWidth - 2 * flare)
-        let tabWidth = CGFloat(TabStripMetrics.tabWidth(count: state.tabs.count, available: Double(available)))
-        let content = CGFloat(TabStripMetrics.contentWidth(count: state.tabs.count, tabWidth: Double(tabWidth)))
-        let viewportWidth = min(content, available) + 2 * flare
+        let available = max(0, width - plusWidth - 2 * flare)
 
         // The tabs in the order the person arranged them; while one is held, the others have already moved aside.
         let reorder = NativeTabReorder.shared
         let ids = state.tabs.map(\.id)
         let order = reorder.dragID != nil ? TabOrderRules.arranged(ids, saved: reorder.order) : NativeSessionRailContinuity.shared.arrangedHeader(NativePaneArrangement.shared.arrangedTabs(ids))
         let tabs = order.compactMap { id in state.tabs.first { $0.id == id } }
-        let step = tabWidth + CGFloat(TabStripMetrics.spacing)
+        // Every tab's width: the room shared out, the tab on show never too narrow for its title.
+        let widths = TabStripMetrics.widths(count: tabs.count, activeIndex: tabs.firstIndex(where: \.active),
+                                            available: Double(available)).map { CGFloat($0) }
+        let content = CGFloat(TabStripMetrics.contentWidth(widths.map { Double($0) }))
+        let viewportWidth = min(content, available) + 2 * flare
+        let common = widths.min() ?? 0
+        let step = common + CGFloat(TabStripMetrics.spacing)
+        let widthByID = Dictionary(zip(tabs.map(\.id), widths), uniquingKeysWith: { first, _ in first })
 
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
                     HStack(spacing: CGFloat(TabStripMetrics.spacing)) {
                         ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
+                            let tabWidth = index < widths.count ? widths[index] : common
                             TabChip(tab: tab,
                                     availableWidth: tabWidth,
                                     paper: paper,
-                                    footGap: anchor.footGap,
-                                    separatorAfter: index < tabs.count - 1 && !tab.active && !tabs[index + 1].active && reorder.dragID == nil,
                                     favicon: favicons[tab.id],
                                     select: { select(tab.id) },
                                     close: { close(tab.id) },
                                     openInNewWindow: { openInNewWindow(tab) },
-                                    openInSplit: splitOffered(tab) ? { openInSplit(tab) } : nil)
+                                    openInSplit: splitOffered(tab) ? { openInSplit(tab) } : nil,
+                                    details: details)
                                 .frame(width: tabWidth)
                                 .offset(x: reorder.offset(for: tab.id))
                                 .zIndex(reorder.dragID == tab.id ? 1 : 0)
@@ -216,53 +250,80 @@ struct TabStrip: View {
                 }
             }
 
-            if state.canNewTerminal {
-                StripButton(symbol: "terminal", help: "New terminal tab", action: newTerminal)
-            }
-            if state.canNewBrowser {
-                StripButton(symbol: "globe", help: "New browser tab", action: newBrowser)
-            }
+            // The "+" keeps the header's right corner, however few tabs there are.
             Spacer(minLength: 0)
+            if state.canNewBrowser {
+                StripNewTabButton(newBrowser: newBrowser, newTerminal: state.canNewTerminal ? newTerminal : nil)
+            }
         }
-        // No tabs: just the two buttons, so the window title (shown then) and the
-        // glass buttons keep their room — a full-width empty strip pushed them into
-        // the toolbar's overflow menu.
-        .frame(width: state.tabs.isEmpty ? buttonsWidth + 8 : width, height: TabStripLayout.height)
+        // No tabs: just the "+", so the window title (shown then) keeps its room: a full-width empty strip pushed
+        // it into the toolbar's overflow menu.
+        .frame(width: state.tabs.isEmpty ? plusWidth + 8 : width, height: TabStripLayout.height)
         .coordinateSpace(name: "tabstrip")
-        .onAppear { reorder.step = step; reorder.stripHeight = TabStripLayout.height }
+        .onAppear { reorder.step = step; reorder.widths = widthByID; reorder.stripHeight = TabStripLayout.height }
         .onChange(of: step) { _, next in reorder.step = next }
+        .onChange(of: widthByID) { _, next in reorder.widths = next }
+        // The toolbar may move the strip when its width changes: read where it starts again.
+        .onChange(of: width) { _, _ in anchor.remeasureSoon() }
         // No fill: the strip sits on the window's sidebar glass, like the side panel.
         .background(StripAnchor(box: anchor))
     }
 }
 
-private struct StripButton: View {
-    let symbol: String
-    let help: String
-    let action: () -> Void
+/// The header's one "+": a new browser tab (a new session starts from the side panel). A right-click still offers
+/// the terminal tab the old second button made, so nothing that worked is lost.
+struct StripNewTabButton: View {
+    let newBrowser: () -> Void
+    var newTerminal: (() -> Void)?
     @State private var hovering = false
 
     var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
+        Button(action: newBrowser) {
+            Image(systemName: "plus")
                 .font(.system(size: 12, weight: .medium))
-                // A small + on the icon's top-right corner says "new" (Asad, 2026-10-07:
-                // this replaces the separate + in the toolbar).
-                .overlay(alignment: .topTrailing) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 8.5, weight: .heavy))
-                        .offset(x: 5, y: -5) // its first spot, a little higher (Asad, 2026-10-07)
-                }
-                .frame(width: TabStripLayout.buttonWidth, height: 28)
+                .frame(width: 26, height: 26)
                 .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(Color.primary.opacity(hovering ? 0.08 : 0)))
+                .frame(width: TabStripLayout.plusWidth, height: 28)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .onHover { hovering = $0 }
-        .help(help)
-        .accessibilityLabel(help)
+        .help("New browser tab")
+        .accessibilityLabel("New browser tab")
+        .contextMenu {
+            Button("New Browser Tab", action: newBrowser)
+            if let newTerminal { Button("New Terminal Tab", action: newTerminal) }
+        }
+    }
+}
+
+/// A tab's name: whole when it fits, else cut at the tab's edge with a short fade (never "N…").
+struct TabChipTitle: View {
+    let text: String
+    let weight: Font.Weight
+    static let fade: CGFloat = 14
+
+    private var label: some View {
+        Text(text).font(.system(size: 12, weight: weight)).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            label
+            label
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .clipped()
+                .mask {
+                    HStack(spacing: 0) {
+                        Rectangle()
+                        LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: Self.fade)
+                    }
+                }
+        }
+        .accessibilityLabel(text)
     }
 }
 
@@ -272,20 +333,19 @@ private struct StripButton: View {
 struct TabChip: View {
     let tab: TabItem
     var availableWidth: CGFloat = 220
-    private var iconOnly: Bool { availableWidth < 64 }
-    private var showsDetails: Bool { availableWidth >= 140 }
+    private var iconOnly: Bool { availableWidth < CGFloat(TabStripMetrics.titleFrom) }
+    private var wide: Bool { availableWidth >= 140 }
+    private var showsDetails: Bool { details && wide }
     /// The page on show is the terminal paper (else the plain window background).
     var paper = false
-    /// How far the selected tab reaches below the strip to meet the page (see StripAnchorBox).
-    var footGap: CGFloat = 0
-    /// A thin line after this tab (between two unselected tabs, as Chrome draws them).
-    var separatorAfter = false
     var favicon: NSImage? = nil
     let select: () -> Void
     let close: () -> Void
     let openInNewWindow: () -> Void
     /// "Open in Split View": this tab beside the one on show (nil: not offered for this tab).
     var openInSplit: (() -> Void)? = nil
+    /// From 140 pt a tab shows its project picture, status mark and browser chips.
+    var details = true
     @State private var hovering = false
 
     private var showsClose: Bool { hovering && tab.closable }
@@ -293,20 +353,19 @@ struct TabChip: View {
     private var activeInk: Color { paper ? NativeSessionChrome.ink : Color.primary }
     private var activeAccent: Color { paper ? NativeSessionChrome.accent : Color.accentColor }
 
-    /// The selected tab flows into the page; only unselected tabs have a hover wash.
-    @ViewBuilder private var chipBackground: some View {
-        if tab.active {
-            NativeChromeTabShape(corner: 8, flare: TabStripLayout.flare)
-                .fill(NativeChrome.page(kind: tab.kind, id: tab.id))
-                .padding(.top, TabStripLayout.topInset)
-                .padding(.bottom, -footGap)
-                .padding(.horizontal, -TabStripLayout.flare)
-        } else if hovering {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.07))
-                .padding(.top, TabStripLayout.topInset + 3)
-                .padding(.bottom, 4)
-        }
+    /// Every tab is a pill (owner, 18 Nov, with the tab row on screen: "make all of these as pill"): 26 pt high, a
+    /// quiet fill; the one on show wears the page's colour and a hairline, so it reads as the raised one.
+    private var chipBackground: some View {
+        Capsule(style: .continuous)
+            .fill(tab.active ? AnyShapeStyle(NativeChrome.page(kind: tab.kind, id: tab.id))
+                             : AnyShapeStyle(Color.primary.opacity(hovering ? 0.10 : 0.055)))
+            .overlay {
+                if tab.active { Capsule(style: .continuous).strokeBorder(Color.primary.opacity(0.16), lineWidth: 1) }
+            }
+            .shadow(color: .black.opacity(tab.active ? 0.10 : 0), radius: 1.5, y: 0.5)
+            .padding(.top, TabStripLayout.topInset + 2)
+            .padding(.bottom, 3)
+            .padding(.horizontal, 1)
     }
 
     var body: some View {
@@ -343,10 +402,8 @@ struct TabChip: View {
                 }
 
                 if !iconOnly {
-                    Text(tab.title)
-                        .font(.system(size: 12, weight: tab.active ? .medium : .regular))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    TabChipTitle(text: tab.title, weight: tab.active ? .medium : .regular)
+                        .layoutPriority(1) // the name takes the room first; the marks after it keep their own size
                     Spacer(minLength: 0)
                     if showsDetails {
                         StatusMark(status: tab.status)
@@ -357,21 +414,12 @@ struct TabChip: View {
                     }
                 }
             }
-            .padding(.horizontal, showsDetails ? 10 : 8)
+            .padding(.horizontal, wide ? 10 : 8)
             .padding(.top, TabStripLayout.topInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .foregroundStyle(tab.active ? activeInk : Color.secondary)
             .clipped()
             .background { chipBackground }
-            .overlay(alignment: .trailing) {
-                // Between two unselected tabs: a thin line, in the gap.
-                if separatorAfter && !hovering {
-                    Rectangle()
-                        .fill(Color.secondary.opacity(0.35))
-                        .frame(width: 1, height: 14)
-                        .offset(x: CGFloat(TabStripMetrics.spacing) / 2 + 0.5)
-                }
-            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -386,7 +434,7 @@ struct TabChip: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(tab.active ? activeInk : Color.secondary)
-                .padding(.leading, iconOnly ? max(0, (availableWidth - 28) / 2) : (showsDetails ? 4 : 2))
+                .padding(.leading, iconOnly ? max(0, (availableWidth - 28) / 2) : (wide ? 4 : 2))
                 .help("Close Tab")
                 .accessibilityLabel("Close \(tab.title)")
             }

@@ -255,8 +255,23 @@ private struct NativeScrapingText: View {
 @MainActor
 @Observable
 final class NativeScrapingModel {
-    var scope: CodingAIScope = .thisMachine
-    private(set) var machines = CodingAIMachinesView.empty
+    private var savedScope: CodingAIScope = .thisMachine
+    var scope: CodingAIScope {
+        get {
+            if case .device = savedScope, !NativeCloudOffers.shows(.remoteMachineChoices) { return .thisMachine }
+            return savedScope
+        }
+        set { savedScope = newValue }
+    }
+    private var savedMachines = CodingAIMachinesView.empty
+    var machines: CodingAIMachinesView {
+        get {
+            var shown = savedMachines
+            if !NativeCloudOffers.shows(.remoteMachineChoices) { shown.devices = [] }
+            return shown
+        }
+        set { savedMachines = newValue }
+    }
     private(set) var profiles: [ScrapingProfile] = []
     private(set) var editing = ""
     private(set) var config: ScrapingConfig?
@@ -311,7 +326,7 @@ final class NativeScrapingModel {
             EngineBridge.shared.on("machines:state") { [weak self] args in
                 guard let self else { return }
                 self.machines = CodingAIMachinesView.parse(CodingAIJSON(args.first))
-                self.scope = self.scope.after(devices: self.machines.devices)
+                self.savedScope = self.savedScope.after(devices: self.savedMachines.devices)
             },
             EngineBridge.shared.on("browser-scraping:changed") { [weak self] args in
                 if let status = Scraping.status(CodingAIJSON(args.first)) { self?.status = status }

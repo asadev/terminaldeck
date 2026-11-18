@@ -46,6 +46,8 @@ struct MACHINESDevicesScreen: View {
     }
 
     var body: some View {
+        Group {
+            if NativeCloudOffers.shows(.devices) {
         let page = self.page
         MACHINESPage(title: DevicesPage.title, subtitle: DevicesPage.subtitle, switcher: { EmptyView() }, actions: { EmptyView() }) {
             VStack(alignment: .leading, spacing: 16) {
@@ -71,6 +73,8 @@ struct MACHINESDevicesScreen: View {
         }
         .onDisappear { if !fixture { model.stop(); machines.stop() } }
         .onChange(of: machines.view, initial: true) { _, view in if !fixture { otherMacs.update(view) } }
+            }
+        }
     }
 
     // MARK: The one setting

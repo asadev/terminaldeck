@@ -18,9 +18,13 @@ struct NativeTerminalScreen: View {
     }
 
     var body: some View {
+        Group {
+            if NativeCloudOffers.showsSession(SessionTarget(tabId: sessionId)) {
         // One identity per session, so a different session never inherits this one's state.
         NativeTerminalPane(session: NativeTerminalSessions.shared.session(for: sessionId))
             .id(sessionId)
+            }
+        }
     }
 }
 
@@ -46,6 +50,8 @@ struct NativeSessionBody<Bar: View>: View {
     @Environment(\.colorScheme) private var windowScheme
 
     var body: some View {
+        Group {
+            if NativeCloudOffers.showsSession(session.target) {
         let isMain = window == nil || window === AppModel.shared.web.webView.window
         Group {
             if isMain, NativePoppedSessions.shared.window(for: session.sessionId) != nil {
@@ -64,7 +70,11 @@ struct NativeSessionBody<Bar: View>: View {
                             // A chat session shows Hoot's chat screen itself, on its own conversation (Asad, 13 Oct).
                             // One identity per session: a split pane or swarm cell that changes session must not keep
                             // the previous session's chat (its @State model, its box and draft) on the new one.
-                            if session.isChat { NativeHootChat(model: session.chatModel()).environment(\.sessionChatUsage, session.usageState).id(session.sessionId) }
+                            if session.isChat, case .machine(let machine, let chat) = session.target {
+                                NativeMachineChatLivePage(machineId: machine, chatId: chat, model: session.remoteChat, enabled: !session.movingHere)
+                            } else if session.isChat {
+                                NativeHootChat(model: session.chatModel()).environment(\.sessionChatUsage, session.usageState).id(session.sessionId)
+                            }
                             else { NativeTerminalHost(session: session) }
                             // 28 Oct: another device took the session while it was showing here. At once in, faded out
                             // when it is back (the terminal under it is already redrawn for this Mac by then).
@@ -82,8 +92,9 @@ struct NativeSessionBody<Bar: View>: View {
                                     .padding(8)
                             }
                             // Finished chats show their own saved transcript and status.
-                            if !session.isChat, let end = session.end {
-                                NativeSessionEndedCard(notice: end.notice, act: { session.act($0) })
+                            if !session.isChat, !session.movingHere, let end = session.end {
+                                NativeSessionEndedPage(end: end, ground: Color(nsColor: session.ground), act: { session.act($0) },
+                                                       close: { AppModel.shared.closeTab(session.sessionId) })
                                     .transition(.opacity)
                             }
                         }
@@ -98,12 +109,14 @@ struct NativeSessionBody<Bar: View>: View {
                 .onDisappear { session.screenDisappeared() }
             }
         }
-        .nativeSessionInputScope(ownerID: session.sessionId + (session.isChat ? "/" + session.chatModel().conversationID : ""))
+        .nativeSessionInputScope(ownerID: session.sessionId + (session.isChat && !session.isRemote ? "/" + session.chatModel().conversationID : ""))
         .background(NativeWindowReader { now in
             if let old = window, old !== now { NativePoppedSessions.shared.gone(session.sessionId, from: old) }
             window = now
             NativePoppedSessions.shared.shown(session.sessionId, in: now)
         })
+            }
+        }
     }
 }
 

@@ -163,6 +163,13 @@ final class AccountsSwitchRestartOfferTests: XCTestCase, @unchecked Sendable {
         await owner.exited(sessionID: live.id); try await owner.stop(afterProcessDrain: drained)
     }
 
+    func testRefusedAPIAccountHasOneSecureEditorDestination() {
+        let api = "api-key-" + String(repeating: "a", count: 24)
+        XCTAssertEqual(AccountSwitchWords.apiAccountToEdit(accountID: api, refused: true), api)
+        XCTAssertNil(AccountSwitchWords.apiAccountToEdit(accountID: api, refused: false))
+        XCTAssertNil(AccountSwitchWords.apiAccountToEdit(accountID: "subscription", refused: true))
+    }
+
     func testMissingAPIKeyIsRefusedBeforeAnySwitchOfferOrVaultRead() async throws {
         let (_, configuration) = try fixture(), cipher = RevivalCipher(locked: true)
         let owner = try await lockedService(configuration, cipher: cipher)

@@ -21,7 +21,19 @@ final class NativeCloudChats {
     static var sessionsAndChatsInSync: @MainActor () -> Bool = { true }
 
     /// Other machines' sessions of his account (never this Mac's own), newest use first.
-    private(set) var others: [BackendCloudSessionsRead.Row] = []
+    private(set) var fetchedOthers: [BackendCloudSessionsRead.Row] = []
+    /// Ownership may change before the local launcher answers. The original row stays until launch succeeds.
+    var others: [BackendCloudSessionsRead.Row] {
+        Self.retainingMoves(fetchedOthers, moves: Array(moves.values))
+    }
+    static func retainingMoves(_ rows: [BackendCloudSessionsRead.Row], moves: [BackendCloudSessionMoveEntry]) -> [BackendCloudSessionsRead.Row] {
+        var result = rows
+        for move in moves where move.role == .taker && move.step != .done && move.step != .cancelled {
+            guard let row = move.source else { continue }
+            if !result.contains(where: { $0.ref == row.ref }) { result.append(row) }
+        }
+        return result.sorted { ($0.lastUsedAt ?? 0) > ($1.lastUsedAt ?? 0) }
+    }
     /// Closed sessions whose chat is kept, every machine's, by the project they were in ("" = Independent).
     private(set) var earlier: [String: [BackendCloudSessionsRead.Row]] = [:]
     /// Every open session of the account, this Mac's own included (the Your Cloud page lists them all).
@@ -33,6 +45,16 @@ final class NativeCloudChats {
     }
     /// The account's machines by ref, with their current names and on/off.
     private(set) var machines: [String: BackendCloudSessionsRead.Machine] = [:]
+
+    /// The Cloud page and live tab name the same session, even if the live host stops listing it during a move.
+    private(set) var liveRefs: [String: String] = [:]
+    func bindLive(ref: String, tabId: String) { liveRefs[tabId] = ref }
+    func remoteRow(tabId: String) -> BackendCloudSessionsRead.Row? {
+        if let ref = liveRefs[tabId] { return row(ref: ref) }
+        guard case .machine(let machine, let id) = SessionTarget(tabId: tabId) else { return nil }
+        let snapshot = NativeMachineLinks.shared.snapshot
+        return others.first { row in snapshot.liveTwin(sessionId: row.sessionId, machineRef: row.machine, machineName: row.machineName)?.tabId == MachinesRules.tabId(machineId: machine, sessionId: id) }
+    }
 
     @ObservationIgnored private var uploader: BackendCloudChatsUploader?
     /// The delete rule's owner of chats (the Your Cloud page's "Sessions and chats" and an AI's `cloud.delete`).
@@ -73,9 +95,19 @@ final class NativeCloudChats {
     /// When this Mac last backed a project up (its list rows' `codeAt`); the Code page's actions, once.
     nonisolated(unsafe) static var codeAt: @Sendable (String) async -> Int64? = { _ in nil }
     func noteMove(_ entry: BackendCloudSessionMoveEntry) {
+        let wasMoving = moves[entry.ref].map { !$0.finished } == true
         moves[entry.ref] = entry
         if entry.role == .taker, entry.step == .done, let id = entry.launchedID, let line = entry.line, arrived.insert(entry.moveId).inserted {
             arrivals[id] = line
+            if wasMoving {
+                fetchedOthers.removeAll { $0.ref == entry.ref }
+                AppModel.shared.select(id)
+                // The local row exists before success. Retire only the viewer; never send a remote close.
+                for (tab, ref) in liveRefs where ref == entry.ref {
+                    AppModel.shared.buttonActions.retireRemoteViewer(tab)
+                    liveRefs[tab] = nil
+                }
+            }
         }
         // A finished move changes where the session runs: the lists are read again at once.
         if entry.finished { refreshSoon() }
@@ -128,7 +160,7 @@ final class NativeCloudChats {
         catchUp?.cancel(); catchUp = nil
         uploader = nil; deleteOwner = nil; send = nil; hootID = nil; salt = nil; listed = []; scannedAt = 0
         mover = nil; moves = [:]; moveNotes = [:]; seenMeta = [:]
-        others = []; open = []; earlier = [:]; machines = [:]; othersAt = 0; earlierAt = 0
+        fetchedOthers = []; open = []; earlier = [:]; machines = [:]; liveRefs = [:]; othersAt = 0; earlierAt = 0
     }
 
     /// Signed in, Cloud on here ("Use Cloud on this Mac"), not paused, and this kind in sync on this device.
@@ -201,7 +233,8 @@ final class NativeCloudChats {
             if let read = await BackendCloudSessionsRead.list(send, earlier: false) {
                 machines = Dictionary(read.machines.compactMap { machine in machine.ref.map { ($0, machine) } }, uniquingKeysWith: { first, _ in first })
                 open = read.rows.sorted { ($0.lastUsedAt ?? 0) > ($1.lastUsedAt ?? 0) }
-                others = open.filter { $0.mine != true }
+                fetchedOthers = open.filter { $0.mine != true }
+                NativeReachLive.shared.accountRefreshed()
                 // Step 2's fallback to the socket: a session of this Mac another Mac asked for.
                 for row in open where row.mine == true && row.move != nil { Task { await self.mover?.hint(ref: row.ref) } }
             }

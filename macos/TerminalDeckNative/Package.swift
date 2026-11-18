@@ -92,7 +92,7 @@ let package = Package(
                 "TerminalDeckPeer",
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
             ],
-            resources: [.copy("Resources/ChatLibraries")],
+            resources: [.copy("Resources/ChatLibraries"), .copy("Resources/whatsapp-add-agent.gif")],
             swiftSettings: hostReleaseSettings,
             linkerSettings: [
                 .linkedFramework("AppKit"),

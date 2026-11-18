@@ -123,8 +123,10 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
     /// The registered projects: this store's copy once read, else the list the app published at start.
     private var registry: [PROJProject] { store.projects.isEmpty ? PROJProjects.defaults : store.projects }
     private var running: [SidebarItem] {
-        NativeSessionRailContinuity.shared.project(SIDEBARLayout.running(state, liveIDs: store.liveIDs ?? [],
-                                                                         started: NativeSessionRailContinuity.shared.started(store.started))).filter { !NativeChatArchives.shared.contains($0.id) }
+        let cloud = NativeCloudChats.shared
+        return NativeSessionRailContinuity.shared.project(NativeRemoteSessionRows.running(state, localIDs: store.liveIDs ?? [],
+            links: NativeMachineLinks.shared.snapshot, liveRefs: cloud.liveRefs, moves: cloud.moves,
+            started: NativeSessionRailContinuity.shared.started(store.started))).filter { !NativeChatArchives.shared.contains($0.id) }
     }
     /// These exact rows are drawn below Running; their Retry uses the same key-only action as the renderer.
     var heldRows: [SIDEBARHeldSessionRow] {
@@ -171,7 +173,8 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
                         }
                     if pinnedPages.contains(where: { $0.id == Sidebar21Pages.projectsID }) { projectsSection }
                     // Sessions in the Cloud (15 Nov): his other machines' sessions sit with this Mac's own, each beside
-                    // the same project's, with one grey tag naming its machine; "Earlier chats" ends a project's run.
+                    // the same project's. 18 Nov (Asad: "we don't need this earlier chats here"): no "Earlier chats" lines in
+                    // this list; their page is opened from a session's or a project's menu.
                     let lines = runningLines(sessions)
                     if !lines.isEmpty || hostFailed {
                         header("Running")
@@ -185,8 +188,7 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
                                                        onAccent: isSelected(line.entry.id), selection: AnyView(selection(line.entry.id)),
                                                        open: { choose(line.entry.id) })
                             case .earlier:
-                                SIDEBAREarlierChatsRow(onAccent: isSelected(line.entry.id), selection: AnyView(selection(line.entry.id)),
-                                                       open: { choose(line.entry.id) })
+                                EmptyView() // never listed (18 Nov); `runningLines` asks for none
                             }
                         }
                     }
@@ -279,9 +281,9 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
         let rows = Dictionary(identified.map { ($0.item.id, $0) }, uniquingKeysWith: { first, _ in first })
         let cloud = NativeCloudChats.shared
         // One row per session (15 Nov): a Cloud row whose live twin is open here already is not listed again.
-        let others = NativeCloudLiveChoice.shownOthers(cloud.others, ownIDs: Set(sessions.map(\.id)), links: NativeMachineLinks.shared.snapshot)
+        let others = NativeCloudLiveChoice.shownOthers(NativeCloudOffers.shows(.otherComputerSessions) ? cloud.others : [], ownIDs: Set(sessions.map(\.id)), links: NativeMachineLinks.shared.snapshot, liveRefs: cloud.liveRefs)
         let entries = SIDEBARCloudRows.merge(own: sessions.map { (id: $0.id, project: sessionProject($0.id)?.id) }, others: others,
-                                             earlier: Set(cloud.earlier.keys))
+                                              earlier: [])
         return entries.map { entry in
             if case .own(let id) = entry, let row = rows[id] { return RunningLine(id: row.id, entry: entry, item: row.item) }
             return RunningLine(id: entry.id, entry: entry, item: nil)
@@ -295,7 +297,8 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
     private func sessionRow(_ session: SidebarItem, agents: [String: AGTAgent]) -> some View {
         let title = SIDEBARSessionLine.title(session, store: store)
         return SIDEBARSessionRow(session: session, title: title,
-                          chat: store.sessionChats.contains(session.id),
+                          chat: store.sessionChats.contains(session.id) || NativeRemoteSessionRows.chat(session.id, links: NativeMachineLinks.shared.snapshot)
+                            || NativeTerminalSessions.shared.isChat(session.id),
                           highlighted: Sidebar21Pages.selection(selected) == session.id,
                           onAccent: isSelected(session.id),
                           selection: AnyView(selection(session.id)),
@@ -328,6 +331,10 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
         Button("Open in new window") { openWindow(session) }
         Button("Rename…") { rename(session) }
         NativeConnectBrowserMenu(tabId: session.id)
+        // 18 Nov: the door to the kept chats of closed sessions, now that the list has no "Earlier chats" lines.
+        if !NativeCloudChats.shared.earlier.isEmpty {
+            Button(NativeCloudChats.earlierTitle) { choose(SIDEBARCloudRows.earlierPrefix + (sessionProject(session.id)?.id ?? "")) }
+        }
         // WhatsApp (DESIGN-WHATSAPP section 3): in the menu only; the row itself shows nothing new.
         if case .local(let id)? = SessionTarget(tabId: session.id) {
             NativeWhatsAppSubmenu(here: .session(id: id, name: SIDEBARSessionLine.title(session, store: store)))
@@ -438,6 +445,11 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
         .contextMenu {
             Button("New session here") { newSession(project.id) }
             Button("Project settings…") { choose(id + ":settings") }
+            if !NativeCloudChats.shared.earlier.isEmpty {
+                Button(NativeCloudChats.earlierTitle) {
+                    choose(SIDEBARCloudRows.earlierPrefix + (projectID == PROJProjects.independentID ? "" : projectID))
+                }
+            }
             Button("Show in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: project.id) }
             Button("Choose logo…") { chooseLogo(registry.first { $0.id == projectID } ?? SHELLRoutes.project(forPath: project.id)) }
             Divider()
@@ -483,18 +495,36 @@ struct SidebarSettingsLine: View {
     let model: AppModel
     @State private var keys = AiAppsSettingsModel.shared
     var body: some View {
+        // 18 Nov (Asad: "until somebody do not sign in, here it can stay and settings icon ... profile should not be
+        // made like this big until somebody is already signed in"): nobody signed in = only Settings, with its word.
+        let signedIn = NativeProfileFacts.current(NativeCloudAccount.shared).signedIn
         HStack(spacing: 8) {
-            SidebarProfileButton(enabled: model.canRun) { model.openSettings(section: NativeSettingsNavigation.profileID) }
+            if signedIn {
+                SidebarProfileButton(enabled: model.canRun) { model.openSettings(section: NativeSettingsNavigation.profileID) }
+            } else {
+                Button(action: model.requestSettings) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "gearshape").foregroundStyle(.secondary).frame(width: 18)
+                        Text("Settings").font(.system(size: 13)).foregroundStyle(.primary).lineLimit(1)
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(minHeight: 28, alignment: .leading).contentShape(.rect)
+                }
+                .buttonStyle(DeckSidebarRowStyle()).help("Settings (⌘,)").accessibilityLabel("Settings")
+                .disabled(!model.canRun)
+            }
             Spacer(minLength: 0)
             // A key a tool made waits in Settings › AI apps (it never opens Settings by itself).
             if keys.made != nil {
                 Image(systemName: "key.fill").font(.caption).foregroundStyle(.orange)
                     .help("A new AI app key is waiting in Settings › AI apps").accessibilityLabel("A new key is waiting in Settings")
             }
-            Button(action: model.requestSettings) {
-                Image(systemName: "gearshape").frame(width: 28, height: 28).contentShape(.rect)
-            }.buttonStyle(DeckSidebarIconStyle()).fixedSize().help("Settings (⌘,)").accessibilityLabel("Settings")
-                .disabled(!model.canRun)
+            if signedIn {
+                Button(action: model.requestSettings) {
+                    Image(systemName: "gearshape").frame(width: 28, height: 28).contentShape(.rect)
+                }.buttonStyle(DeckSidebarIconStyle()).fixedSize().help("Settings (⌘,)").accessibilityLabel("Settings")
+                    .disabled(!model.canRun)
+            }
         }.foregroundStyle(.secondary)
     }
 }
@@ -737,7 +767,9 @@ private struct SIDEBARSessionRow<MenuItems: View>: View {
         }
     }
 
-    private var icon: some View { SIDEBARSessionTypeIcon(chat: chat, onAccent: onAccent) }
+    private var icon: some View {
+        SIDEBARSessionTypeIcon(chat: chat, onAccent: onAccent, working: SIDEBARSessionTypeIcon.working(status: session.status))
+    }
 
     private var row: some View {
         Button(action: open) {
@@ -891,12 +923,16 @@ private final class SIDEBARRenameWatch {
     }
 }
 
-/// A held tab has no terminal to open. Keep its reason on screen and give its one action a plain name.
+/// A session that was not reopened (18 Nov, Asad: "this reopen retry does not do anything, and why even does it comes
+/// here"): ONE quiet line like any session row. Its reason is the tooltip; "Reopen" shows at the row's end while the
+/// pointer is on it, in room that is always kept, so nothing moves. The whole row is the press: `retry`, the held
+/// row's own route (`held:<key>`, `session:held-retry`), which the logic lane of 18 Nov makes really reopen it.
 struct SIDEBARHeldSessionRow: View, Identifiable {
     let session: SidebarItem
     var folder: String?
     let retry: () -> Void
     nonisolated var id: String { session.id }
+    @State private var hovering = false
     var title: String { folder.map { $0 + " · " + session.title } ?? session.title }
     var statusText: String {
         if let help = session.help {
@@ -906,26 +942,31 @@ struct SIDEBARHeldSessionRow: View, Identifiable {
         return session.subtitle ?? "Not reopened"
     }
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: session.symbol).foregroundStyle(.secondary).frame(width: 18)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text(title).fontWeight(.medium).lineLimit(1).truncationMode(.tail)
-                    Spacer(minLength: 4)
-                    Button("Retry", action: retry)
-                        .buttonStyle(.plain).foregroundStyle(.secondary)
-                        .accessibilityLabel("Retry " + title)
-                        .accessibilityIdentifier("restart-held-retry-" + id)
-                }
-                Text(statusText).font(.system(size: 11)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel(statusText)
-                    .accessibilityIdentifier("restart-held-reason-" + id)
+        Button(action: retry) {
+            HStack(spacing: 8) {
+                SIDEBARSessionTypeIcon(chat: SIDEBARProjectStore.shared.sessionChats.contains(session.id)).opacity(0.55)
+                Text(title).lineLimit(1).truncationMode(.tail).foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Color.clear.frame(width: 46, height: 1) // Reopen's room
             }
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: DeckSidebar.rowHeight, alignment: .leading)
+            .contentShape(.rect)
         }
-        .padding(.horizontal, 8).padding(.vertical, 4)
-        .frame(maxWidth: .infinity, minHeight: DeckSidebar.rowHeight, alignment: .leading)
-        .accessibilityElement(children: .contain)
+        .buttonStyle(DeckSidebarRowStyle())
+        // On the button itself, so it stays ONE pressable element for VoiceOver (its press is the row's press).
+        .accessibilityLabel(title + ", not reopened")
+        .accessibilityHint(statusText)
+        .accessibilityIdentifier("restart-held-retry-" + id)
+        .help(statusText)
+        .overlay(alignment: .trailing) {
+            Text("Reopen").font(.system(size: 11, weight: .medium)).foregroundStyle(Color.accentColor)
+                .padding(.trailing, 8)
+                .opacity(hovering ? 1 : 0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        .onHover { hovering = $0 }
     }
 }
 

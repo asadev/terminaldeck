@@ -7,27 +7,48 @@ public enum BackendAPIAccountKeychain {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: record.keychainService,
          kSecAttrAccount as String: record.keychainAccount, kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail]
     }
-    public static func contains(_ record: BackendAPIAccountRecord) -> Bool {
-        var query = query(record); query[kSecReturnAttributes as String] = true; query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var value: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &value) == errSecSuccess,
-              let attributes = value as? [String: Any] else { return false }
-        return attributes[kSecAttrGeneric as String] as? Data == record.credentialScope
+    public enum Availability: String, Sendable, Error, LocalizedError {
+        case available, missing, accessUnavailable, differentEndpoint
+
+        public var errorDescription: String? { detail }
+        public var detail: String {
+            switch self {
+            case .available: "API credential configured"
+            case .missing: "No API key is saved for this account. Enter its key to switch."
+            case .accessUnavailable: "Keychain could not check this account's API key. Unlock the login Keychain, then try again."
+            case .differentEndpoint: "The saved API key belongs to this account's previous connection. Enter a key for the current endpoint."
+            }
+        }
     }
+    /// Metadata only, without a prompt or credential bytes. Absence is not an access denial.
+    public static func availability(_ record: BackendAPIAccountRecord) -> Availability {
+        var lookup = query(record)
+        lookup[kSecReturnAttributes as String] = true
+        lookup[kSecMatchLimit as String] = kSecMatchLimitOne
+        var value: CFTypeRef?
+        let status = SecItemCopyMatching(lookup as CFDictionary, &value)
+        return availability(status: status, attributes: value as? [String: Any], record: record)
+    }
+    static func availability(status: OSStatus, attributes: [String: Any]?, record: BackendAPIAccountRecord) -> Availability {
+        if status == errSecItemNotFound { return .missing }
+        guard status == errSecSuccess, let attributes else { return .accessUnavailable }
+        return attributes[kSecAttrGeneric as String] as? Data == record.credentialScope ? .available : .differentEndpoint
+    }
+    public static func contains(_ record: BackendAPIAccountRecord) -> Bool { availability(record) == .available }
     public static func read(_ record: BackendAPIAccountRecord) throws -> String {
         var query = query(record); query[kSecReturnData as String] = true; query[kSecReturnAttributes as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var value: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &value)
         guard status == errSecSuccess, let attributes = value as? [String: Any] else {
-            throw BackendAccountFailure("The API key is missing or Keychain access is unavailable (\(status)).")
+            throw status == errSecItemNotFound ? Availability.missing : Availability.accessUnavailable
         }
         guard attributes[kSecAttrGeneric as String] as? Data == record.credentialScope else {
-            throw BackendAccountFailure("Enter an API key for this connection's endpoint.")
+            throw Availability.differentEndpoint
         }
         guard
               let data = attributes[kSecValueData as String] as? Data, let key = String(data: data, encoding: .utf8), !key.isEmpty else {
-            throw BackendAccountFailure("The API key is missing or Keychain access is unavailable (\(status)).")
+            throw BackendAccountFailure("The saved API key could not be read. Enter its key again in this account’s secure field.")
         }
         return key
     }
@@ -39,10 +60,13 @@ public enum BackendAPIAccountKeychain {
         var value: CFTypeRef?
         let status = SecItemCopyMatching(lookup as CFDictionary, &value)
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let attributes = value as? [String: Any],
-              attributes[kSecAttrGeneric as String] as? Data == record.credentialScope,
-              let bytes = attributes[kSecValueData as String] as? Data,
-              let key = String(data: bytes, encoding: .utf8), !key.isEmpty else { throw BackendAccountFailure("The saved API key is locked.") }
+        let attributes = value as? [String: Any]
+        let state = availability(status: status, attributes: attributes, record: record)
+        guard state == .available else { throw state }
+        guard let bytes = attributes?[kSecValueData as String] as? Data,
+              let key = String(data: bytes, encoding: .utf8), !key.isEmpty else {
+            throw BackendAccountFailure("The saved API key could not be read.")
+        }
         return key
     }
     public static func validate(_ key: String) throws {

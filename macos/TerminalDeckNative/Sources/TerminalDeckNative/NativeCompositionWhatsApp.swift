@@ -55,14 +55,17 @@ actor NativeWhatsAppReceivers: WhatsAppReceiverPort {
     private let chats: BackendSessionChats
     private let manager: BackendPTYManager
     private let hootConversations: BackendHootTaskConversations?
+    private let readTerminalRecord: @Sendable (String) async -> WhatsAppTerminalRecord?
     private let startAgent: @Sendable (_ agentID: String, _ title: String) async throws -> String
     /// WhatsApp agent id -> the session of its Hoot or agent conversation in this run of the app.
     private var lasting: [String: String] = [:]
     private var hootRuntimes: [String: BackendCopilotSessionRuntime] = [:]
 
     init(chats: BackendSessionChats, manager: BackendPTYManager, hootConversations: BackendHootTaskConversations?,
+         terminalRecord: @escaping @Sendable (String) async -> WhatsAppTerminalRecord?,
          startAgent: @escaping @Sendable (String, String) async throws -> String) {
         self.chats = chats; self.manager = manager; self.hootConversations = hootConversations; self.startAgent = startAgent
+        readTerminalRecord = terminalRecord
     }
 
     private func alive(_ id: String) -> Bool { manager.list().contains { $0.id == id && $0.exitCode == nil } }
@@ -134,6 +137,7 @@ actor NativeWhatsAppReceivers: WhatsAppReceiverPort {
     }
 
     func type(_ target: WhatsAppTarget, text: String) async throws { try manager.write(target.sessionID, data: text) }
+    func terminalRecord(_ target: WhatsAppTarget) async -> WhatsAppTerminalRecord? { await readTerminalRecord(target.sessionID) }
     func screen(_ target: WhatsAppTarget) async -> String? { manager.screen(target.sessionID) }
     func isOpen(_ target: WhatsAppTarget) async -> Bool { target.isTerminal ? alive(target.sessionID) : await chats.isChat(target.sessionID) }
     func isToolSession(_ target: WhatsAppTarget, _ sessionID: String) async -> Bool {
@@ -156,7 +160,7 @@ extension NativeCompositionProduction {
     /// Starts WhatsApp agents once the sessions, the chat owners and Hoot exist. Nothing is read from WhatsApp until he
     /// has added an agent; one engine per app.
     func installWhatsApp() async {
-        guard NativeWhatsAppEngineBox.shared.engine == nil, let chats = sessionChats, let sessions, let authority else { return }
+        guard NativeWhatsAppEngineBox.shared.engine == nil, let chats = sessionChats, let sessions, let authority, let usage else { return }
         let appName = configuration.appName
         let keeper = NativeWhatsAppEngineBox.shared.keeper(appName: appName)
         let registry = root.registry, lifecycle = sessions.lifecycle
@@ -175,7 +179,23 @@ extension NativeCompositionProduction {
             let meta = try await lifecycle.create(input, context: .init(rememberTab: false, fromAI: false), holdOnFailure: false)
             return meta.id
         }
-        let receivers = NativeWhatsAppReceivers(chats: chats, manager: sessions.manager, hootConversations: hoot?.taskConversations, startAgent: startAgent)
+        let locate = agentRecordLocator()
+        let terminalRecord: @Sendable (String) async -> WhatsAppTerminalRecord? = { id in
+            let rows = sessions.manager.list().map { BackendSessionDirectory.row($0) }
+            guard let session = rows.first(where: { $0["id"].string == id }),
+                  ["claude", "codex", "gemini"].contains(session["provider"].string ?? ""),
+                  let context = try? authority.localContext(),
+                  let record = try? await BackendDeckToolsSessionsArea.answerRecord(session, sessions: rows,
+                    source: .native(cost: usage.cost, context: context, locate: locate, mergeAgentTurn: false), maximumChars: nil) else { return nil }
+            let endedAt: Double?
+            if session["provider"].string == "claude" {
+                guard let center = DeckMemorySessionCenter.shared else { return nil }
+                endedAt = center.lastTurnEndedAt(sessionID: id)
+            } else { endedAt = record.completedAt }
+            return WhatsAppTerminalRecord(answer: record.answer?["text"].string, answeredAt: record.answer?["at"].number,
+                endedAt: endedAt)
+        }
+        let receivers = NativeWhatsAppReceivers(chats: chats, manager: sessions.manager, hootConversations: hoot?.taskConversations, terminalRecord: terminalRecord, startAgent: startAgent)
         let engine = BackendWhatsAppAgents(transport: WhatsAppHTTPTransport(), settings: BackendWhatsAppSettingsStore(store: root.settings),
             keys: keeper, presence: NativeWhatsAppPresence(), receivers: receivers,
             removeEverywhere: { id in

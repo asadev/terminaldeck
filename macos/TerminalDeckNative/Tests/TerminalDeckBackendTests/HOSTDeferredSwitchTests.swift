@@ -29,6 +29,75 @@ final class HOSTDeferredSwitchTests: XCTestCase, @unchecked Sendable {
             XCTAssertEqual(state.metadata.profileId, sourceAPI ? api : "previous")
         }
     }
+    func testRapidPicksReplacePendingRereadsAndOnlyTheLatestLoginCanConfirm() async throws {
+        let (owner, state, events) = try fixture()
+        for target in ["target", "next", "third", "fourth"] {
+            let row = try await owner.request(sessionID: state.id, targetID: target, status: .waiting, deferUntilIdle: false)
+            XCTAssertEqual(row.phase, .awaitingReread)
+            XCTAssertEqual(row.previousID, "previous")
+            XCTAssertEqual(state.metadata.profileId, "previous", "A pick does not invent proof that the CLI reread it")
+        }
+        XCTAssertEqual(state.retargets, ["target", "next", "third", "fourth"])
+        await owner.noteLookup(state.lookup(account: "target"))
+        await owner.noteLookup(state.lookup(account: "third"))
+        XCTAssertEqual(events.confirmedCount, 0)
+        let waiting = await owner.list()
+        XCTAssertEqual(waiting.map(\.targetID), ["fourth"])
+        await owner.noteLookup(state.lookup(account: "fourth"))
+        XCTAssertEqual(state.metadata.profileId, "fourth")
+        XCTAssertEqual(events.confirmedCount, 1)
+        let remaining = await owner.list()
+        XCTAssertTrue(remaining.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: state.nudge.path))
+    }
+    func testCancelAfterSeveralRapidPicksRestoresTheLastConfirmedLogin() async throws {
+        let (owner, state, _) = try fixture()
+        for target in ["target", "next", "third"] {
+            _ = try await owner.request(sessionID: state.id, targetID: target, status: .waiting, deferUntilIdle: false)
+        }
+        try await owner.cancel(sessionID: state.id)
+        XCTAssertEqual(state.retargets, ["target", "next", "third", "previous"])
+        XCTAssertEqual(state.metadata.profileId, "previous")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: state.nudge.path))
+    }
+    func testRefusedLaterPickKeepsTheEarlierPendingLogin() async throws {
+        let root = URL(fileURLWithPath: "/tmp").resolvingSymlinksInPath().appendingPathComponent("tdh-switch-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let state = try HOSTSwitchFixture(root: root, provider: "claude")
+        var operations = state.operations
+        let dependencies = operations.dependencies
+        operations.dependencies = {
+            var value = await dependencies()
+            value.source = { id in id == "unavailable" ? nil : .vault }
+            return value
+        }
+        let owner = BackendHOSTDeferredSwitch(operations: operations, changed: { _ in })
+        _ = try await owner.request(sessionID: state.id, targetID: "target", status: .waiting, deferUntilIdle: false)
+        do {
+            _ = try await owner.request(sessionID: state.id, targetID: "unavailable", status: .waiting, deferUntilIdle: false)
+            XCTFail("Unavailable later pick must refuse")
+        } catch {}
+        let pending = await owner.list()
+        XCTAssertEqual(pending.map(\.targetID), ["target"])
+        XCTAssertEqual(state.retargets, ["target"])
+        await owner.noteLookup(state.lookup())
+        XCTAssertEqual(state.metadata.profileId, "target")
+    }
+    func testDeferringALaterPickDoesNotLoseTheLoginAlreadyWaitingForProof() async throws {
+        let (owner, state, _) = try fixture()
+        _ = try await owner.request(sessionID: state.id, targetID: "target", status: .waiting, deferUntilIdle: false)
+        do {
+            _ = try await owner.request(sessionID: state.id, targetID: "next", status: .working, deferUntilIdle: true)
+            XCTFail("An already-applied login must not disappear behind a deferred pick")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("Switch now")) }
+        XCTAssertEqual(state.retargets, ["target"])
+        let remaining = await owner.list()
+        XCTAssertEqual(remaining.map(\.targetID), ["target"])
+        await owner.noteLookup(state.lookup())
+        XCTAssertEqual(state.metadata.profileId, "target")
+    }
+
     func testSamePidMetadataChangesOnlyAfterProvenTargetReread() async throws {
         let (owner, state, events) = try fixture()
         let row = try await owner.request(sessionID: state.id, targetID: "target", status: .waiting, deferUntilIdle: false)

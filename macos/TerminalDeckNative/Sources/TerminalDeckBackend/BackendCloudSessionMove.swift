@@ -210,6 +210,10 @@ public struct BackendCloudSessionMoveEntry: Codable, Sendable, Equatable {
     /// Taker: the finished move as the service answered it (forced or released, what it held).
     public var last: BackendCloudSessionMoveWire.Done?
     public var codeAt: Int64?
+    /// The original row survives the owner disappearing from the other-machine list, including after restart.
+    public var source: BackendCloudSessionsRead.Row?
+    /// A failed attempt may be retried explicitly from this stage; failure is no longer displayed as moving.
+    public var resumeStep: Step?
     public var rawGen: Int?
     /// Set BEFORE the AI starts; the started session's id after. Never two launches for one move.
     public var launchId: String?
@@ -352,6 +356,7 @@ public actor BackendCloudSessionMove {
     public static let takeEveryMs: Int64 = 15_000
     /// Past 15 minutes from the ask the service refuses `wait`; the taker gives up looking a little after.
     public static let giveUpMs: Int64 = 16 * 60_000
+    public static let noAnswerMs: Int64 = 45_000
     /// A release refused for lengths is sent again after the rest went up, this many times.
     public static let releaseTries = 5
 
@@ -362,10 +367,20 @@ public actor BackendCloudSessionMove {
     private var running: Set<String> = []
     /// Tests drive each step themselves (`driveForTesting`); the app runs them in the background.
     let autoStart: Bool
+    let attemptSeconds: Double
+    private var preparing: Set<String> = []
+    private var launches: [String: Task<String, Error>] = [:]
 
     /// `file`: `<data>/cloud-moves.json`; the chat comes down into `<data>/cloud-moves/`.
-    public init(ports: Ports, file: URL?, autoStart: Bool = true) {
-        self.ports = ports
+    public init(ports: Ports, file: URL?, autoStart: Bool = true,
+                requestSeconds: Double = 20, attemptSeconds: Double = Double(BackendCloudSessionMove.giveUpMs) / 1000) {
+        var bounded = ports
+        let send = ports.send
+        bounded.send = { method, path, body in
+            try await BackendAppDeviceDeadline.run(within: requestSeconds, "Your Cloud") { try await send(method, path, body) }
+        }
+        self.ports = bounded
+        self.attemptSeconds = attemptSeconds
         self.file = file
         self.autoStart = autoStart
         directory = file?.deletingLastPathComponent().appendingPathComponent("cloud-moves", isDirectory: true)
@@ -379,7 +394,19 @@ public actor BackendCloudSessionMove {
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(entries) { try? data.write(to: file, options: .atomic) }
     }
-    func set(_ entry: BackendCloudSessionMoveEntry) async {
+    func set(_ value: BackendCloudSessionMoveEntry) async {
+        guard !Task.isCancelled else { return }
+        var entry = value
+        if entry.role == .taker, !entry.finished, entry.step != .asked {
+            entry.line = BackendCloudSessionMoveWords.progress(entry.step, other: entry.other)
+            entry.lineAt = ports.now()
+        }
+        let previous = entries[entry.ref]
+        if previous?.cancelAsked == true, entry.step == .asked { entry.cancelAsked = true }
+        if previous?.step != entry.step || previous?.line != entry.line {
+            // No payloads, account details or credentials: the next real report can identify the failed stage.
+            BackendRemoteRelayClient.note("cloud move: \(entry.role.rawValue) \(entry.step.rawValue) after \(max(0, ports.now() - entry.startedAt) / 1000) s")
+        }
         entries[entry.ref] = entry
         save()
         await ports.changed(entry)
@@ -399,14 +426,31 @@ public actor BackendCloudSessionMove {
     @discardableResult
     public func switchHere(ref: String) async -> String {
         if let current = entries[ref], !current.finished, current.role == .taker { return current.line ?? BackendCloudSessionMoveWords.moving(current.other) }
-        guard let row = await ports.row(ref) else { return BackendCloudSessionMoveWords.notFound }
+        if var current = entries[ref], current.role == .taker, let resume = current.resumeStep {
+            current.step = resume; current.resumeStep = nil; current.cancelAsked = false; current.startedAt = ports.now()
+            await say(&current, BackendCloudSessionMoveWords.moving(current.other))
+            start(ref)
+            return current.line ?? ""
+        }
+        guard preparing.insert(ref).inserted else { return BackendCloudSessionMoveWords.preparing }
+        defer { preparing.remove(ref) }
+        let row: BackendCloudSessionsRead.Row
+        do {
+            guard let found = try await BackendAppDeviceDeadline.run(within: 20, "Reading this session", { await self.ports.row(ref) }) else {
+                return BackendCloudSessionMoveWords.notFound
+            }
+            row = found
+        } catch { return BackendCloudSessionMoveWords.noAnswer }
         if row.mine == true { return BackendCloudSessionMoveWords.alreadyHere }
         if row.closedAt != nil { return BackendCloudSessionMoveWords.earlier }
         let other = BackendCloudSessionMoveWords.machine(row.machineName)
         let terminal = BackendCloudSessionMoveWords.isTerminal(row)
         // 1. The AI account first: with none for that AI here, nothing is asked and nothing stops anywhere.
-        if !terminal, case .none = await ports.account(row.ai ?? "claude", row.login) {
-            return BackendCloudSessionMoveWords.signIn(row.ai)
+        if !terminal {
+            do {
+                let account = try await BackendAppDeviceDeadline.run(within: 20, "Checking this Mac’s AI account") { await self.ports.account(row.ai ?? "claude", row.login) }
+                if case .none = account { return BackendCloudSessionMoveWords.signIn(row.ai) }
+            } catch { return "This Mac’s AI account check did not finish. Try again." }
         }
         let answer: BackendCloudSessionMoveWire.Answer
         switch await BackendCloudSessionMoveWire.call(ports.send, ref: ref, action: "ask") {
@@ -420,6 +464,7 @@ public actor BackendCloudSessionMove {
         var entry = BackendCloudSessionMoveEntry(ref: ref, sessionId: answer.sessionId ?? row.sessionId ?? ref, role: .taker, step: .asked,
                                                  moveId: move.id, other: BackendCloudSessionMoveWords.machine(move.from?.name ?? row.machineName),
                                                  startedAt: move.at ?? ports.now())
+        entry.source = row
         await say(&entry, BackendCloudSessionMoveWords.moving(entry.other))
         start(ref)
         return entry.line ?? ""
@@ -432,8 +477,8 @@ public actor BackendCloudSessionMove {
         guard entry.step == .asked else { return BackendCloudSessionMoveWords.tooLateToCancel }
         if running.contains(ref) {
             entry.cancelAsked = true
-            await set(entry)
-            return BackendCloudSessionMoveWords.cancelled
+            await say(&entry, BackendCloudSessionMoveWords.cancelling)
+            return BackendCloudSessionMoveWords.cancelling
         }
         return await cancelNow(&entry)
     }
@@ -452,8 +497,8 @@ public actor BackendCloudSessionMove {
             return BackendCloudSessionMoveWords.cancelled
         case .refused, .lost:
             entry.cancelAsked = false
-            await set(entry)
-            return BackendCloudSessionMoveWords.noAnswer
+            await fail(&entry, BackendCloudSessionMoveWords.unconfirmed, keep: true)
+            return BackendCloudSessionMoveWords.unconfirmed
         }
     }
 
@@ -478,11 +523,18 @@ public actor BackendCloudSessionMove {
     }
 
     func drive(_ ref: String) async {
-        guard let entry = entries[ref] else { return }
-        switch entry.role {
-        case .taker: await take(ref)
-        case .giver: await give(ref)
-        case .stopped: await stopWoken(ref)
+        guard let initial = entries[ref], !initial.finished else { return }
+        do {
+            try await BackendAppDeviceDeadline.run(within: attemptSeconds, "Moving this session") {
+                switch initial.role {
+                case .taker: await self.take(ref)
+                case .giver: await self.give(ref)
+                case .stopped: await self.stopWoken(ref)
+                }
+            }
+        } catch {
+            guard var entry = entries[ref], entry.moveId == initial.moveId, !entry.finished else { return }
+            await fail(&entry, BackendCloudSessionMoveWords.timedOut(entry.step), keep: true)
         }
     }
 
@@ -491,12 +543,34 @@ public actor BackendCloudSessionMove {
         if entry.step == .asked {
             // 2. Waiting for the old Mac; the service decides when a take is allowed.
             var triedAt: Int64 = 0
+            var lastAnswerAt = ports.now()
             while entry.step == .asked {
-                if entries[ref]?.cancelAsked == true { await cancelNow(&entry); return }
-                guard case .answer(let look) = await BackendCloudSessionMoveWire.call(ports.send, ref: ref, action: "look") else {
+                guard !Task.isCancelled else { return }
+                // Check before the request: a lost/refused answer must not bypass the deadline.
+                if ports.now() - entry.startedAt >= Self.giveUpMs {
+                    _ = await cancelNow(&entry)
+                    if entry.step == .asked { await fail(&entry, BackendCloudSessionMoveWords.unconfirmed, keep: true) }
+                    if entry.step != .owner { return }
+                    break
+                }
+                if entries[ref]?.cancelAsked == true {
+                    _ = await cancelNow(&entry)
+                    if entry.step != .owner { return }
+                    break
+                }
+                let looked = await BackendCloudSessionMoveWire.call(ports.send, ref: ref, action: "look")
+                guard !Task.isCancelled else { return }
+                guard case .answer(let look) = looked else {
+                    if case .refused = looked {
+                        await fail(&entry, BackendCloudSessionMoveWords.unconfirmed, keep: true); return
+                    }
+                    if ports.now() - lastAnswerAt >= Self.noAnswerMs {
+                        await fail(&entry, BackendCloudSessionMoveWords.unconfirmed, keep: true); return
+                    }
                     do { try await ports.sleep(Self.lookMs) } catch { return }
                     continue
                 }
+                lastAnswerAt = ports.now()
                 if look.ownedHere, let last = look.last, last.id == entry.moveId {
                     entry.last = last; entry.codeAt = look.codeAt; entry.step = .owner; break
                 }
@@ -515,9 +589,6 @@ public actor BackendCloudSessionMove {
                         if taken.code == "move_changed" { continue }
                     }
                 }
-                if now - entry.startedAt > Self.giveUpMs {
-                    await cancelNow(&entry); return
-                }
                 // A `wait` from the old Mac (heardAt) means a reply is being written there.
                 let replying = (look.move?.heardAt ?? 0) > (look.move?.at ?? .max)
                 let line = replying ? BackendCloudSessionMoveWords.replying(entry.other) : BackendCloudSessionMoveWords.moving(entry.other)
@@ -526,7 +597,9 @@ public actor BackendCloudSessionMove {
             }
             await set(entry)
         }
-        guard let row = await ports.row(ref) else { await fail(&entry, BackendCloudSessionMoveWords.noAnswer, keep: true); return }
+        guard !Task.isCancelled else { return }
+        guard let row = await ports.row(ref) ?? entry.source else { await fail(&entry, BackendCloudSessionMoveWords.unconfirmed, keep: true); return }
+        guard !Task.isCancelled else { return }
         let terminal = BackendCloudSessionMoveWords.isTerminal(row)
         var account = BackendCloudSessionMove.Account.none
         if !terminal {
@@ -536,6 +609,7 @@ public actor BackendCloudSessionMove {
         // 3. The chat: what the Cloud held when it was handed over (or taken), never less.
         var raw: URL?, tools: [String: URL] = [:]
         let held = entry.last?.held?.streams ?? [:]
+        guard !Task.isCancelled else { return }
         if !terminal, entry.step == .owner || entry.step == .chat {
             entry.step = .chat; await set(entry)
             guard let folder = moveFolder(ref) else { await fail(&entry, BackendCloudSessionMoveWords.noAnswer, keep: true); return }
@@ -548,7 +622,9 @@ public actor BackendCloudSessionMove {
                 entry.rawGen = got.gen
                 raw = file
             }
+            guard !Task.isCancelled else { return }
             for (stream, wanted) in held.sorted(by: { $0.key < $1.key }) where stream.hasPrefix("tool:") {
+                guard !Task.isCancelled else { return }
                 let name = String(stream.dropFirst(5))
                 guard name.range(of: "^[A-Za-z0-9._-]{1,100}$", options: .regularExpression) != nil, !name.hasPrefix(".") else { continue }
                 let tool = folder.appendingPathComponent("tools", isDirectory: true).appendingPathComponent(name)
@@ -562,22 +638,26 @@ public actor BackendCloudSessionMove {
         }
         // 4. The code: this Mac's own folder backed up, its own changes put aside in Git, the old Mac's code laid in.
         var code: BackendCodeBackupTakeCode.Result?
+        guard !Task.isCancelled else { return }
         let place = await ports.folder(row)
+        guard !Task.isCancelled else { return }
         if entry.step == .code {
             if let place {
                 if !place.made { _ = await ports.ownBackup(place.projectID, place.path) }
+                guard !Task.isCancelled else { return }
                 let release = entry.last?.release
                 let named = BackendCodeBackupTakeCode.Named(branch: release?.branch, headSha: release?.headSha, workSha: release?.workSha,
                                                             fromMac: entry.other, codeAt: entry.codeAt ?? release?.codeAt ?? row.codeAt)
                 code = await ports.takeCode(.init(folder: place, named: named, pending: entry.codePending)) { pending in
                     await self.recordCode(ref, pending)
                 }
+                guard !Task.isCancelled else { return }
                 entry.codePending = entries[ref]?.codePending
             }
             entry.step = .launching; await set(entry)
         }
         // 5. The AI resumed through the app's normal launcher, ONCE.
-        guard entry.step == .launching else { return }
+        guard !Task.isCancelled, entry.step == .launching else { return }
         if entry.launchedID == nil {
             if entry.launchId != nil, let already = await ports.local(entry.sessionId) {
                 entry.launchedID = already.id
@@ -588,6 +668,7 @@ public actor BackendCloudSessionMove {
                 case .same(let id, let home), .other(let id, _, let home):
                     profileID = id
                     if let raw, let conversation = row.conversationId {
+                        guard !Task.isCancelled else { return }
                         do {
                             try await ports.place(.init(downloaded: raw, tools: tools, provider: row.ai ?? "claude", conversationId: conversation,
                                                         oldCwd: row.cwd ?? cwd, newCwd: cwd, home: home,
@@ -598,17 +679,31 @@ public actor BackendCloudSessionMove {
                 }
                 entry.launchId = entry.launchId ?? UUID().uuidString.lowercased()
                 await set(entry)
-                let request = LaunchRequest(launchId: entry.launchId!, sessionId: entry.sessionId, name: row.name ?? "Session", cwd: cwd,
+                guard !Task.isCancelled else { return }
+                let request = LaunchRequest(launchId: entry.launchId!, sessionId: entry.sessionId, name: entry.source?.name ?? row.name ?? "Session", cwd: cwd,
                                             provider: terminal ? "shell" : (row.ai ?? "claude"), terminal: terminal,
                                             chat: row.kind == "chat", profileID: profileID,
                                             conversationId: terminal ? nil : row.conversationId, projectID: place?.projectID)
-                do { entry.launchedID = try await ports.launch(request) }
+                do { entry.launchedID = try await launchOnce(request) }
                 catch { await fail(&entry, BackendCloudSessionMoveWords.notStarted, keep: true); return }
             }
         }
-        entry.step = .done
+        guard !Task.isCancelled else { return }
+        entry.step = .done; entry.resumeStep = nil
         await say(&entry, BackendCloudSessionMoveWords.moved(entry: entry, row: row, terminal: terminal, account: account, code: code, folder: place))
+        if let launch = entry.launchId { launches[launch] = nil }
         if let folder = moveFolder(ref) { try? FileManager.default.removeItem(at: folder) }
+    }
+
+    /// A deadline may stop waiting while creation is still in flight. Retrying joins that same creation, so two
+    /// attempts with the same journalled launch id cannot start two sessions.
+    private func launchOnce(_ request: LaunchRequest) async throws -> String {
+        if let task = launches[request.launchId] { return try await task.value }
+        let launch = ports.launch
+        let task = Task { try await launch(request) }
+        launches[request.launchId] = task
+        do { return try await task.value }
+        catch { launches[request.launchId] = nil; throw error }
     }
 
     /// The code step's own record, saved at once (the stash is made only after this returns).
@@ -618,9 +713,11 @@ public actor BackendCloudSessionMove {
         await set(entry)
     }
 
-    /// `keep`: the move stays in the journal at its step and is tried again at the next launch (this Mac owns it).
+    /// An attempt ends as a failure. The saved stage lets an explicit retry continue without another ask or launch.
     func fail(_ entry: inout BackendCloudSessionMoveEntry, _ line: String, keep: Bool = false) async {
-        if !keep { entry.step = .failed }
+        guard !Task.isCancelled else { return }
+        entry.resumeStep = keep ? entry.step : nil
+        entry.step = .failed
         await say(&entry, line)
     }
     func moveFolder(_ ref: String) -> URL? {
@@ -634,7 +731,13 @@ public actor BackendCloudSessionMove {
         if let current = entries[ref], !current.finished { start(ref); return }
         guard case .answer(let look) = await BackendCloudSessionMoveWire.call(ports.send, ref: ref, action: "look") else { return }
         guard look.ownedHere, let move = look.move, move.to?.mine != true else { return }
-        if let current = entries[ref], current.moveId == move.id { return }
+        if var current = entries[ref], current.moveId == move.id {
+            if current.role == .giver, let step = current.resumeStep {
+                current.step = step; current.resumeStep = nil; current.startedAt = ports.now()
+                await set(current); start(ref)
+            }
+            return
+        }
         let entry = BackendCloudSessionMoveEntry(ref: ref, sessionId: look.sessionId ?? ref, role: .giver, step: .waiting, moveId: move.id,
                                                  other: BackendCloudSessionMoveWords.machine(move.to?.name), startedAt: ports.now())
         await set(entry)
@@ -671,15 +774,20 @@ public actor BackendCloudSessionMove {
         guard entry.step == .releasing else { return }
         var release = BackendCloudSessionMoveWire.Release(lengths: [:])
         if let session = local {
+            guard !Task.isCancelled else { return }
             // The app's own close (never the host directly), then its last bytes, then the code backup.
-            try? await ports.close(session.id)
+            do { try await ports.close(session.id) }
+            catch { await fail(&entry, BackendCloudSessionMoveWords.couldNotStop, keep: true); return }
+            guard !Task.isCancelled else { return }
             release.lengths = await ports.flush(session) ?? [:]
             _ = await BackendCloudSessionMoveWire.call(ports.send, ref: ref, action: "wait", id: entry.moveId)
+            guard !Task.isCancelled else { return }
             if let code = await ports.handOver(session.projectID, session.cwd) {
                 release.codeAt = code.codeAt; release.branch = code.branch; release.headSha = code.headSha; release.workSha = code.workSha
             }
         }
         for _ in 0..<Self.releaseTries {
+            guard !Task.isCancelled else { return }
             switch await BackendCloudSessionMoveWire.call(ports.send, ref: ref, action: "release", id: entry.moveId, release: release) {
             case .answer(let answer) where answer.code == nil && !answer.ownedHere:
                 entry.step = .done
@@ -714,10 +822,11 @@ public actor BackendCloudSessionMove {
                 await say(&entry, nil)
                 return
             default:
-                // Lost, or a refusal this build does not know: the journal keeps the step; tried again at the next hint.
+                await fail(&entry, BackendCloudSessionMoveWords.releaseNotConfirmed, keep: true)
                 return
             }
         }
+        await fail(&entry, BackendCloudSessionMoveWords.releaseNotConfirmed, keep: true)
     }
 
     /// R1: an upload for a session another Mac now owns was answered `not_yours`: the copy here stops by itself
@@ -745,8 +854,11 @@ public actor BackendCloudSessionMove {
             do { try await ports.sleep(Self.lookMs) } catch { return }
             local = await ports.local(entry.sessionId)
         }
+        guard !Task.isCancelled else { return }
         if let session = local {
-            try? await ports.close(session.id)
+            do { try await ports.close(session.id) }
+            catch { await fail(&entry, BackendCloudSessionMoveWords.couldNotStop, keep: true); return }
+            guard !Task.isCancelled else { return }
             await ports.keepLeft(session)
             _ = await ports.ownBackup(session.projectID, session.cwd)
         }
@@ -771,13 +883,31 @@ public enum BackendCloudSessionMoveWords {
     public static let notFound = "This session is not in your Cloud any more."
     public static let alreadyHere = "This session already runs on this Mac."
     public static let earlier = "An earlier chat is kept in your Cloud; it does not run anywhere to move."
-    public static let noAnswer = "Your Cloud did not answer; nothing moved. Try again in a moment."
+    public static let noAnswer = "Your Cloud did not confirm the request. Check the connection and try again."
+    public static let preparing = "Checking this session before moving…"
+    public static let unconfirmed = "Your Cloud stopped confirming the move. Where it runs could not be confirmed. Try again to check and continue."
+    public static let couldNotStop = "The other Mac could not stop this session, so it did not hand it over. Try again."
+    public static let releaseNotConfirmed = "The session stopped here, but your Cloud did not confirm the handover. Try again to check and continue."
+    public static func timedOut(_ step: BackendCloudSessionMoveEntry.Step) -> String {
+        "Moving timed out while \(progress(step, other: "the other Mac").lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".…"))). Try again to check and continue."
+    }
+    public static func progress(_ step: BackendCloudSessionMoveEntry.Step, other: String) -> String {
+        switch step {
+        case .owner, .chat: return "Bringing the conversation from \(other)…"
+        case .code: return "Bringing the project’s code…"
+        case .launching: return "Starting the session on this Mac…"
+        case .waiting: return "Waiting for the reply to finish…"
+        case .releasing: return "Handing the session over…"
+        default: return moving(other)
+        }
+    }
     public static let nothingToCancel = "Nothing is moving."
     public static let tooLateToCancel = "The other Mac has already stopped it; the move finishes here."
     public static let cancelled = "Not moved. It runs where it was."
-    public static let chatNotHeld = "The chat is still coming down from your Cloud; the move goes on by itself."
-    public static let chatNotPlaced = "The chat could not be put in place here; it is tried again."
-    public static let notStarted = "The session could not start here; it is tried again."
+    public static let cancelling = "Cancelling the move…"
+    public static let chatNotHeld = "The conversation could not be downloaded from your Cloud. Try again to continue the move."
+    public static let chatNotPlaced = "The conversation could not be put in place here. Try again to continue the move."
+    public static let notStarted = "The session could not start here. Try again to continue the move."
 
     static func machine(_ name: String?) -> String {
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

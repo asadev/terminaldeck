@@ -86,8 +86,18 @@ public enum BackendMachineChannels {
                 }
                 let guest = try await coordinator.link(text(0, "machine"))
                 switch channel {
-                case "machines:attach": return .bool(try await guest.attach(text(1, "session"), cols: number(2, "columns"), rows: number(3, "rows")))
-                case "machines:detach": try await guest.detach(text(1, "session")); return .bool(true)
+                case "machines:attach", "machines:detach":
+                    let session = try text(1, "session")
+                    let chat = await guest.state().sessions.contains { $0["id"].string == session && $0["chat"].bool == true }
+                    if chat {
+                        let watching = channel == "machines:attach"
+                        try await guest.send(type: watching ? "chats.watch" : "chats.unwatch", fields: [.init("id", .string(session)),
+                            .init("rid", .string(UUID().uuidString.lowercased()))], capability: "chats")
+                        await coordinator.noteChatWatch(guest.id, chat: session, watching: watching)
+                        return .bool(true)
+                    }
+                    if channel == "machines:attach" { return .bool(try await guest.attach(session, cols: number(2, "columns"), rows: number(3, "rows"))) }
+                    try await guest.detach(session); return .bool(true)
                 case "machines:input": try await guest.input(text(1, "session"), data: arg(2).requireString("input")); return .bool(true)
                 case "machines:resize": try await guest.resize(text(1, "session"), cols: number(2, "columns"), rows: number(3, "rows")); return .bool(true)
                 case "machines:create":
@@ -100,13 +110,28 @@ public enum BackendMachineChannels {
                     // with the rights that machine gives this Mac (an answer needs Full control there, as for a phone).
                     let op = try text(1, "operation"), chat = try text(2, "chat")
                     guard let (type, fields) = Self.chatFrame(op, chat: chat, arg(3), arg(4)) else { throw NativeRPCError.invalidArguments("That is not a chat operation.") }
-                    try await guest.send(type: type, fields: fields, capability: "chats")
+                    if op == "options" || op == "set" {
+                        return try await Self.chatOptions(guest, chat: chat, patch: op == "set" ? arg(3) : nil)
+                    }
+                    let rid = arg(5).string
+                    try await guest.send(type: type, fields: fields + (rid.map { [.init("rid", .string($0))] } ?? []), capability: "chats")
                     if op == "watch" || op == "unwatch" { await coordinator.noteChatWatch(guest.id, chat: chat, watching: op == "watch") }
                     return .bool(true)
                 case "machines:session:rename": try await guest.send(type: "rename", fields: [.init("id", .string(try text(1, "session"))), .init("title", .string(try arg(2).requireString("title")))], capability: "rename"); return .bool(true)
                 default: break
                 }
                 if let (type, capability, reply) = requests[channel] {
+                    if ["controls.read", "controls.apply"].contains(type),
+                       await guest.state().sessions.contains(where: { $0["id"] == arg(1) && $0["chat"].bool == true }) {
+                        let control = arg(2).string ?? ""
+                        guard type == "controls.read" || ["model", "effort", "permission"].contains(control) else {
+                            return outcome(false, "That choice is not available for a chat.")
+                        }
+                        let patch = type == "controls.apply" ? NativeRPCValue.object([.init(control == "permission" ? "permissionMode" : control, arg(3))]) : nil
+                        let options = try await Self.chatOptions(guest, chat: text(1, "session"), patch: patch)
+                        let reading = Self.chatControls(options)
+                        return type == "controls.read" ? reading : outcome(true, "Changed on that Mac.").setting("reading", reading[control])
+                    }
                     var fields: [NativeRPCValue.Field] = []
                     if ["controls.read", "controls.apply", "usage.read", "account.read", "account.switch", "session.send"].contains(type) { fields.append(.init("id", .string(try text(1, "session")))) }
                     if type == "controls.apply" { fields.append(.init("control", arg(2))); fields.append(.init("value", arg(3))) }
@@ -156,7 +181,10 @@ public enum BackendMachineChannels {
     static func chatFrame(_ op: String, chat: String, _ third: NativeRPCValue, _ fourth: NativeRPCValue) -> (String, [NativeRPCValue.Field])? {
         let id = NativeRPCValue.Field("id", .string(chat))
         switch op {
-        case "watch", "unwatch", "interrupt": return ("chats." + op, [id])
+        case "watch", "unwatch", "interrupt", "options": return ("chats." + op, [id])
+        case "set":
+            guard let patch = third.fields, !patch.isEmpty, patch.allSatisfy({ ["model", "effort", "permissionMode"].contains($0.key) }) else { return nil }
+            return ("chats.set", [id] + patch)
         case "say":
             guard let text = third.string, !text.isEmpty else { return nil }
             return ("chats.say", [id, .init("text", .string(text)), .init("clientMessageId", .string(UUID().uuidString.lowercased()))])

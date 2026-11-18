@@ -80,7 +80,7 @@ final class NativeCompositionCloud {
                     // Projects and agents (lane A2): ONE read-only tool, `cloud.versions`, only while those rows are
                     // built for this identity and Cloud is open.
                     let recordEntries = try await NativeCloudRecords.shared.toolEntries(visible: {
-                        await service.state().visible(at: Int64(Date().timeIntervalSince1970 * 1000))
+                        await service.state().offersCloudTools
                     })
                     guard !Task.isCancelled else { return }
                     if !recordEntries.isEmpty || self?.recordsRegistered == true {
@@ -90,7 +90,19 @@ final class NativeCompositionCloud {
                         self?.recordsRegistered = !recordEntries.isEmpty
                     }
                     // Switch to this Mac (step 2): its tool, beside the session tools, under its own owner id.
-                    if self?.moveRegistered != true {
+                    if !(await service.state().subscription.offers(.cloudTools)) {
+                        if self?.moveRegistered == true {
+                            await root.mcp.removeTools(ownerID: BackendCloudSessionMoveTools.owner)
+                            try joins.replaceContributions(owner: BackendCloudSessionMoveTools.owner, [], policiesWrapped: true)
+                            self?.moveRegistered = false
+                        }
+                        if self?.reachRegistered == true {
+                            await root.mcp.removeTools(ownerID: BackendReachAccountTools.owner)
+                            try joins.replaceContributions(owner: BackendReachAccountTools.owner, [], policiesWrapped: true)
+                            self?.reachRegistered = false
+                        }
+                    }
+                    if await service.state().subscription.offers(.cloudTools), self?.moveRegistered != true {
                         let moveEntries = try await MainActor.run { try NativeCloudChats.toolEntries() }
                         let moveBundle = try BackendDeckCoreCatalogueBundle(metadata: moveEntries.map(\.0), policies: moveEntries.map { joins.mcpPolicy($0.0, handler: $0.1) })
                         try joins.replaceContributions(owner: BackendCloudSessionMoveTools.owner, [moveBundle], policiesWrapped: true)
@@ -98,7 +110,7 @@ final class NativeCompositionCloud {
                         self?.moveRegistered = true
                     }
                     // Reach by account: ONE read-only tool, `cloud.reach.status`, while signed in. Nothing switches reach on.
-                    if self?.reachRegistered != true {
+                    if await service.state().subscription.offers(.cloudTools), self?.reachRegistered != true {
                         let reachEntries = try await MainActor.run { try NativeReachAccount.shared.toolEntries() }
                         let reachBundle = try BackendDeckCoreCatalogueBundle(metadata: reachEntries.map(\.0), policies: reachEntries.map { joins.mcpPolicy($0.0, handler: $0.1) })
                         try joins.replaceContributions(owner: BackendReachAccountTools.owner, [reachBundle], policiesWrapped: true)
@@ -107,7 +119,7 @@ final class NativeCompositionCloud {
                     }
                     // Boot files (lane F): ONE read-only tool, `cloud.boot_files`. Accepting a file is never a tool.
                     let bootEntries = try await NativeCloudBoot.shared.toolEntries(visible: {
-                        await service.state().visible(at: Int64(Date().timeIntervalSince1970 * 1000))
+                        await service.state().offersCloudTools
                     })
                     guard !Task.isCancelled else { return }
                     if !bootEntries.isEmpty || self?.bootRegistered == true {
@@ -129,7 +141,7 @@ final class NativeCompositionCloud {
         var secretEntries: [(BackendMCPTool, BackendNativeMCPServer.Handler)] = []
         if let graph = NativeCloudSecrets.shared.graph {
             secretEntries = try await BackendCloudSecretsLeanTool.registrations(tools: graph.tools, visible: {
-                let open = await service.state().visible(at: Int64(Date().timeIntervalSince1970 * 1000))
+                let open = await service.state().offersCloudTools
                 let sealed = await graph.isSealed()
                 return open && !sealed
             }, summary: { await graph.summary() })
@@ -204,10 +216,12 @@ enum NativeCloudLaunch {
         }
         return !FileManager.default.fileExists(atPath: dormantMarker(dataRoot).path)
     }
-    /// Markers live only inside the account's existing folder; a folder is never created for them.
+    /// A valid sign-in keeps its plain launch folder even before paid Cloud ports exist. It contains no credentials;
+    /// otherwise a fresh unpaid account would not be resumed at the next launch. Other changes never create it.
     nonisolated static func recordSession(_ change: BackendCloudAccountSessionChange, dataRoot: URL, now: Date = Date()) {
         let fm = FileManager.default
         if change == .signedIn {
+            try? fm.createDirectory(at: folder(dataRoot), withIntermediateDirectories: true)
             try? fm.removeItem(at: signedOutMarker(dataRoot)); try? fm.removeItem(at: dormantMarker(dataRoot)); return
         }
         var directory: ObjCBool = false

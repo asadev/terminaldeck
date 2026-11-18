@@ -62,12 +62,15 @@ struct LinkPipelineTests {
     actor Client {
         let toHost: Pipe
         let forge: Bool
-        /// Link only (§11): nothing app-level on the relay (queued until this side moved), no hold of the host's td.ctl.
+        /// This phone claims link-only: outgoing app messages wait for its link, independently of the host's terms.
         let only: Bool
+        /// Receive terms come from the welcome, independently of what this phone claimed.
+        var hostOnly: Bool
         var waiting: [String] = []
         /// App messages that came over the relay (link-only: none may).
         var relayApp = 0
         var relayAppTypes: [String] = []
+        var relayAppAfterMove = 0
         var refusal: String?
         let phone = V.Phone()
         var link: PeerLink?
@@ -100,7 +103,7 @@ struct LinkPipelineTests {
         var backHeld: [String] = []
         var hostBacks = 0, backsDone = 0
         init(toHost: Pipe, forge: Bool, only: Bool) {
-            self.toHost = toHost; self.forge = forge; self.only = only
+            self.toHost = toHost; self.forge = forge; self.only = only; hostOnly = only
             (stream, feed) = AsyncStream<(Data, PeerLane)>.makeStream()
         }
 
@@ -140,7 +143,10 @@ struct LinkPipelineTests {
                 let waiting = held; held = []
                 for data in waiting { if keep { gotOnLink += 1 }; await linked(data) }
             default:
-                if !["welcome", "device.access", "error"].contains(value["t"].string ?? "") { relayApp += 1; relayAppTypes.append(value["t"].string ?? "?") }
+                if !["welcome", "device.access", "error"].contains(value["t"].string ?? "") {
+                    relayApp += 1; relayAppTypes.append(value["t"].string ?? "?")
+                    if hostMoved { relayAppAfterMove += 1 }
+                }
                 if value["t"].string == "error" { refusal = value["message"].string }
                 await handle(value, link: false)
             }
@@ -149,7 +155,7 @@ struct LinkPipelineTests {
         var lanes: [Int32: Int] = [:]
         func fromLink(_ data: Data, _ lane: PeerLane) async {
             lanes[lane.rawValue, default: 0] += 1
-            if lane == .control, !hostMoved, !only || relinked { held.append(data); return }
+            if lane == .control, !hostMoved, !hostOnly || relinked { held.append(data); return }
             if keep, backSent { return }
             if lane == .control { gotOnLink += 1 }
             await linked(data)
@@ -175,6 +181,7 @@ struct LinkPipelineTests {
             case "welcome":
                 welcomedAt = V.now()
                 welcomeCapabilities = value["capabilities"].elements?.compactMap(\.string) ?? []
+                hostOnly = welcomeCapabilities.contains(BackendRemoteHost.linkOnlyCapability)
             case "settings.state":
                 guard let rid = value["rid"].string else { return }
                 let at = V.now()
@@ -395,7 +402,7 @@ struct LinkPipelineTests {
     func start(link: (servers: [BackendPhonePeerServer], policy: String)?, oneWay: Double = LinkPipelineTests.relayOneWay,
                forge: Bool = false, video: Bool = false, access: BackendINT2PhoneAccessLevel? = .full,
                slowApply: Int = 0, only: Bool = true, welcome: Bool = true, key: Bool = false, grace: Int? = nil, keep: Bool = false,
-               slowBackMs: Int = 0) async throws -> Harness {
+               slowBackMs: Int = 0, turnOnRelay: Bool = true, routeForTests: String? = nil) async throws -> Harness {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("LINK-" + UUID().uuidString)
         let trust = BackendRemoteTrustStore(directory: dir.appendingPathComponent("remote"))
         try await trust.open()
@@ -407,6 +414,7 @@ struct LinkPipelineTests {
         let clock = INT2PhoneHostClock()
         let host = BackendRemoteHost(trust: trust, manager: BackendPTYManager(inheritedEnvironment: [:], onEvent: { _ in }), state: NativeStateStore(),
             home: dir.path, hostName: "Fixture", appVersion: "test", privateRoots: [], sleep: { try await clock.sleep($0) }, clock: { V.now() })
+        await host.configureTurnOnRelay(turnOnRelay, route: routeForTests)
         let seen = Seen()
         try await host.register(.init(capability: "settings", messageTypes: ["settings.read", "settings.apply"], policy: .grantedDevice) { message, _ in
             let rid = message["rid"].string ?? ""
@@ -494,6 +502,7 @@ struct LinkPipelineTests {
         out["echoMs.median"] = V.median(times); out["echoMs.p90"] = V.p90(times); out["echoMs.max"] = times.max() ?? .nan
         out["viaLink"] = Double(await run.client.viaLink); out["viaRelay"] = Double(await run.client.viaRelay)
         out["relayApp"] = Double(await run.client.relayApp)
+        out["relayAppAfterMove"] = Double(await run.client.relayAppAfterMove)
         print("MEASURE \(label) relayAppTypes=\(await run.client.relayAppTypes)")
         Self.report(label, out)
         await run.cleanup()
@@ -505,7 +514,7 @@ struct LinkPipelineTests {
         #expect(direct["onLink"]! == 1, "the ladder as shipped moves onto the link: \(direct)")
         // The relay's own round trip would be 2 × 132 ms; the link answers in a fraction of it.
         #expect(direct["echoMs.median"]! < 60, "link: \(direct)")
-        #expect(direct["relayApp"]! == 0, "nothing but the hello and signalling crossed the relay: \(direct)")
+        #expect(direct["relayAppAfterMove"]! == 0, "dc2 terms allow relay data before the marker, none after: \(direct)")
         // Internet peer-to-peer through this Mac's own router needs hairpinning: reported, not required.
         _ = try await echoRun("link-internet", link: (Self.stun, "nohost"))
         if let servers = Self.turnServers() {
@@ -515,8 +524,8 @@ struct LinkPipelineTests {
     }
 
     /// The hand-over keeps order both ways: 300 ordered writes sent every 3 ms from the hello on reach the host in order
-    /// and their answers come back in order, none lost. Link only: they wait for the link and all go on it (none on the
-    /// relay); an older phone (`only` false): some over the relay before its link opened, its answers all on the link.
+    /// and their answers come back in order, none lost. A phone claiming link-only still queues its requests until
+    /// open; dc2 welcome terms allow answers on the relay before the host's marker, then all answers use the link.
     @Test(arguments: [true, false]) func theHandOverKeepsOrderBothWays(only: Bool) async throws {
         let run = try await start(link: (Self.stun, "all"), only: only)
         let sender = Task {
@@ -533,20 +542,23 @@ struct LinkPipelineTests {
         #expect(await run.seen.applied == Array(0..<300), "the host took them in order")
         #expect(await run.client.ordered == Array(0..<300), "the answers came back in order")
         let viaLink = await run.client.viaLink, relayApp = await run.client.relayApp
-        #expect(viaLink >= 300 && relayApp == 0, "every answer on the link, none on the relay (\(viaLink) / \(relayApp))")
+        #expect(viaLink + relayApp >= 300, "every answer arrived across the hand-over (\(viaLink) / \(relayApp))")
+        #expect(await run.client.relayAppAfterMove == 0, "no app answer crossed the relay after the host's marker")
         print("MEASURE link-handover only=\(only) viaLink=\(viaLink) relayApp=\(relayApp) route=\(route ?? "none")")
         await run.cleanup()
     }
 
-    /// Security: an answer not bound to this pairing never carries anything; link only (§11.3), nothing else can either:
-    /// the connection closes (the phone says "Can't reach your Mac") instead of falling back to the relay.
+    /// Security: an answer not bound to this pairing never carries link data. The authenticated relay may have sent
+    /// the opening session list under dc2 welcome terms; the connection still closes when its link is refused.
     @Test func anAnswerNotBoundToThePairingClosesTheConnection() async throws {
         let run = try await start(link: (Self.stun, "all"), oneWay: 30, forge: true)
         let deadline = V.now() + 5_000
         while V.now() < deadline, !(await run.wireClosed.on) { try await Task.sleep(for: .milliseconds(20)) }
         #expect(await run.host.linkRoute(run.id) == nil)
-        let viaLink = await run.client.viaLink, closed = await run.wireClosed.on, relayApp = await run.client.relayApp
-        #expect(viaLink == 0 && closed && relayApp == 0, "closed, nothing carried anywhere")
+        let viaLink = await run.client.viaLink, closed = await run.wireClosed.on
+        #expect(viaLink == 0 && closed, "closed without carrying anything on the unbound link")
+        #expect(await run.client.relayAppTypes.allSatisfy { $0 == "sessions" }, "only the authenticated opening list may precede refusal")
+        #expect(!(await run.client.hostMoved), "the refused link was never moved onto")
         await run.cleanup()
     }
 

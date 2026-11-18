@@ -112,6 +112,12 @@ public enum AccountSwitchWords {
                                     busy: busy, problem: problem, canDefer: canDefer && plan.notice == nil)
     }
 
+    /// A refused API pick has one direct route back to its secure editor. No key crosses this seam.
+    public static func apiAccountToEdit(accountID: String, refused: Bool) -> String? {
+        guard refused, accountID.range(of: #"^api-key-[a-f0-9]{24}$"#, options: .regularExpression) != nil else { return nil }
+        return accountID
+    }
+
     /// The sentence inside a failure, without a transport's prefix; never empty.
     public static func problem(_ text: String) -> String {
         var message = text.trimmingCharacters(in: .whitespacesAndNewlines)

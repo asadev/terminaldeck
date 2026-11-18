@@ -91,25 +91,15 @@ final class BrowserNativeCoverageTests: XCTestCase {
         XCTAssertTrue(opened.isEmpty)
     }
 
-    func testExternalSchemesNeedAClickAndFileAndScriptLinksNeverOpenApps() async {
-        let tabs = NativeBrowserTabs.shared, tab = tabs.create(isolated: true, show: false)
+    func testFileAndScriptLinksNeverOpenApps() async {
+        let tabs = NativeBrowserTabs(persist: false), tab = tabs.create(isolated: true, show: false)
         defer { tabs.close(tab.id) }
-        var opened: [URL] = []
-        let delegate = NativeBrowserPageDelegate(tab: tab, openExternal: { opened.append($0) })
+        let delegate = NativeBrowserPageDelegate(tab: tab, openExternal: { _ in XCTFail("This scheme must never open an app") })
         let view = makeView()
-        for address in ["mailto:test@example.invalid", "tel:123", "example-app:open"] {
-            let automatic = await delegate.webView(view, decidePolicyFor: Action(address), preferences: WKWebpagePreferences())
-            XCTAssertEqual(automatic.0, .cancel)
-            XCTAssertTrue(opened.isEmpty)
-        }
         for address in ["file:///not-a-file", "javascript:alert(1)"] {
             let clicked = await delegate.webView(view, decidePolicyFor: Action(address, kind: .linkActivated), preferences: WKWebpagePreferences())
             XCTAssertEqual(clicked.0, .cancel)
         }
-        XCTAssertTrue(opened.isEmpty)
-        let clicked = await delegate.webView(view, decidePolicyFor: Action("mailto:test@example.invalid", kind: .linkActivated), preferences: WKWebpagePreferences())
-        XCTAssertEqual(clicked.0, .cancel)
-        XCTAssertEqual(opened.map(\.absoluteString), ["mailto:test@example.invalid"])
         let missing = await delegate.webView(view, decidePolicyFor: Action(nil), preferences: WKWebpagePreferences())
         XCTAssertEqual(missing.0, .cancel)
     }

@@ -153,7 +153,7 @@ public actor BackendDeckCoreSecurityControl {
         } }
         specs = names; catalogue += policies
     }
-    public func tools() -> [BackendDeckCoreSecurityToolPolicy] { catalogue + live() }
+    public func tools() -> [BackendDeckCoreSecurityToolPolicy] { (catalogue + live()).filter { CloudSubscriptionOffers.shared.showsTool($0.tool.id) } }
     private func live() -> [BackendDeckCoreSecurityToolPolicy] {
         guard let offered = try? liveTools() else { return [] }; var taken: Set<String> = []
         return offered.filter { policy in
@@ -161,7 +161,11 @@ public actor BackendDeckCoreSecurityControl {
             taken.insert(policy.tool.id); taken.insert(policy.tool.wireName); return true
         }
     }
-    public func policy(named name: String) -> BackendDeckCoreSecurityToolPolicy? { specs[name] ?? live().first { $0.tool.id == name || $0.tool.wireName == name } }
+    public func policy(named name: String) -> BackendDeckCoreSecurityToolPolicy? {
+        guard let policy = specs[name] ?? live().first(where: { $0.tool.id == name || $0.tool.wireName == name }),
+              CloudSubscriptionOffers.shared.showsTool(policy.tool.id) else { return nil }
+        return policy
+    }
     public func starterOf(sessionID: String) -> String? { started.starter(sessionID) }
     public func copilotSessions() -> [String] { started.copilotSessions() }
     public func unattendedCall(name: String, arguments: NativeRPCValue, cancellation: BackendMCPCancellation = .init()) async -> BackendDeckCoreSecurityCallResult {

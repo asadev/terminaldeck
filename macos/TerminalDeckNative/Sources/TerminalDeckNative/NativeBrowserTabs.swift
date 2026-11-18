@@ -65,9 +65,15 @@ final class NativeBrowserTabs {
         self?.tabs.first { $0.webView === webView }?.recorded(body)
     }
 
-    private init() {
+    @ObservationIgnored lazy var requestBridge = NativeBrowserRequestBridge(tabs: self)
+    private let persists: Bool
+
+    init(persist: Bool = true, downloads: (any NativeCompositionBrowserDownloadsPresentation)? = nil) {
+        persists = persist
+        suppliedDownloads = downloads
         _ = NativeBrowserWebView.checkSuppressSwitchOnce
-        list = BrowserTabsStore.decode(UserDefaults.standard.data(forKey: BrowserTabsStore.defaultsKey))
+        list = BrowserTabsStore.decode(persist ? UserDefaults.standard.data(forKey: BrowserTabsStore.defaultsKey) : nil)
+        if !persist { return }
         profileSubscription = EngineBridge.shared.on("browser-profile:state") { [weak self] args in
             if let value = args.first { self?.applyProfiles(value) }
         }
@@ -155,9 +161,14 @@ final class NativeBrowserTabs {
     /// background: not selected, not shown, nothing focused, and the tool drives it too. His own click shows it.
     func adoptWindowRequest(configuration: WKWebViewConfiguration, from opener: NativeBrowserTab) -> WKWebView? {
         let byTool = opener.handoverPrompt == nil && opener.automation.toolDriving
+        let showing = opener.webView.map(NativeBrowserPageDelegate.personUsing) == true && !byTool
         let tab = create(after: opener.id, isolated: opener.isolated, profile: opener.profile,
-                         show: BrowserPagePersonRule.newTabShows(personAskedToShow: true, toolDriving: byTool), configuration: configuration)
+                         show: showing, configuration: configuration)
         if byTool { tab.automation.toolTouched() }
+        if !showing {
+            tab.pageRequests.notice("Waiting for the person: this page opened a new window. Review this tab if it asks you to sign in.")
+            opener.automation.noteForTool(.init(kind: "popup", message: "A page pop-up opened in another browser tab.", site: opener.url?.host ?? "", answer: "waiting for the person", by: "built-in browser", at: Date()))
+        }
         return tab.webView
     }
 
@@ -170,6 +181,7 @@ final class NativeBrowserTabs {
     }
 
     private func save() {
+        guard persists else { return }
         UserDefaults.standard.set(BrowserTabsStore.encode(list), forKey: BrowserTabsStore.defaultsKey)
     }
 
@@ -257,7 +269,10 @@ final class NativeBrowserTabs {
         let deleted = Set(profiles.map(\.id)).subtracting(state.profiles.map(\.id))
         profiles = state.profiles
         activeProfileID = state.activeID
-        for id in deleted { stores[BrowserProfile.storeIdentifier(for: id)] = nil }
+        for id in deleted {
+            stores[BrowserProfile.storeIdentifier(for: id)] = nil
+            NativeBrowserBookmarksStore.shared.dropProfile(id)
+        }
         for tab in tabs where deleted.contains(tab.profile) {
             tab.switchStore(profile: "default", isolated: tab.isolated)
         }

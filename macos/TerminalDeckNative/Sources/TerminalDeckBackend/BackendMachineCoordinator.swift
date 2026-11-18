@@ -305,11 +305,20 @@ public actor BackendMachineCoordinator {
     private func uploadProgress(_ id: String, _ progress: BackendUploadProgress) async { try? await registry.publish("machines:upload:progress", arguments: [.object([.init("machineId", .string(id)), .init("progress", progress.value)])]) }
     private func peerFrame(_ id: String, _ frame: NativeRPCValue) async {
         await reaches[id]?.handle(frame)
+        if frame["t"].string == "attached", let session = frame["id"].string {
+            try? await registry.publish("machines:output", arguments: [.object([.init("machineId", .string(id)), .init("sessionId", .string(session)),
+                .init("data", .string("")), .init("replay", .bool(true)), .init("reset", .bool(true))])])
+        }
+        if frame["t"].string == "error", let session = frame["rid"].string, await links[id]?.isAttached(session) == true {
+            try? await registry.publish("machines:output", arguments: [.object([.init("machineId", .string(id)), .init("sessionId", .string(session)),
+                .init("data", .string("")), .init("problem", frame["message"])])])
+        }
         // Another Mac's screen shown here (Mac to Mac, 31 Oct): its pictures, states and refusals.
         await BackendRemoteMacScreens.shared.received(id, frame)
         let channels = ["hoot.state": ("machines:hoot:state", "state"), "hoot.chat": ("machines:hoot:chat", "chat"), "github.changed": ("machines:github:changed", "github"),
                         // Live use from another Mac (15 Nov): a chat session's messages, as its phones get them.
-                        "chats.events": ("machines:chats:events", "frame")]
+                        "chats.events": ("machines:chats:events", "frame"),
+                        "chats.options": ("machines:chats:events", "frame"), "error": ("machines:chats:events", "frame")]
         if let (channel, key) = channels[frame["t"].string ?? ""] { try? await registry.publish(channel, arguments: [.object([.init("machineId", .string(id)), .init(key, key == "chat" || key == "frame" ? frame : frame[key])])]) }
     }
     public func announceWindows(_ id: String) async throws { try await link(id).announceWindows() }

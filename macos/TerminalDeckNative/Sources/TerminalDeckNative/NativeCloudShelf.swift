@@ -90,6 +90,7 @@ final class NativeCloudShelf {
 
     /// The person's switch. OFF tells the service (which empties the shelf) and stops; ON puts everything again.
     func setOn(_ value: Bool) {
+        guard NativeCloudOffers.shows(.phonesCopy) else { return }
         on = value
         guard let putter else { return }
         Task { [weak self] in

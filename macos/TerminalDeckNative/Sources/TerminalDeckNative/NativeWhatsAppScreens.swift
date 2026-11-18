@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import TerminalDeckBackend
 import TerminalDeckNativeCore
@@ -156,6 +157,10 @@ struct NativeWhatsAppGroupTitle: View {
 struct NativeWhatsAppInfoContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DeckTokens.Spacing.s8) {
+            NativeWhatsAppAddGuide()
+                .frame(width: DeckSettingsLook.popoverWidth, height: DeckSettingsLook.popoverWidth * 840 / 600)
+                .clipShape(RoundedRectangle(cornerRadius: DeckTokens.Metrics.rowRadius))
+                .accessibilityLabel("Animated WhatsApp guide: Settings > Agents, Add an agent, name it and Add, View API key, then Copy key and paste it here.")
             Text(WhatsAppWords.steps).font(DeckSettingsLook.rowTitle)
             Text(WhatsAppWords.notEncrypted).font(DeckSettingsLook.rowTitle).foregroundStyle(.secondary)
         }
@@ -163,6 +168,30 @@ struct NativeWhatsAppInfoContent: View {
         .fixedSize(horizontal: false, vertical: true)
         .frame(width: DeckSettingsLook.popoverWidth, alignment: .leading)
         .padding(14)
+    }
+}
+
+/// SwiftUI Image shows only a GIF's first frame; AppKit owns playback while the popover is open.
+private struct NativeWhatsAppAddGuide: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSImageView {
+        let view = NSImageView()
+        view.imageScaling = .scaleProportionallyUpOrDown
+        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        view.setContentHuggingPriority(.defaultLow, for: .vertical)
+        if let url = Bundle.module.url(forResource: "whatsapp-add-agent", withExtension: "gif"),
+           let image = NSImage(contentsOf: url) {
+            // A GIF has pixel dimensions but no Retina scale: give AppKit the popover's logical size.
+            image.size = NSSize(width: DeckSettingsLook.popoverWidth, height: DeckSettingsLook.popoverWidth * 840 / 600)
+            view.image = image
+        }
+        view.animates = true
+        return view
+    }
+
+    func updateNSView(_ view: NSImageView, context: Context) {}
+
+    static func dismantleNSView(_ view: NSImageView, coordinator: ()) {
+        view.animates = false
     }
 }
 
@@ -453,35 +482,54 @@ struct NativeWhatsAppSubmenu: View {
     }
 }
 
-/// The heading chip: ONLY while a WhatsApp agent is attached here; the glyph and the agent's name, drawn like the
-/// account chip beside it, then the small "Send to WhatsApp" switch. A click on the chip opens the same list (switch, or
-/// Off). Nothing at all when none is attached.
+/// The heading's WhatsApp button: ONLY while a WhatsApp agent is attached here. Review of 18 Nov (item 16: "this
+/// WhatsApp button is too bigger. We just need a nicer option than this"): ONE small button in place of the name and
+/// the big switch, a grey outline while it is not sending and filled with the accent while it is. A press opens the
+/// app's own menu: the "Send to WhatsApp" switch on top, then the agent choice, then Off. Nothing when none is attached.
 struct NativeWhatsAppChip: View {
     let here: WhatsAppReceiver
     var store: NativeWhatsAppAgents = .shared
     /// The dot before it, when it follows another chip in the line.
     var separated = true
+    @State private var open = false
 
     var body: some View {
         if let agent = store.chip(for: here) {
             if separated { ChipSeparator() }
-            Menu { NativeWhatsAppMenuItems(here: here, store: store) } label: {
-                AccountChipLabel {
-                    Image(systemName: WhatsAppGlyph.symbol).font(.system(size: WhatsAppGlyph.size)).foregroundStyle(.secondary)
-                    // Off: the chip is drawn in secondary colour (the agent stays attached).
-                    Text(agent.name).foregroundStyle(agent.sending ? .primary : .secondary)
+            Button { open.toggle() } label: { DeckWhatsAppMark(on: agent.sending) }
+                .buttonStyle(.plain)
+                .help(agent.sending ? "Sending to WhatsApp: \(agent.name)" : "WhatsApp: \(agent.name), not sending")
+                .accessibilityLabel("WhatsApp: \(agent.name)")
+                .accessibilityValue(agent.sending ? "Sending" : "Not sending")
+                .deckMenu(isPresented: $open) {
+                    DeckMenuToggleRow(title: WhatsAppWords.send, isOn: Binding(get: { agent.sending }, set: { on in
+                        WhatsAppMenu.choose(.sending(on), here: here, store: store)
+                    }))
+                    DeckMenuDivider()
+                    DeckMenuSection("Agent")
+                    ForEach(WhatsAppMenu.items(store.agents, here: here)) { item in
+                        DeckMenuRow(item.name, checked: item.checked) {
+                            if !item.checked { WhatsAppMenu.choose(.agent(item.id), here: here, store: store) }
+                        }
+                    }
+                    DeckMenuDivider()
+                    DeckMenuRow(WhatsAppWords.off, symbol: "xmark.circle") { WhatsAppMenu.choose(.off, here: here, store: store) }
                 }
-            }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-            .help("Received on WhatsApp: \(agent.name)")
-            .accessibilityLabel("WhatsApp: \(agent.name)")
-            // THE SWITCH (section 3): right after the chip, mini, no label; only while an agent is attached here.
-            Toggle(WhatsAppWords.send, isOn: Binding(get: { agent.sending }, set: { on in
-                WhatsAppMenu.choose(.sending(on), here: here, store: store)
-            }))
-            .toggleStyle(.switch).controlSize(.mini).labelsHidden().fixedSize()
-            .help(WhatsAppWords.send)
-            .accessibilityLabel(WhatsAppWords.send)
         }
+    }
+}
+
+/// The button's face: 18 x 18 (the height of the line it sits in), radius 5. Off = a grey hairline outline and a grey
+/// glyph; on = filled with the accent, white glyph.
+struct DeckWhatsAppMark: View {
+    let on: Bool
+
+    var body: some View {
+        Image(systemName: WhatsAppGlyph.symbol).font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(on ? AnyShapeStyle(Color.white) : AnyShapeStyle(.secondary))
+            .frame(width: 18, height: 18)
+            .background(on ? Color.accentColor : Color.clear, in: .rect(cornerRadius: 5, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Color.secondary.opacity(on ? 0 : 0.5), lineWidth: 1))
+            .contentShape(.rect)
     }
 }

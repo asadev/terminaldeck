@@ -50,9 +50,17 @@ final class WhatsAppScreensPictures: XCTestCase {
         }
         // The info button's popover (a picture cannot open one).
         for dark in [false, true] {
-            try render(NativeWhatsAppInfoContent().background(DeckTokens.page), "info", dark, output, size: CGSize(width: 340, height: 180))
+            try render(NativeWhatsAppInfoContent().background(DeckTokens.page), "info", dark, output, size: CGSize(width: 340, height: 580))
         }
         await NativeSettingsValues.shared.endOffscreenFixture()
+    }
+
+    /// The guide alone: one offscreen render, no engine, app launch, preferences or fixture state.
+    func testAddGuidePopoverPicture() throws {
+        let output = package.deletingLastPathComponent().appendingPathComponent("night/wa-add-guide")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        try render(NativeWhatsAppInfoContent().background(DeckTokens.page), "add-guide", false, output,
+                   size: CGSize(width: 308, height: 580))
     }
 
     /// A session's bar with the chip (a WhatsApp agent attached to it) and without (none attached).
@@ -195,7 +203,10 @@ final class WhatsAppScreensRulesTests: XCTestCase {
         XCTAssertFalse(nothingHere, "no switch where nothing is attached")
         let screens = try source("NativeWhatsAppScreens.swift")
         XCTAssertTrue(screens.contains("Toggle(WhatsAppWords.send"), "the submenu's checked item and the heading switch")
-        XCTAssertTrue(screens.contains(".controlSize(.mini).labelsHidden()"), "the switch is mini and has no label")
+        // 18 Nov (Asad, review item 16: "this WhatsApp button is too bigger"): the heading keeps ONE small button; its
+        // switch is the first row of the button's own menu, no longer a second control in the bar.
+        XCTAssertTrue(screens.contains("DeckMenuToggleRow(title: WhatsAppWords.send"), "the switch is in the button's menu")
+        XCTAssertFalse(screens.contains(".controlSize(.mini).labelsHidden()"), "no separate switch in the bar")
         XCTAssertTrue(screens.contains("agent.sending ? WhatsAppWords.pause : WhatsAppWords.resume"), "Pause / Resume first in the row's menu")
         XCTAssertFalse(screens.contains("canAdd"), "no limit on our side: the add row always stays")
     }

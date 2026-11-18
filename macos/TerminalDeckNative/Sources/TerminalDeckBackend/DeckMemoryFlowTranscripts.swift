@@ -51,6 +51,8 @@ public enum DeckMemoryFlowTranscripts {
         public var record: DeckMemoryFlowState.Record
         /// The file was replaced or cut, so it was read from its start.
         public var restarted: Bool
+        /// CLI record completion, separate from screen status. Callers that only need diary pieces ignore it.
+        public var completedAt: Date? = nil
     }
     public static let chunkBytes = 4 * 1024 * 1024
     public static let maximumLineBytes = 16 * 1024 * 1024
@@ -85,6 +87,7 @@ public enum DeckMemoryFlowTranscripts {
         next.inode = inode
         var skipFirstLine = false
         if next.offset == 0, size > maximumFirstReadBytes { next.offset = size - maximumFirstReadBytes; skipFirstLine = true }
+        var completedAt: Date?
         var pieces: [DeckMemoryFlowPiece] = [], offset = next.offset, carry = Data(), family = next.family
         while offset + Int64(carry.count) < size {
             let position = offset + Int64(carry.count)
@@ -97,8 +100,8 @@ public enum DeckMemoryFlowTranscripts {
             while let newline = carry[lineStart...].firstIndex(of: 0x0A) {
                 if skipFirstLine { skipFirstLine = false }
                 else if newline > lineStart, newline - lineStart <= maximumLineBytes {
-                    parse(carry.subdata(in: lineStart..<newline), target: target, lineOffset: offset + Int64(lineStart),
-                          family: &family, into: &pieces)
+                    if let at = parse(carry.subdata(in: lineStart..<newline), target: target, lineOffset: offset + Int64(lineStart),
+                                      family: &family, into: &pieces) { completedAt = at }
                 }
                 lineStart = newline + 1
             }
@@ -108,21 +111,23 @@ public enum DeckMemoryFlowTranscripts {
             if carry.count > maximumLineBytes { offset += Int64(carry.count); carry = Data(); skipFirstLine = true }
         }
         next.offset = offset; next.family = family
-        return Read(pieces: pieces, record: next, restarted: restarted)
+        return Read(pieces: pieces, record: next, restarted: restarted, completedAt: completedAt)
     }
 
+    @discardableResult
     static func parse(_ line: Data, target: DeckMemoryFlowRecordTarget, lineOffset: Int64, family: inout String?,
-                      into pieces: inout [DeckMemoryFlowPiece]) {
-        var found: [DeckMemoryFlowPiece] = []
+                      into pieces: inout [DeckMemoryFlowPiece]) -> Date? {
+        var found: [DeckMemoryFlowPiece] = [], completedAt: Date?
         switch target.provider {
         case "claude": claude(line, conversation: target.conversation, into: &found)
-        case "codex": codex(line, conversation: target.conversation, lineOffset: lineOffset, family: &family, into: &found)
-        default: return
+        case "codex": completedAt = codex(line, conversation: target.conversation, lineOffset: lineOffset, family: &family, into: &found)
+        default: return nil
         }
         if let floor = target.notBefore {
             found.removeAll { piece in piece.at.map { $0.timeIntervalSince1970 * 1000 < floor } ?? false }
         }
         pieces += found
+        return completedAt
     }
 
     // MARK: Claude Code (one JSON line per record; the app's own chat rules decide what is a message)
@@ -160,11 +165,12 @@ public enum DeckMemoryFlowTranscripts {
 
     // MARK: Codex (rollout: one JSON line per record; a file uses ONE of two message shapes)
 
-    static func codex(_ line: Data, conversation: String, lineOffset: Int64, family: inout String?, into pieces: inout [DeckMemoryFlowPiece]) {
+    static func codex(_ line: Data, conversation: String, lineOffset: Int64, family: inout String?, into pieces: inout [DeckMemoryFlowPiece]) -> Date? {
         guard let text = String(data: line, encoding: .utf8), text.contains("\"event_msg\""),
-              text.contains("\"user_message\"") || text.contains("\"agent_message\"") || text.contains("\"UserMessage\"") || text.contains("\"AgentMessage\""),
-              let row = try? NativeRPCValue.parseJSON(line, maximumBytes: maximumLineBytes), row["type"].string == "event_msg" else { return }
+              let row = try? NativeRPCValue.parseJSON(line, maximumBytes: maximumLineBytes), row["type"].string == "event_msg" else { return nil }
         let payload = row["payload"]
+        let at = row["timestamp"].string.flatMap(BackendTaskAgentTranscripts.milliseconds).map { Date(timeIntervalSince1970: $0 / 1000) }
+        if payload["type"].string == "task_complete" { return at }
         var role: DeckMemoryDiaryRole?, body = "", shape = ""
         switch payload["type"].string {
         case "user_message": role = .user; body = payload["message"].string ?? ""; shape = "legacy"
@@ -174,19 +180,20 @@ public enum DeckMemoryFlowTranscripts {
             switch item["type"].string {
             case "UserMessage": role = .user
             case "AgentMessage": role = .assistant
-            default: return
+            default: return nil
             }
             shape = "items"
             body = (item["content"].elements ?? []).compactMap { $0["text"].string }.joined()
-        default: return
+        default: return nil
         }
         if family == nil { family = shape }
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard family == shape, let role, !trimmed.isEmpty else { return }
+        guard family == shape, let role, !trimmed.isEmpty else { return nil }
         // Codex's own housekeeping prompts are not something anyone said.
-        if role == .user, isInternalPrompt(trimmed) { return }
-        let at = row["timestamp"].string.flatMap(BackendTaskAgentTranscripts.milliseconds).map { Date(timeIntervalSince1970: $0 / 1000) }
+        if role == .user, isInternalPrompt(trimmed) { return nil }
         pieces.append(.init(role: role, text: trimmed, at: at, key: "codex:" + conversation + ":" + String(lineOffset)))
+        let phase = payload["phase"].string ?? payload["item"]["phase"].string
+        return role == .assistant && ["final_answer", "finalAnswer"].contains(phase ?? "") ? at : nil
     }
 
     /// A "user" message the CLI wrote to itself or the app wrapped around the desk: context blocks,
@@ -238,7 +245,7 @@ public enum DeckMemoryFlowTranscripts {
         }
         var next = record
         let from = record.lastMessageID.flatMap { order.firstIndex(of: $0) }.map { $0 + 1 } ?? 0
-        var pieces: [DeckMemoryFlowPiece] = []
+        var pieces: [DeckMemoryFlowPiece] = [], completedAt: Date?
         for id in order[min(from, order.count)...] {
             guard let message = messages[id] else { continue }
             let role: DeckMemoryDiaryRole
@@ -251,10 +258,14 @@ public enum DeckMemoryFlowTranscripts {
             guard !text.isEmpty else { continue }
             let at = message["timestamp"].string.flatMap(BackendTaskAgentTranscripts.milliseconds)
             if let floor = target.notBefore, let at, at < floor { continue }
+            // A Gemini text response without tool calls is the persisted final response, not a tool continuation.
+            if role == .assistant, (message["toolCalls"].elements ?? []).isEmpty, let at {
+                completedAt = Date(timeIntervalSince1970: at / 1000)
+            }
             pieces.append(.init(role: role, text: text, at: at.map { Date(timeIntervalSince1970: $0 / 1000) }, key: "gemini:" + target.conversation + ":" + id))
         }
         if let last = order.last { next.lastMessageID = last }
-        return Read(pieces: pieces, record: next, restarted: false)
+        return Read(pieces: pieces, record: next, restarted: false, completedAt: completedAt)
     }
 
     // MARK: When there is no record to read: what the turn-end signal itself carried

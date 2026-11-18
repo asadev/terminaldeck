@@ -198,6 +198,10 @@ public actor BackendRemoteHost {
     var linkRefreshed = false
     /// A TURN login outlives its device's last connection this long (§11.6: a reconnect reuses it).
     var loginGraceMs = 120_000
+    /// Phones use dc2 welcome terms so a TURN link can leave control traffic on the relay socket.
+    var linkTurnOnRelay = true
+    /// In-process test override only: loopback WebRTC otherwise always selects a host route.
+    var linkRouteForTests: String?
     private var features: [String: BackendRemoteHostFeature] = [:]
     private struct FeatureLease: Sendable { let ownerID: String; let tags: Set<String>; let closeHook: UUID }
     private var featureLeases: [UUID: FeatureLease] = [:]
@@ -1175,22 +1179,25 @@ public actor BackendRemoteHost {
         fields = Self.withMachine(fields)
         if serveLease?.suppliers.create != nil || serveLease == nil && operations.create != nil { fields.append(.init("folders", .array(context.reach.folders.map(NativeRPCValue.string)))) }
         if let link = await Self.hootWelcomeLink(context, served: features["hoot.hello"] != nil, trust: trust) { fields.append(.init("hoot", link)) } // PHONE2
-        // stream step 2: this host offers a link to a client that asked for one on a sealed connection; §11: a client that
-        // said link-only gets link-only terms (and hears `link.only` even without a link, so it knows this Mac is new).
+        // Phones claiming link-only get dc2 welcome terms so TURN can keep control on the relay socket. Web clients
+        // keep link-only terms; without a link the welcome still lists link.only so the client knows this Mac is new.
         let link = linkWanted(id, access: context.phoneAccess)
         let only = row.wire.channelBinding != nil && live[id]?.capabilities.contains(Self.linkOnlyCapability) == true
+        let platform = (live[id]?.platform ?? "").lowercased()
+        let relayFirst = link && only && linkTurnOnRelay && ["ios", "ipados", "android"].contains { platform.hasPrefix($0) }
         // link.keep: only with a link, and only when the client claimed it.
         let keep = link && live[id]?.capabilities.contains(Self.linkKeepCapability) == true
         if let at = fields.firstIndex(where: { $0.key == "capabilities" }), link || only {
-            let extra = (link ? [Self.linkCapability] : []) + (only ? [Self.linkOnlyCapability] : []) + (keep ? [Self.linkKeepCapability] : [])
+            let extra = (link ? [Self.linkCapability] : []) + (only && !relayFirst ? [Self.linkOnlyCapability] : []) + (keep ? [Self.linkKeepCapability] : [])
             fields[at] = .init("capabilities", .array(capabilities(context).map(NativeRPCValue.string) + extra.map(NativeRPCValue.string)))
         }
-        // The mode first: from the welcome on, only the relay's own frames may cross it (§11.1).
+        // Set the writer's terms before the welcome: dc2 phones take relay data until the Mac's marker.
         let phoneOrWeb = row.wire.channelBinding != nil && (live[id]?.capabilities.contains(Self.linkCapability) == true || Self.linkClientPlatform(live[id]?.platform))
         if link {
             live[id]?.link.clientOnly = only
+            live[id]?.link.relayFirst = relayFirst
             live[id]?.link.keep = keep; row.link.path.keeps = keep
-            row.link.path.set(.link(clientOnly: only))
+            row.link.path.set(relayFirst ? .wire : .link(clientOnly: only))
         } else if phoneOrWeb {
             row.link.path.set(.noLink)
         }
@@ -1557,6 +1564,7 @@ public actor BackendRemoteHost {
     /// `pushSettleMs` whose control channel holds at most `pushMostQueued` bytes.
     static func pushMayGo(link: BackendRemoteLinkState, now: Double) -> Bool {
         guard link.token != nil else { return true }
+        if link.open, link.keptOnRelay { return true }
         guard link.open, link.path.hasMoved, now - link.openedAt >= pushSettleMs else { return false }
         // What waits in the link's outbox counts as well as the channel's own queue (the outbox keeps that one low).
         return (link.connection?.queued(.control) ?? 0) + UInt64(link.path.outboxWaitingBytes) <= pushMostQueued

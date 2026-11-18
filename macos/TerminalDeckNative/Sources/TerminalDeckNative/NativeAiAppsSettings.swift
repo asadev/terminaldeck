@@ -44,6 +44,7 @@ struct AiAppsPageGroups: View {
     @State private var openKey: AiAccessKey?
 
     var body: some View {
+        if NativeCloudOffers.shows(.aiAppsInternet) {
         DeckSettingsGroup {
             DeckSettingsToggleRow("Let AI apps use this Mac", info: AiAppsLines.switchInfo,
                                   isOn: Binding(get: { state.internetOn }, set: { model.setInternet($0) }))
@@ -59,6 +60,7 @@ struct AiAppsPageGroups: View {
                 DeckSettingsProblem(text: "Not connected to the server right now. It reconnects by itself.")
             }
             if let problem = model.problem ?? state.problem { DeckSettingsProblem(text: problem) }
+        }
         }
         DeckSettingsGroup("Keys") {
             ForEach(state.keys) { key in
@@ -486,8 +488,10 @@ private struct AiNewKeyMade: View {
     @State private var place: AiSetupWhere = .thisMac
 
     var body: some View {
-        let setup = AiAppsSetup.setup(app, key: made.key, name: made.name, internetBase: state.internetBase,
-                                      localURL: state.localURL, where: place, channelBridge: state.channelBridge)
+        let internet = NativeCloudOffers.shows(.aiAppsInternet)
+        let shownApp: AiApp = !internet && app.web ? .claudeCode : app
+        let setup = AiAppsSetup.setup(shownApp, key: made.key, name: made.name, internetBase: internet ? state.internetBase : nil,
+                                      localURL: state.localURL, where: internet ? place : .thisMac, channelBridge: state.channelBridge)
         VStack(alignment: .leading, spacing: 12) {
             Text("“\(made.name)” is ready").font(.headline)
             NativeCodingAINotice(tone: .warn, text: "Copy the key now. It is shown only this once — lose it and you make a new one.")
@@ -499,14 +503,14 @@ private struct AiNewKeyMade: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Set it up in").font(.callout)
-                Picker("Which app to set it up in", selection: $app) {
-                    ForEach(AiApp.allCases) { Text($0.label).tag($0) }
+                Picker("Which app to set it up in", selection: Binding(get: { shownApp }, set: { app = $0 })) {
+                    ForEach(AiApp.allCases.filter { NativeCloudOffers.shows(.aiAppsInternet) || !$0.web }) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented).nativeUIGGreyControl()
                 .labelsHidden()
             }
 
-            if !app.web {
+            if !app.web && NativeCloudOffers.shows(.aiAppsInternet) {
                 Picker("Where that app runs", selection: $place) {
                     Text("On this Mac").tag(AiSetupWhere.thisMac)
                     Text("On another computer").tag(AiSetupWhere.elsewhere)
@@ -516,7 +520,7 @@ private struct AiNewKeyMade: View {
                 .fixedSize()
             }
 
-            if setup.needsInternet, !state.internetOn {
+            if internet, setup.needsInternet, !state.internetOn {
                 HStack {
                     Text("This needs internet reach, which is off.")
                     Spacer(minLength: 8)
@@ -642,7 +646,7 @@ final class AiAppsSettingsModel {
         }
     }
 
-    func setInternet(_ on: Bool) { run("ai-apps:internet", [on]) }
+    func setInternet(_ on: Bool) { if NativeCloudOffers.shows(.aiAppsInternet) { run("ai-apps:internet", [on]) } }
     func rename(_ id: String, _ name: String) { run("ai-apps:rename", [id, name]) }
     func setLevel(_ id: String, _ level: AiAccessLevel) { run("ai-apps:level", [id, level.rawValue]) }
     func setAskFirst(_ id: String, _ on: Bool) { run("ai-apps:ask-first", [id, on]) }

@@ -204,7 +204,7 @@ struct Restart1112ReviewRestoreTests {
             let (restore, planner, _) = try await reviewCoordinator(runtime, rows: rows, starter: starter)
             _ = try await restore.restore()
             let held = try await runtime.state.heldSessions()
-            #expect(held.count == 2 && held.allSatisfy { $0.reason.contains("Settings › Coding AIs") && $0.reason.contains("then press Retry") && !$0.pick })
+            #expect(held.count == 2 && held.allSatisfy { $0.reason.contains("Settings › Coding AIs") && $0.reason.contains("then press Reopen") && !$0.pick })
             #expect(await starter.attempts == 0)
             #expect(Set((await runtime.state.getOpenSessions()).compactMap { $0["tabKey"].string }) == ["login-gone", "history-gone"])
             let implicit = try BackendSessionSaved(rows[0].removing("profileId"))
@@ -279,7 +279,11 @@ struct Restart1112ReviewRestoreTests {
             #expect(held.reason.contains("original API account is no longer available"))
             #expect(held.reason.contains("Its conversation is kept"))
             #expect(!held.reason.contains("Add it again") && !held.reason.contains("press Retry"))
+            #expect(held.recoveryAction == "unavailable")
+            #expect(BackendSessionRestoreCoordinator.reopenableHeld([held]).isEmpty)
             try await withReviewRPC(runtime, restore: restore, planner: planner) { rpc in
+                let visible = try await rpc.invoke("sessions:held", args: [], context: BackendF4Runtime.context)
+                #expect(visible.elements?.isEmpty == true)
                 _ = try await rpc.invoke("session:held-retry", args: [.string(held.key)], context: BackendF4Runtime.context)
             }
             #expect(await starter.attempts == 0)
@@ -379,6 +383,70 @@ struct Restart1112ReviewRestoreTests {
             _ = try await opening.value
             #expect(await starter.live.count == 1)
             #expect(try await runtime.state.heldSessions().map { $0.saved["tabKey"].string } == ["second"])
+        }
+    }
+
+    @Test func macLogicAReopenUsesTheSameVerifiedHistoryHintAsStartup() async throws {
+        try await withReviewRuntime { runtime in
+            let config = runtime.configuration.systemDirectory("claude")
+            let path = try writeReviewTranscript(config, cwd: runtime.root.path, id: "linked-chat", text: "kept conversation")
+            let folder = DeckMemorySessionHook.root(dataRoot: runtime.configuration.dataDirectory).appendingPathComponent("sessions/linked-session")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let record: [String: Any] = ["provider": "claude", "tabKey": "held-tab", "historyOwnerID": "system",
+                "conversationID": "linked-chat", "transcriptPath": path]
+            try JSONSerialization.data(withJSONObject: record).write(to: folder.appendingPathComponent("state.json"))
+            let starter = ReviewHandoffStarter(runtime)
+            let (restore, _, _) = try await reviewCoordinator(runtime, rows: [], starter: starter)
+            await restore.setConversationHint(BackendRestoreConversationHint.make(dataRoot: runtime.configuration.dataDirectory))
+            let row = reviewRow(runtime.root.path, key: "held-tab", account: "system", conversation: "").removing("agentSessionId")
+            let held = try await runtime.state.holdSession(row, reason: "no conversation was saved", pick: true)
+            #expect(try await restore.retryHeld(held.key).isEmpty)
+            #expect(await starter.attempts == 1)
+            #expect(await starter.live.first?.agentSessionId == "linked-chat")
+            #expect(await starter.contents["held-tab"] == "kept conversation")
+        }
+    }
+
+    @Test func macLogicAAlreadyReattachedTabLeavesNoMisleadingRecoveryRow() async throws {
+        for retry in [false, true] {
+            try await withReviewRuntime { runtime in
+                _ = try writeReviewTranscript(runtime.configuration.systemDirectory("claude"), cwd: runtime.root.path, id: "live-chat")
+                let starter = ReviewHandoffStarter(runtime)
+                let (restore, _, context) = try await reviewCoordinator(runtime, rows: [], starter: starter)
+                let row = reviewRow(runtime.root.path, key: "reattached-tab", account: "system", conversation: "live-chat")
+                let saved = try BackendSessionSaved(row)
+                let launchContext = try await context.context(for: saved)
+                let live = try await starter.create(saved.input(resume: true), context: launchContext, holdOnFailure: false)
+                await restore.setHostedClaims { [live] }
+                let held = try await runtime.state.holdSession(row, reason: "the helper was reconnecting")
+                if retry { #expect(try await restore.retryHeld(held.key).isEmpty) }
+                else { _ = try await restore.restore() }
+                #expect(try await runtime.state.heldSessions().isEmpty)
+                #expect(await starter.attempts == 1)
+                #expect(await starter.live.count == 1)
+                #expect((await runtime.state.getOpenSessions()).contains { $0["tabKey"].string == "reattached-tab" })
+            }
+        }
+    }
+
+    @Test func macLogicARepeatedReopenOfTheSameRowWaitsForItsFirstAttempt() async throws {
+        try await withReviewRuntime { runtime in
+            _ = try writeReviewTranscript(runtime.configuration.systemDirectory("claude"), cwd: runtime.root.path, id: "same-chat")
+            let starter = ReviewHandoffStarter(runtime)
+            let (restore, _, _) = try await reviewCoordinator(runtime, rows: [], starter: starter)
+            let held = try await runtime.state.holdSession(reviewRow(runtime.root.path, key: "same-tab", account: "system", conversation: "same-chat"), reason: "fixture")
+            let gate = ReviewStartGate(); await starter.block(gate)
+            let first = Task { try await restore.retryHeld(held.key) }
+            await gate.waitForEntry()
+            do {
+                _ = try await restore.retryHeld(held.key)
+                Issue.record("A repeated Reopen must not enter the same launch again")
+            } catch { #expect(error.localizedDescription.contains("already reopening")) }
+            #expect(await starter.attempts == 1)
+            await gate.release()
+            #expect(try await first.value.isEmpty)
+            #expect(try await runtime.state.heldSessions().isEmpty)
+            #expect(await starter.live.count == 1)
         }
     }
 

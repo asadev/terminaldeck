@@ -18,7 +18,7 @@ public actor BackendHOSTAccountService {
     private var sessions: Set<String> = []
     private var bound: [String: String] = [:]
     private var boundAccounts: [String: BackendAccountLaunch] = [:]
-    private let apiCredentialAvailable: @Sendable (BackendAPIAccountRecord) -> Bool
+    private let apiCredentialAvailable: (@Sendable (BackendAPIAccountRecord) -> Bool)?
     private var stopped = false
     private var completedReleases: [String: BackendAccountCodexLease.Release] = [:]
     #if TD_HOST_ACCOUNT_BRIDGE
@@ -90,13 +90,13 @@ public actor BackendHOSTAccountService {
     #endif
 
     private init(accounts: BackendAccountLaunchAdapter, authority: NativeStateStore, configuration: BackendAccountConfiguration,
-                 apiCredentialAvailable: @escaping @Sendable (BackendAPIAccountRecord) -> Bool) {
+                 apiCredentialAvailable: (@Sendable (BackendAPIAccountRecord) -> Bool)?) {
         self.accounts = accounts; self.authority = authority; self.configuration = configuration; self.apiCredentialAvailable = apiCredentialAvailable
     }
 
     public static func start(configuration: BackendAccountConfiguration, nativeAccountOwnerDisabled: Bool,
                              vaultCipher: (any BackendAccountVaultCipher)? = nil,
-                             apiCredentialAvailable: @escaping @Sendable (BackendAPIAccountRecord) -> Bool = { BackendAPIAccountKeychain.contains($0) },
+                             apiCredentialAvailable: (@Sendable (BackendAPIAccountRecord) -> Bool)? = nil,
                              brokerFactory: (@Sendable (BackendAccountConfiguration, BackendAccountProfileStore, BackendAccountVault) async throws -> BackendAccountBroker)? = nil) async throws -> BackendHOSTAccountService {
         guard nativeAccountOwnerDisabled else { throw BackendSessionFailure.missingCapability("exclusive host account ownership") }
         // Separate helper authority record, never a second writer of state.json.

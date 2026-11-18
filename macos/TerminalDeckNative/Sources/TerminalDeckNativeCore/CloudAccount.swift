@@ -114,6 +114,7 @@ public struct CloudDeviceTrustRow: Sendable, Equatable, Identifiable {
 public struct CloudAccountSnapshot: Sendable, Equatable {
     public enum Phase: String, Sendable { case signedOut, signingIn, signedIn, paused, needsSignIn, dormant }
     public let phase: Phase
+    public var subscription: CloudSubscriptionSnapshot = .init()
     public let gate: CloudGate
     public let displayName: String?
     public let devices: [CloudDevice]
@@ -170,17 +171,21 @@ public struct CloudAccountSnapshot: Sendable, Equatable {
     }
     /// The same state under another phase and problem line; everything else is carried over unchanged.
     public func carried(phase: Phase, problem: String?) -> Self {
-        Self(phase: phase, gate: gate, displayName: displayName, devices: devices, coverage: coverage, waitingRecords: waitingRecords,
+        var copy = Self(phase: phase, gate: gate, displayName: displayName, devices: devices, coverage: coverage, waitingRecords: waitingRecords,
              blockedRecords: blockedRecords, problem: problem, trust: trust, heldChanges: heldChanges, refusedPacks: refusedPacks,
              trustNotice: trustNotice, baseline: baseline, cloudHead: cloudHead, fetched: fetched)
+        copy.subscription = subscription
+        return copy
     }
     /// The same state with the saved sign-in's name, when it had none yet (a launch whose first status read got no
     /// answer still knows who is signed in on this Mac: 13 Nov).
     public func named(_ name: String?) -> Self {
         guard displayName == nil, let name else { return self }
-        return Self(phase: phase, gate: gate, displayName: name, devices: devices, coverage: coverage, waitingRecords: waitingRecords,
+        var copy = Self(phase: phase, gate: gate, displayName: name, devices: devices, coverage: coverage, waitingRecords: waitingRecords,
                     blockedRecords: blockedRecords, problem: problem, trust: trust, heldChanges: heldChanges, refusedPacks: refusedPacks,
                     trustNotice: trustNotice, baseline: baseline, cloudHead: cloudHead, fetched: fetched)
+        copy.subscription = subscription
+        return copy
     }
     /// Proof 3 (13 Nov): the same state with this Mac's own progress read again (no request to the service): what
     /// is queued or held, the first copy's progress and how far this Mac has read the feed. A Mac that read past the
@@ -188,14 +193,18 @@ public struct CloudAccountSnapshot: Sendable, Equatable {
     public func withLocalProgress(coverage: [CloudCoverage], waitingRecords: Int, blockedRecords: Int, baseline: CloudBaselineProgress?,
                                   fetched: CloudSequence) -> Self {
         let head = cloudHead.map { $0 < fetched ? fetched : $0 }
-        return Self(phase: phase, gate: gate, displayName: displayName, devices: devices, coverage: coverage, waitingRecords: waitingRecords,
+        var copy = Self(phase: phase, gate: gate, displayName: displayName, devices: devices, coverage: coverage, waitingRecords: waitingRecords,
                     blockedRecords: blockedRecords, problem: problem, trust: trust, heldChanges: heldChanges, refusedPacks: refusedPacks,
                     trustNotice: trustNotice, baseline: baseline, cloudHead: head, fetched: cloudHead == nil ? self.fetched : fetched)
+        copy.subscription = subscription
+        return copy
     }
     public static let signedOut = Self(phase: .signedOut, gate: .closed)
     /// Visible while the server's LAST EXPLICIT decision allows Cloud (N2/N3). Time and network failures never close it;
     /// `now` is kept for source compatibility and is not used.
     public func visible(at now: Int64) -> Bool { gate.entitlesCloud && (phase == .signedIn || phase == .paused) }
+    public var offersCloudServices: Bool { subscription.allowsCloudServices }
+    public var offersCloudTools: Bool { subscription.offers(.cloudTools, existing: visible(at: 0)) }
     private var firstSaveWire: NativeRPCValue {
         guard let baseline else { return .null }
         let reason: NativeRPCValue = baseline.reason.map(NativeRPCValue.string) ?? .null
@@ -204,7 +213,7 @@ public struct CloudAccountSnapshot: Sendable, Equatable {
     }
     /// Explicit safe projection; never encode an identity/credential storage object to tools.
     public var wireValue: NativeRPCValue {
-        .object([
+        var fields: [NativeRPCValue.Field] = [
             .init("phase", .string(phase.rawValue)), .init("displayName", displayName.map(NativeRPCValue.string) ?? .null),
             .init("devices", .array(devices.map { device -> NativeRPCValue in
                 // State only (design 2.3): whether THIS Mac trusts the device. No tool can change it.
@@ -229,7 +238,9 @@ public struct CloudAccountSnapshot: Sendable, Equatable {
             .init("catchingUp", catchingUp.map(NativeRPCValue.bool) ?? .null),
             .init("firstSave", firstSaveWire),
             .init("problem", problem.map(NativeRPCValue.string) ?? .null)
-        ])
+        ]
+        if subscription.showsSubscription { fields.append(.init("subscription", subscription.wireValue)) }
+        return .object(fields)
     }
 }
 

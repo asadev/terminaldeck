@@ -91,6 +91,8 @@ struct NativeCloudOverviewSection: View {
     /// Settings › Cloud since 15 Nov: only what needs him (no headline, no per-kind rows; the status line and the
     /// "Keep in sync on this Mac" list say those).
     var compact = false
+    /// Waiting lines the page says elsewhere (18 Nov: the saved-passwords sentence is the top row's own words).
+    var hiding: Set<String> = []
     /// The "Changed from your other devices" list starts collapsed: one compact line until opened.
     @State private var changesOpen = false
     /// Page-names 2: the projects without a folder here start folded under their one quiet line.
@@ -217,10 +219,12 @@ struct NativeCloudOverviewSection: View {
                 }
             }
             ForEach(Self.shownWaiting(overview)) { item in
-                HStack(alignment: .firstTextBaseline, spacing: DeckTokens.Spacing.s12) {
-                    Text(Self.words(item.text)).fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: DeckTokens.Spacing.s12)
-                    button(item.action)
+                if !hiding.contains(item.id) {
+                    HStack(alignment: .firstTextBaseline, spacing: DeckTokens.Spacing.s12) {
+                        Text(Self.words(item.text)).fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: DeckTokens.Spacing.s12)
+                        button(item.action)
+                    }
                 }
             }
             // The one rule: "<Mac>'s newer CLAUDE.md (<project>) is in use; this Mac's version is kept until <date>" · Show.

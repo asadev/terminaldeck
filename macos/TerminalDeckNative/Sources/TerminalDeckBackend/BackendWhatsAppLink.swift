@@ -72,6 +72,16 @@ actor BackendWhatsAppLink {
     private var typingFor: String?
     private var typedAt: Date?
     private var lastPoll: Date?
+    private struct TerminalReply {
+        let id = UUID()
+        let target: WhatsAppTarget
+        let text: String
+        let to: String
+        let before: String
+        let sentAt: Double
+    }
+    private var terminalReply: TerminalReply?
+    private var terminalWaiting: Task<Void, Never>?
 
     init(agentID: String, key: String, transport: any WhatsAppTransport, receivers: any WhatsAppReceiverPort, clock: Clock = .live,
          read: @escaping @Sendable () async -> WhatsAppAgentRecord?,
@@ -89,7 +99,7 @@ actor BackendWhatsAppLink {
         polling = Task { [weak self] in await self?.run() }
         watching = Task { [weak self] in await self?.watch() }
     }
-    func stop() { polling?.cancel(); watching?.cancel(); polling = nil; watching = nil }
+    func stop() { polling?.cancel(); watching?.cancel(); terminalWaiting?.cancel(); polling = nil; watching = nil; terminalWaiting = nil; terminalReply = nil }
     var isRunning: Bool { polling != nil }
     /// The session his messages go to now (nil until the first one, or after it ended).
     var currentTarget: WhatsAppTarget? { target }
@@ -278,32 +288,104 @@ actor BackendWhatsAppLink {
         return String(words.prefix(300))
     }
 
-    /// A terminal session: his text typed in with Return; what it prints once quiet for 2 s comes back (last 40 lines).
+    /// AI answers come from the same record as sessions_result, after the CLI's own turn-end receipt.
+    /// The wait is separate from intake: a permission reply must reach the AI while it is still working.
     private func terminal(_ target: WhatsAppTarget, text: String, to: String) async {
         let before = await receivers.screen(target) ?? ""
+        let record = await receivers.terminalRecord(target)
+        let sentAt = clock.now().timeIntervalSince1970 * 1_000
         do { try await receivers.type(target, text: text + "\r") }
         catch { typingFor = nil; send("That did not reach the terminal: " + Self.plain(error), to: to); return }
-        let started = clock.now()
-        var last = before, changedAt: Date?
+        let reply = TerminalReply(target: target, text: text, to: to, before: before, sentAt: sentAt)
+        guard record != nil else { await terminalScreen(reply); return }
+        terminalWaiting?.cancel()
+        terminalReply = reply
+        terminalWaiting = Task { [weak self] in await self?.waitForTerminal(reply) }
+    }
+
+    private func waitForTerminal(_ reply: TerminalReply) async {
+        let started = Date(timeIntervalSince1970: reply.sentAt / 1_000)
+        while !Task.isCancelled, terminalReply?.id == reply.id {
+            await clock.sleep(0.5)
+            guard !Task.isCancelled else { return }
+            await lookTerminal(reply)
+            if clock.now().timeIntervalSince(started) >= Timing.terminalLongest { break }
+        }
+        // After 120 s intake stays free, and the normal watcher delivers a later turn end.
+        if terminalReply?.id == reply.id { terminalWaiting = nil }
+    }
+
+    private func lookTerminal(_ reply: TerminalReply) async {
+        guard terminalReply?.id == reply.id else { return }
+        guard let record = await receivers.terminalRecord(reply.target) else {
+            guard terminalReply?.id == reply.id else { return }
+            terminalReply = nil; terminalWaiting = nil
+            await terminalScreen(reply)
+            return
+        }
+        guard let ended = record.endedAt, ended > reply.sentAt,
+              let at = record.answeredAt, at > reply.sentAt, at <= ended,
+              let answer = record.answer?.trimmingCharacters(in: .whitespacesAndNewlines), !answer.isEmpty,
+              terminalReply?.id == reply.id else { return }
+        terminalReply = nil; terminalWaiting = nil; typingFor = nil; openApproval = nil
+        if await read()?.isSending == true { send(answer, to: reply.to) }
+    }
+
+    private func terminalScreen(_ reply: TerminalReply) async {
+        let started = Date(timeIntervalSince1970: reply.sentAt / 1_000)
+        var last = reply.before, changedAt: Date?
         while !Task.isCancelled {
             await clock.sleep(0.5)
-            let now = await receivers.screen(target) ?? last
+            let now = await receivers.screen(reply.target) ?? last
             if now != last { last = now; changedAt = clock.now() }
             if let changedAt, clock.now().timeIntervalSince(changedAt) >= Timing.terminalQuiet { break }
             if clock.now().timeIntervalSince(started) >= Timing.terminalLongest { break }
             if changedAt == nil, clock.now().timeIntervalSince(started) >= Timing.terminalQuiet * 3 { break }
         }
+        guard !Task.isCancelled else { return }
         typingFor = nil
-        let output = Self.newLines(before: before, after: last)
-        send(output.isEmpty ? Words.noOutput : "```\n" + output + "\n```", to: to, format: false)
+        let output = Self.cleanTerminal(Self.newLines(before: reply.before, after: last, maximumLines: nil), echo: reply.text)
+        send(output.isEmpty ? Words.noOutput : "```\n" + output + "\n```", to: reply.to, format: false)
     }
+
+    /// Shell fallback only. Keep command output, strip terminal chrome and undecodable glyphs before limiting lines.
+    static func cleanTerminal(_ screen: String, echo: String) -> String {
+        func spaces(_ text: String) -> String {
+            String(String.UnicodeScalarView(text.unicodeScalars.compactMap { scalar in
+                if scalar.value == 0xFFFD { return nil }
+                let specialSpace = scalar.properties.generalCategory == .spaceSeparator || [0x09, 0x200B, 0x2060, 0xFEFF].contains(scalar.value)
+                return specialSpace ? UnicodeScalar(0x20) : scalar
+            }))
+        }
+        let echo = spaces(echo).trimmingCharacters(in: .whitespaces)
+        var lines = spaces(screen).components(separatedBy: .newlines).compactMap { raw -> String? in
+            let hadFrame = raw.unicodeScalars.contains { (0x2500...0x257F).contains($0.value) }
+            var content = String(String.UnicodeScalarView(raw.unicodeScalars.filter { !(0x2500...0x257F).contains($0.value) }))
+            while content.last?.isWhitespace == true { content.removeLast() }
+            let line = content.trimmingCharacters(in: .whitespaces)
+            if hadFrame && line.isEmpty { return nil }
+            let prompt = #"^.*?[❯›$%#>]\s*(.*)$"#
+            if let range = line.range(of: prompt, options: .regularExpression) {
+                let tail = String(line[range]).replacingOccurrences(of: prompt, with: "$1", options: .regularExpression)
+                if tail.isEmpty || tail == echo { return nil }
+            }
+            if line.range(of: #"^(?:[✻✽✢✶✳*]\s+.*\bfor\s+\d|Ran \d+ (?:shell command|tool)|[?] for shortcuts|.*(?:bypass permissions|accept edits) on|.*(?:context left|Context left|esc to interrupt))"#, options: .regularExpression) != nil { return nil }
+            return hadFrame ? line : content
+        }
+        while lines.first?.isEmpty == true { lines.removeFirst() }
+        while lines.last?.isEmpty == true { lines.removeLast() }
+        return lines.suffix(Timing.terminalLines).joined(separator: "\n")
+    }
+
     /// The lines the terminal printed after `before` (the screen's last lines when it scrolled), at most 40.
-    static func newLines(before: String, after: String) -> String {
-        let fresh = after.hasPrefix(before) ? String(after.dropFirst(before.count)) : after
+    static func newLines(before: String, after: String, maximumLines: Int? = Timing.terminalLines) -> String {
+        // Keep the row being edited: dropping a partial "$ " prefix would leave a bare command echo to send.
+        let completeBefore = before.lastIndex(of: "\n").map { String(before[...$0]) } ?? ""
+        let fresh = after.hasPrefix(before) ? String(after.dropFirst(completeBefore.count)) : after
         var lines = fresh.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeLast() }
         while let first = lines.first, first.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeFirst() }
-        return lines.suffix(Timing.terminalLines).joined(separator: "\n")
+        return (maximumLines.map { Array(lines.suffix($0)) } ?? lines).joined(separator: "\n")
     }
 
     // MARK: The receiver's answers and approvals back to him (every final answer, wherever it was asked)
@@ -323,7 +405,14 @@ actor BackendWhatsAppLink {
             target = try? await receivers.target(for: record.receiver, conversationName: record.name, agentID: agentID)
             seededTurn = false
         }
-        guard let target, !target.isTerminal else { return }
+        guard let target else { return }
+        if target.isTerminal {
+            if let turn = await receivers.turn(target), record.isSending, case .needsApproval(let approvals) = turn.state {
+                askApproval(approvals, target: target, to: to)
+            }
+            if let reply = terminalReply, terminalWaiting == nil { await lookTerminal(reply) }
+            return
+        }
         guard await receivers.isOpen(target) else {
             self.target = nil
             // Closed because it MOVED to another computer: not ended. The record stays as it is until the taker
@@ -358,14 +447,7 @@ actor BackendWhatsAppLink {
                 _ = await transport.markRead(key: key, messageID: wamid, typing: true)
             }
         case .needsApproval(let approvals):
-            // Fault 3: one question at a time. The open one stays until answered or gone; then the next is asked.
-            if let open = openApproval, approvals.contains(where: { $0.id == open.id }) { break }
-            openApproval = nil
-            if let next = approvals.first(where: { !askedApprovals.contains($0.id) }) {
-                askedApprovals.insert(next.id)
-                openApproval = (target, next.id, clock.now())
-                send(Self.approvalText(next), to: to, format: false)
-            }
+            askApproval(approvals, target: target, to: to)
         case .done(let answer):
             guard turn.turnID != deliveredTurn else { return }
             deliveredTurn = turn.turnID; typingFor = nil; openApproval = nil
@@ -376,6 +458,17 @@ actor BackendWhatsAppLink {
             deliveredTurn = turn.turnID; typingFor = nil; openApproval = nil
             send(reason, to: to)
         case .idle: break
+        }
+    }
+
+    private func askApproval(_ approvals: [WhatsAppApproval], target: WhatsAppTarget, to: String) {
+        // One question at a time; keep the existing approval IDs and 1/2 reply path.
+        if let open = openApproval, approvals.contains(where: { $0.id == open.id }) { return }
+        openApproval = nil
+        if let next = approvals.first(where: { !askedApprovals.contains($0.id) }) {
+            askedApprovals.insert(next.id)
+            openApproval = (target, next.id, clock.now())
+            send(Self.approvalText(next), to: to, format: false)
         }
     }
 

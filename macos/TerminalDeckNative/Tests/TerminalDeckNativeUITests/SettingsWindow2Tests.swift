@@ -56,7 +56,7 @@ final class SettingsWindow2Tests: XCTestCase {
     func testEveryPageInsideProfileLightsTheProfileRowAndSurvivesThePageReport() {
         NativeCloudDisplayGate.shared.offer(true)
         defer { NativeCloudDisplayGate.shared.offer(false) }
-        for page in [N.personalID, N.signInID, N.cloudID, N.olderDevicesID, N.devicePage("account:abc")] {
+        for page in [N.personalID, N.signInID, N.cloudID, N.devicePage("account:abc")] {
             XCTAssertEqual(N.listRow(page), "profile", page)
             let next = N.afterPageReport(wanted: nil, current: page, selected: "general", pageIDs: ["general"])
             XCTAssertEqual(next.selection, page, page)
@@ -103,17 +103,17 @@ final class SettingsWindow2Tests: XCTestCase {
         let old = [DevicesPage.OldDevice(ref: "device:o1", source: .device, name: "Old phone", lastSeenAtMs: nil, connected: false),
                    DevicesPage.OldDevice(ref: "machine:m1", source: .machine, name: "Studio", lastSeenAtMs: nil, connected: true)]
         let rows = NativeDevicesSettings.rows(account: account, old: old, now: now)
-        let groups = NativeDevicesSettings.groups(rows, now: now)
-        XCTAssertEqual(groups.main.map(\.name), ["Sam's Mac mini", "Studio", "Sam's MacBook Pro", "iPhone 13 Pro Max", "New iPad"])
-        XCTAssertEqual(Set(groups.older.map(\.name)), ["iPhone 13 Pro Max", "Chrome on Mac", "Pixel 8", "Android emulator", "Old phone"])
-        XCTAssertEqual(groups.main.count + groups.older.count, rows.count, "nothing is dropped, nothing signed out")
-        XCTAssertEqual(NativeDevicesSettings.olderTitle(groups.older.count), "Older and browser sign-ins (5)")
-        XCTAssertEqual(NativeDevicesSettings.secondLine(groups.main[0]), "This Mac")
-        XCTAssertEqual(NativeDevicesSettings.secondLine(groups.main[2], now: now), "MacBook Pro · Active now")
-        XCTAssertEqual(NativeDevicesSettings.kindWord(groups.main[0]), "Mac mini")
-        XCTAssertEqual(NativeDevicesSettings.glyph(groups.main[0]), "macmini")
+        // 18 Nov (owner: "We need everything at one place"): ONE list, nothing behind another page, nothing dropped.
+        XCTAssertEqual(rows.map(\.name), ["Sam's Mac mini", "Studio", "Sam's MacBook Pro", "iPhone 13 Pro Max", "Chrome on Mac", "Android emulator",
+                                          "iPhone 13 Pro Max", "Pixel 8", "New iPad", "Old phone"])
+        XCTAssertEqual(NativeDevicesSettings.shown(rows, open: false).count, NativeDevicesSettings.firstRows)
+        XCTAssertEqual(NativeDevicesSettings.shown(rows, open: true), rows)
+        XCTAssertEqual(NativeDevicesSettings.moreTitle(rows.count - NativeDevicesSettings.firstRows), "Show 2 more")
+        XCTAssertEqual(NativeDevicesSettings.secondLine(rows[0]), "This Mac")
+        XCTAssertEqual(NativeDevicesSettings.secondLine(rows[2], now: now), "Active now", "the name says MacBook Pro already")
+        XCTAssertEqual(NativeDevicesSettings.kindWord(rows[0]), "Mac mini")
+        XCTAssertEqual(NativeDeviceModel.of(rows[0]), .macMini)
         XCTAssertEqual(NativeDevicesSettings.kindWord(rows.first { $0.name == "Pixel 8" }!), "Android phone")
-        XCTAssertEqual(NativeDevicesSettings.signOutAllTitle, "Sign out all of these")
     }
 
     // MARK: Cloud (items 25, 28-30)
@@ -219,10 +219,9 @@ final class SettingsWindow2Tests: XCTestCase {
                                           .init(provider: "apple", providerName: "Apple", account: "sam@example.com")], addable: []))
         let fixture = NativeDevicesFixture(reach: reach, old: [])
         let rows = NativeDevicesSettings.rows(account: DevicesPage.accountDevices(snapshot), old: [])
-        let groups = NativeDevicesSettings.groups(rows)
-        let thisMac = try XCTUnwrap(groups.main.first)
-        let phone = try XCTUnwrap(groups.main.first { $0.name == "Sam's iPhone" })
-        XCTAssertEqual(groups.older.map(\.name).sorted(), ["Chrome on Mac", "Pixel 8"])
+        let thisMac = try XCTUnwrap(rows.first)
+        let phone = try XCTUnwrap(rows.first { $0.name == "Sam's iPhone" })
+        XCTAssertEqual(rows.count, 5, "the browser and the phone not seen for 45 days are in the one list")
         for dark in [false, true] {
             try render(shell("profile") { NativeProfileSettings(model: model, devicesFixture: fixture) }, "profile", dark, output)
             try render(shell(N.personalID) { NativeProfilePersonalPage(model: model) }, "personal-information", dark, output)
@@ -238,7 +237,6 @@ final class SettingsWindow2Tests: XCTestCase {
             }, "cloud-info-open", dark, output)
             try render(shell(N.devicePage(thisMac.id)) { NativeDevicePage(rowID: thisMac.id, account: model, fixture: fixture) }, "device-this-mac", dark, output)
             try render(shell(N.devicePage(phone.id)) { NativeDevicePage(rowID: phone.id, account: model, fixture: fixture) }, "device-phone", dark, output)
-            try render(shell(N.olderDevicesID) { NativeOlderDevicesPage(account: model, fixture: fixture) }, "older-devices", dark, output)
             try render(shell("general") { NativeGeneralSettings(fixtureState: power) }, "general", dark, output)
             try render(shell("appearance") { NativeAppearanceSettings(fixtureTheme: "system") }, "appearance", dark, output)
             try render(shell("notifications") { NativeNotificationsSettings() }, "notifications", dark, output)

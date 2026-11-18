@@ -18,6 +18,23 @@ struct ContentView: View {
             && !model.landingOnScreen // the New session page waits for nothing (Owner, 14 Nov)
     }
 
+    /// The page on show can move to a window of its own: its button sits at the toolbar's right end.
+    private var popoutPage: ScreenRef? {
+        guard let screen = model.currentScreen,
+              let ref = NativePageWindows.page(kind: screen.kind, id: screen.id),
+              ref.id != "tasks", ref.id != "agents-all", ref.id != NativeLanding.pageID, !ref.isHoot else { return nil }
+        return ref
+    }
+
+    /// What the tab strip leaves free at the window's right edge: room for what shows there, and only that. On a
+    /// session or browser tab nothing does, and the tabs run to the window's edge (owner, 18 Nov).
+    private var stripTrailingRoom: CGFloat {
+        if NativeCloudStatusShort.panelHidden(columnVisibility, detailMinX: detailMinX) {
+            return popoutPage != nil ? TabStripLayout.trailingReserveAndButton : TabStripLayout.trailingReserve
+        }
+        return popoutPage != nil ? TabStripLayout.trailingButton : TabStripLayout.trailingMargin
+    }
+
     var body: some View {
         let tabs = model.stripTabs
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -36,10 +53,11 @@ struct ContentView: View {
                         ToolbarItem(placement: .navigation) {
                             TabStrip(state: tabs,
                                      favicons: model.stripFavicons,
-                                     width: TabStripLayout.width(windowWidth: windowWidth,
+                                     width: TabStripLayout.width(windowWidth: anchor.windowWidth ?? windowWidth,
                                                                  detailMinX: detailMinX,
                                                                  anchorMinX: anchor.minX,
-                                                                 leadingFloor: anchor.leadingFloor),
+                                                                 leadingFloor: anchor.leadingFloor,
+                                                                 trailing: stripTrailingRoom),
                                      anchor: anchor,
                                      // A session chosen here comes to this Mac from a phone that had it (28 Oct).
                                      select: { id in NativeTerminalSessions.shared.chooser.choosing(in: .tabStrip) { model.selectTab(id) } },
@@ -75,11 +93,7 @@ struct ContentView: View {
                 }
             }
             ToolbarItem(placement: .primaryAction) {
-                if let screen = model.currentScreen,
-                   let ref = NativePageWindows.page(kind: screen.kind, id: screen.id),
-                   ref.id != "tasks", ref.id != "agents-all", ref.id != NativeLanding.pageID, !ref.isHoot {
-                    NativePagePopoutButton(ref: ref)
-                }
+                if let ref = popoutPage { NativePagePopoutButton(ref: ref) }
             }
         }
         .navigationTitle(model.windowTitle)

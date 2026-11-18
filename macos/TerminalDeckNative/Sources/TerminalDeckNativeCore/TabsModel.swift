@@ -122,6 +122,29 @@ public enum TabStripMetrics {
         guard count > 0 else { return 0 }
         return tabWidth * Double(count) + spacing * Double(count - 1)
     }
+
+    /// The tab on show never goes below this, so its title always shows (owner, 18 Nov: 17 tabs read "N…").
+    public static let activeMinimum: Double = 120
+    /// Under this width a tab shows only its icon.
+    public static let titleFrom: Double = 64
+
+    /// Each tab's width, in strip order: the room shared equally; when that share is under `activeMinimum` the tab
+    /// on show keeps `activeMinimum` and the others share what is left.
+    public static func widths(count: Int, activeIndex: Int?, available: Double) -> [Double] {
+        guard count > 0 else { return [] }
+        let equal = tabWidth(count: count, available: available)
+        guard count > 1, let activeIndex, activeIndex >= 0, activeIndex < count, equal < activeMinimum else {
+            return Array(repeating: equal, count: count)
+        }
+        let rest = (available - activeMinimum - spacing * Double(count - 1)) / Double(count - 1)
+        var widths = Array(repeating: min(maximumTab, max(minimumTab, rest.rounded(.down))), count: count)
+        widths[activeIndex] = activeMinimum
+        return widths
+    }
+
+    public static func contentWidth(_ widths: [Double]) -> Double {
+        widths.reduce(0, +) + spacing * Double(max(0, widths.count - 1))
+    }
 }
 
 /// What a session's status word means, exactly as the web's StatusDot says it

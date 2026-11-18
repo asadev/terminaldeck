@@ -10,6 +10,23 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-11-18
+
+- Account switches preserve API and subscription choices, and repeated pending switches can be replaced.
+- Session headers show reported effort and usage, with a quiet Reopen action for sessions that did not reopen.
+- Other-computer sessions keep their live terminal or chat, shared controls and moving state.
+- Cloud offers follow the paid/free rule; the plan row stays hidden while charging is off.
+- Profile, devices and Cloud settings use clearer editing, one device list and calmer saved-password details.
+- The side panel, session header, menus and ended-session page have simpler controls and layout.
+- Browser tabs use the header space, with bookmarks, a profile card and one connect control.
+- Hidden browser pages keep working, and page questions wait for the person without stealing focus.
+
+## [0.22.3] — 2026-11-17
+
+- Phones on mobile data keep session messages on the relay when a direct connection needs TURN.
+- WhatsApp terminal replies use the AI’s final answer, with cleaner output for shell sessions.
+- WhatsApp agent help now shows an animated five-step picture above the text instructions.
+
 ## [0.22.2] — 2026-11-17
 
 - Connecting is quicker: after a short gap in the connection, the app and your phones connect again straight away instead of waiting a long time.
