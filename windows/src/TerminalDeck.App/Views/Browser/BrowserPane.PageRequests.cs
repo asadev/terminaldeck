@@ -88,8 +88,6 @@ public sealed partial class BrowserPane
         finally { FinishPageQuestion(tab, question); }
       }, tab);
     };
-    await tab.Model.CommandAsync("Page.enable", new { });
-    await tab.Model.CommandAsync("Page.setInterceptFileChooserDialog", new { enabled = true });
     await web.AddScriptToExecuteOnDocumentCreatedAsync("""
       (() => {
         window.__tdPageParked = true;
@@ -122,5 +120,10 @@ public sealed partial class BrowserPane
         }
       })();
       """);
+  }
+  private async Task EnablePageRequestsAsync(BrowserTab tab)
+  {
+    await tab.Model.CommandAsync("Page.enable", new { });
+    await tab.Model.CommandAsync("Page.setInterceptFileChooserDialog", new { enabled = true });
   }
 }

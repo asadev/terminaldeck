@@ -104,8 +104,14 @@ public sealed partial class BrowserPane
         {
           var anchor = BrowserProofElements(panel).OfType<Button>().First(button => AutomationProperties.GetName(button) == label);
           var menuPopup = anchor.Flyout ?? throw new InvalidOperationException("The browser menu is missing."); menuPopup.ShowAt(anchor); await Task.Delay(150);
-          var drawn = VisualTreeHelper.GetOpenPopupsForXamlRoot(panel.XamlRoot).Select(open => open.Child).OfType<FrameworkElement>().Where(child => child.ActualWidth > 0 && child.ActualHeight > 0 && child is not ToolTip).Last();
-          await File.WriteAllBytesAsync(Path.Combine(output, name + "-" + suffix + ".png"), await RenderPngAsync(drawn, (int)drawn.ActualWidth, (int)drawn.ActualHeight)); menuPopup.Hide();
+          FrameworkElement? drawn = null; var menuDeadline = DateTimeOffset.UtcNow.AddSeconds(3);
+          while ((drawn = VisualTreeHelper.GetOpenPopupsForXamlRoot(panel.XamlRoot).Select(open => open.Child).OfType<FrameworkElement>().LastOrDefault(child => child.ActualWidth > 0 && child.ActualHeight > 0 && child is not ToolTip)) is null && DateTimeOffset.UtcNow < menuDeadline) await Task.Delay(100);
+          Check(name + " " + suffix + " menu opens", drawn is not null);
+          // Some flyout surfaces cannot be read back by RenderTargetBitmap; the
+          // real-window screenshots cover their look.
+          if (drawn is not null) try { await File.WriteAllBytesAsync(Path.Combine(output, name + "-" + suffix + ".png"), await RenderPngAsync(drawn, (int)drawn.ActualWidth, (int)drawn.ActualHeight)); }
+          catch (ArgumentException) { }
+          menuPopup.Hide(); await Task.Delay(150);
         }
         var previousWidth = panel.Width; var previousAlignment = panel.HorizontalAlignment;
         panel.Width = 380; panel.HorizontalAlignment = HorizontalAlignment.Left; frame.UpdateLayout(); await Task.Delay(150);
