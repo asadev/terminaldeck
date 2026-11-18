@@ -42,12 +42,14 @@ public sealed partial class BrowserPane
       Stage("open"); var page = await Core.OpenAsync(fixture.Url); var tab = tabs.Single(t => t.Id == page.Id);
       ObserveShellPages(); ShellSelected?.Invoke(tab.Id); Stage("open-shell-slot"); await Wait(() => pageSlots.ContainsKey(tab.Id));
       Stage("open-drawn"); await Wait(() => IsDrawn(pageSlots[tab.Id]));
-      var web = tab.View.CoreWebView2;
+      var web = tab.View.CoreWebView2; var pageRoot = tab.View.XamlRoot; var pageParent = tab.View.Parent;
       await tab.Model.CommandAsync("Runtime.evaluate", new { expression = "window.__tdProofIdentity='kept'; document.getElementById('target').onclick=()=>document.body.dataset.clicked='yes'" });
       Stage("bookmarks"); var bookmark = await Core.AddBookmarkAsync(tab.Profile.Id, fixture.Url, "Fixture bookmark");
       Check("bookmark round trip", Core.Bookmarks(tab.Profile.Id).Any(b => b.Id == bookmark.Id)); await Core.ShowBookmarkBarAsync(tab.Profile.Id, true);
       Stage("background"); var other = await Core.OpenAsync(fixture.Url + "next"); ObserveShellPages(); ShellSelected?.Invoke(other.Id);
-      await Wait(() => parkedPages.ContainsKey(tab.Id));
+      Stage("background-other-drawn"); await Wait(() => pageSlots.TryGetValue(other.Id, out var otherSlot) && IsDrawn(otherSlot));
+      Stage("background-original-parked"); await Wait(() => parkedPages.ContainsKey(tab.Id));
+      Check("hidden page retains its original parent, XamlRoot and controller", ReferenceEquals(pageParent, tab.View.Parent) && ReferenceEquals(pageRoot, tab.View.XamlRoot) && ReferenceEquals(web, tab.View.CoreWebView2));
       var state = await Core.PerformAsync(tab.Id, BrowserPageAction.Read, JsonSerializer.SerializeToElement(new { selector = "h1" }));
       Check("hidden tab read", state.GetRawText().Contains("Browser parity fixture", StringComparison.Ordinal));
       await Core.PerformAsync(tab.Id, BrowserPageAction.Step, JsonSerializer.SerializeToElement(new { verb = "type", selector = "#ordinary", value = "Background typed text" }));
@@ -71,7 +73,13 @@ public sealed partial class BrowserPane
       await Core.PerformAsync(tab.Id, BrowserPageAction.WorkspaceChange, JsonSerializer.SerializeToElement(new { command = "questionCancel" })); await Wait(() => !pageQuestions.ContainsKey(tab.Id));
       var answer = await tab.Model.CommandAsync("Runtime.evaluate", new { expression = "window.__tdAnswer===false", returnByValue = true }); Check("explicit cancel answers the original question", answer.GetProperty("result").GetProperty("value").GetBoolean());
       Stage("minimised"); if (app.Presenter is not OverlappedPresenter presenter) throw new InvalidOperationException("The fixture needs an ordinary desktop window.");
-      presenter.Minimize(); await Wait(() => presenter.State == OverlappedPresenterState.Minimized); await PrepareBackgroundPageAsync(tab); await Capture("minimised-window");
+      presenter.Minimize(); await Wait(() => presenter.State == OverlappedPresenterState.Minimized);
+      await Core.PerformAsync(tab.Id, BrowserPageAction.Step, JsonSerializer.SerializeToElement(new { verb = "type", selector = "#ordinary", value = "Minimised typed text" }));
+      await tab.Model.CommandAsync("Runtime.evaluate", new { expression = "document.body.style.background='rgb(234,76,76)'; document.documentElement.style.background='rgb(234,76,76)'; document.querySelector('h1').textContent='Updated while minimised'" });
+      var minimisedState = await Core.PerformAsync(tab.Id, BrowserPageAction.Read, JsonSerializer.SerializeToElement(new { selector = "h1" }));
+      Check("minimised page reads its new content", minimisedState.GetRawText().Contains("Updated while minimised", StringComparison.Ordinal));
+      try { await CaptureAsync(tab); Check("minimised picture answers in plain words", false); }
+      catch (InvalidOperationException minimised) { Check("minimised picture answers in plain words", minimised.Message == MinimisedPictureNote); }
       Check("capture leaves the person’s window minimised", presenter.State == OverlappedPresenterState.Minimized);
       presenter.Restore(false); await Core.TakeHumanControlAsync(tab.Id);
       Stage("popup-protocol");
@@ -96,8 +104,14 @@ public sealed partial class BrowserPane
         {
           var anchor = BrowserProofElements(panel).OfType<Button>().First(button => AutomationProperties.GetName(button) == label);
           var menuPopup = anchor.Flyout ?? throw new InvalidOperationException("The browser menu is missing."); menuPopup.ShowAt(anchor); await Task.Delay(150);
-          var drawn = VisualTreeHelper.GetOpenPopupsForXamlRoot(panel.XamlRoot).Select(open => open.Child).OfType<FrameworkElement>().Where(child => child.ActualWidth > 0 && child.ActualHeight > 0 && child is not ToolTip).Last();
-          await File.WriteAllBytesAsync(Path.Combine(output, name + "-" + suffix + ".png"), await RenderPngAsync(drawn, (int)drawn.ActualWidth, (int)drawn.ActualHeight)); menuPopup.Hide();
+          FrameworkElement? drawn = null; var menuDeadline = DateTimeOffset.UtcNow.AddSeconds(3);
+          while ((drawn = VisualTreeHelper.GetOpenPopupsForXamlRoot(panel.XamlRoot).Select(open => open.Child).OfType<FrameworkElement>().LastOrDefault(child => child.ActualWidth > 0 && child.ActualHeight > 0 && child is not ToolTip)) is null && DateTimeOffset.UtcNow < menuDeadline) await Task.Delay(100);
+          Check(name + " " + suffix + " menu opens", drawn is not null);
+          // Some flyout surfaces cannot be read back by RenderTargetBitmap; the
+          // real-window screenshots cover their look.
+          if (drawn is not null) try { await File.WriteAllBytesAsync(Path.Combine(output, name + "-" + suffix + ".png"), await RenderPngAsync(drawn, (int)drawn.ActualWidth, (int)drawn.ActualHeight)); }
+          catch (ArgumentException) { }
+          menuPopup.Hide(); await Task.Delay(150);
         }
         var previousWidth = panel.Width; var previousAlignment = panel.HorizontalAlignment;
         panel.Width = 380; panel.HorizontalAlignment = HorizontalAlignment.Left; frame.UpdateLayout(); await Task.Delay(150);
@@ -108,7 +122,22 @@ public sealed partial class BrowserPane
       SessionChoices = priorChoices;
       Stage("complete");
     }
-    catch (Exception ex) when (ex is not OutOfMemoryException) { errors.Add(ex.ToString()); }
+    catch (Exception ex) when (ex is not OutOfMemoryException)
+    {
+      errors.Add(ex.ToString());
+      try
+      {
+        var state = new { selected = Core.Read().SelectedTabId, parked = parkedPages.Keys.ToArray(), slots = pageSlots.Select(pair => new { id = pair.Key, drawn = IsDrawn(pair.Value), loaded = pair.Value.IsLoaded, width = pair.Value.ActualWidth, height = pair.Value.ActualHeight, root = pair.Value.XamlRoot is not null, parent = VisualTreeHelper.GetParent(pair.Value)?.GetType().Name }).ToArray() };
+        await File.WriteAllTextAsync(Path.Combine(output, "failure-state.json"), JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }));
+        if (XamlRoot?.Content is FrameworkElement frame)
+        {
+          var visible = tabs.FirstOrDefault(candidate => pageSlots.TryGetValue(candidate.Id, out var slot) && IsDrawn(slot));
+          if (visible is not null) await ProofFrameAsync(frame, visible, Path.Combine(output, "failure-frame.png")).WaitAsync(TimeSpan.FromSeconds(10));
+          else await File.WriteAllBytesAsync(Path.Combine(output, "failure-frame.png"), await RenderPngAsync(frame, (int)frame.ActualWidth, (int)frame.ActualHeight).WaitAsync(TimeSpan.FromSeconds(10)));
+        }
+      }
+      catch (Exception captureError) when (captureError is not OutOfMemoryException) { errors.Add("Failure frame: " + captureError); }
+    }
     finally
     {
       await File.WriteAllTextAsync(Path.Combine(output, "result.json"), JsonSerializer.Serialize(new { at = DateTimeOffset.UtcNow, checks, errors }, new JsonSerializerOptions { WriteIndented = true }));

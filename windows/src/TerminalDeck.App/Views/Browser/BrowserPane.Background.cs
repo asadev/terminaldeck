@@ -1,14 +1,15 @@
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Windows.Foundation;
 using TerminalDeck.App.Shell;
-using Windows.Graphics;
 
 namespace TerminalDeck.App.Views;
 
-// A page keeps its original WebView/controller and cookie store. A separate
-// non-activating window gives Chromium a finite drawing surface while the
-// session tab or the owning application window is hidden.
+// A page keeps its original WebView/controller and cookie store. A finite host
+// on that same XamlRoot retains its drawing size while its workspace pane is
+// hidden. WinUI WebView2 cannot move into another window's XamlRoot.
 public sealed partial class BrowserPane
 {
   private static Microsoft.Web.WebView2.Core.CoreWebView2EnvironmentOptions BrowserEnvironmentOptions() => new() { AreBrowserExtensionsEnabled = true, AdditionalBrowserArguments = "--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows" };
@@ -16,28 +17,64 @@ public sealed partial class BrowserPane
   private readonly Dictionary<string, BrowserParking> parkedPages = [];
   private readonly Dictionary<string, Grid> pageSlots = [];
   private readonly HashSet<XamlRoot> browserRoots = [];
+  private readonly Dictionary<string, BrowserParking> retainedPages = [];
   private sealed class BrowserParking
   {
-    public Window Window { get; } = new();
-    public Grid Host { get; } = new();
-    public BrowserParking(ElementTheme theme)
+    private readonly Panel owner;
+    private readonly Canvas layer = new();
+    private Matrix transform;
+    public XamlRoot Root { get; }
+    public Grid Host { get; } = new() { Width = 1280, Height = 800, Opacity = 0, IsHitTestVisible = false };
+    public BrowserParking(XamlRoot xamlRoot, WebView2 view)
     {
-      Host.RequestedTheme = theme; Window.Content = Host;
-      var app = Window.AppWindow; app.IsShownInSwitchers = false;
-      var presenter = OverlappedPresenter.Create(); presenter.SetBorderAndTitleBar(false, false); presenter.IsResizable = false; presenter.IsMaximizable = false; presenter.IsMinimizable = false;
-      app.SetPresenter(presenter); app.MoveAndResize(new RectInt32(-32000, -32000, 1280, 800));
-      // Show(false) supplies an HWND without activating it or exposing a tab in Alt-Tab.
-      app.Show(false);
+      Root = xamlRoot;
+      owner = xamlRoot.Content as Panel ?? throw new InvalidOperationException("This browser window has no retained page host.");
+      // This is the WebView's only parent, attached before initialization. A
+      // workspace placeholder supplies its geometry; the live control never unloads.
+      Grid.SetRowSpan(layer, int.MaxValue); Grid.SetColumnSpan(layer, int.MaxValue);
+      Host.Children.Add(view); layer.Children.Add(Host); owner.Children.Add(layer);
     }
+    public void Place(Grid slot, bool visible, double width, double height)
+    {
+      if (Host.Width != width || Host.Height != height)
+      {
+        Host.Width = width; Host.Height = height;
+        Host.Clip = new RectangleGeometry { Rect = new Rect(0, 0, width, height) };
+      }
+      if (visible)
+      {
+        if (!ReferenceEquals(slot.XamlRoot, Root)) throw new InvalidOperationException("This browser page cannot move to another window without losing its live document.");
+        var coordinates = slot.TransformToVisual(Root.Content);
+        var origin = coordinates.TransformPoint(new(0, 0)); var x = coordinates.TransformPoint(new(1, 0)); var y = coordinates.TransformPoint(new(0, 1));
+        var next = new Matrix { M11 = x.X - origin.X, M12 = x.Y - origin.Y, M21 = y.X - origin.X, M22 = y.Y - origin.Y, OffsetX = origin.X, OffsetY = origin.Y };
+        if (!next.Equals(transform)) { transform = next; Host.RenderTransform = new MatrixTransform { Matrix = next }; }
+      }
+      Host.Opacity = visible ? 1 : 0; Host.IsHitTestVisible = visible;
+    }
+    public void Close() { owner.Children.Remove(layer); layer.Children.Clear(); }
+  }
+  private BrowserParking RetainBrowserPage(string id, WebView2 view)
+  {
+    var retained = new BrowserParking(XamlRoot ?? throw new InvalidOperationException("The browser has no window root."), view);
+    retainedPages.Add(id, retained); return retained;
+  }
+  private void ReleaseRetainedPage(string id)
+  {
+    if (retainedPages.Remove(id, out var retained)) retained.Close();
   }
   private static bool IsDrawn(FrameworkElement element)
   {
     if (element.XamlRoot is not { IsHostVisible: true } xamlRoot) return false;
     var host = AppWindow.GetFromWindowId(xamlRoot.ContentIslandEnvironment.AppWindowId);
     if (!host.IsVisible || host.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized }) return false;
+    // A retained pane can keep its XamlRoot and last measured size after its
+    // workspace tab is removed. Only a chain reaching this root is on screen.
     for (DependencyObject? node = element; node is not null; node = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(node))
+    {
       if (node is FrameworkElement { Visibility: Visibility.Collapsed }) return false;
-    return element.ActualWidth > 0 && element.ActualHeight > 0;
+      if (ReferenceEquals(node, xamlRoot.Content)) return element.ActualWidth > 0 && element.ActualHeight > 0;
+    }
+    return false;
   }
   private void TrackBrowserRoot(FrameworkElement panel)
   {
@@ -67,29 +104,12 @@ public sealed partial class BrowserPane
     parkingChanging = true;
     try
     {
-    if (shown && parkedPages.Remove(tab.Id, out var parked))
-    {
-      parked.Host.Children.Remove(tab.View); slot.Children.Add(tab.View); tab.View.Visibility = Visibility.Visible; parked.Window.Close();
-    }
-    else if (!shown && !parkedPages.ContainsKey(tab.Id))
-    {
-      var parking = new BrowserParking(tab.View.ActualTheme);
-      ResizeParking(parking, width, height);
-      parking.Host.Loaded += (_, _) => ResizeParking(parking, parking.Host.Width, parking.Host.Height);
-      if (tab.View.Parent is Panel parent) parent.Children.Remove(tab.View);
-      parking.Host.Children.Add(tab.View); tab.View.Visibility = Visibility.Visible;
-      parkedPages[tab.Id] = parking;
-    }
-    else if (!shown && parkedPages.TryGetValue(tab.Id, out var retained)) ResizeParking(retained, width, height);
+      if (!retainedPages.TryGetValue(tab.Id, out var retained)) return;
+      if (shown) parkedPages.Remove(tab.Id); else parkedPages[tab.Id] = retained;
+      retained.Place(slot, shown && !tab.Failed && (tab.Address.Length > 0 || tab.NativePopup), width, height);
+      tab.View.IsTabStop = shown;
     }
     finally { parkingChanging = false; }
-  }
-  private static void ResizeParking(BrowserParking parking, double width, double height)
-  {
-    var scale = parking.Host.XamlRoot?.RasterizationScale ?? 1;
-    if (parking.Host.Width == width && parking.Host.Height == height && parking.Window.AppWindow.Size.Width == (int)Math.Ceiling(width * scale) && parking.Window.AppWindow.Size.Height == (int)Math.Ceiling(height * scale)) return;
-    parking.Host.Width = width; parking.Host.Height = height;
-    parking.Window.AppWindow.Resize(new SizeInt32((int)Math.Ceiling(width * scale), (int)Math.Ceiling(height * scale)));
   }
   private async Task PrepareBackgroundPageAsync(BrowserTab tab)
   {
@@ -105,7 +125,6 @@ public sealed partial class BrowserPane
   }
   private void CloseBackgroundPage(BrowserTab tab)
   {
-    if (parkedPages.Remove(tab.Id, out var parked)) { parked.Host.Children.Remove(tab.View); parked.Window.Close(); }
-    pageSlots.Remove(tab.Id);
+    parkedPages.Remove(tab.Id); ReleaseRetainedPage(tab.Id); pageSlots.Remove(tab.Id);
   }
 }

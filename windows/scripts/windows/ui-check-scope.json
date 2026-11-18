@@ -4,35 +4,36 @@
     {
       "project": "tests\\TerminalDeck.Core.Tests\\TerminalDeck.Core.Tests.csproj",
       "names": [
-        "TerminalDeck.Core.Tests.Mcp.W12ShellContractTests.SupportedStoreAndCodeAliasPinsUseTheExistingActContract",
-        "TerminalDeck.Core.Tests.Cloud.CloudTaskBudgetTests.The_existing_shared_token_budget_reaches_the_runtime_field_and_never_widens_from_another_device"
+        "TerminalDeck.Core.Tests.Agents.AgentBudgetTests",
+        "TerminalDeck.Core.Tests.Agents.AgentHeavyWorkTests",
+        "TerminalDeck.Core.Tests.Agents.AgentSkillLibraryTests",
+        "TerminalDeck.Core.Tests.Sessions.AgentIdleCompletionTests",
+        "TerminalDeck.Core.Tests.Tasks.TaskEfficiencyTests",
+        "TerminalDeck.Core.Tests.Tasks.AgentTaskRunnerTests",
+        "TerminalDeck.Core.Tests.Chats.ChatSessionsTests",
+        "TerminalDeck.Core.Tests.Chats.W12ChatTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudAccountTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudWiringTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudSubscriptionTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudContentsTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudTaskBudgetTests",
+        "TerminalDeck.Core.Tests.Computers.RemoteSessionReadingTests",
+        "TerminalDeck.Core.Tests.Hoot.ConversationHandoffTests",
+        "TerminalDeck.Core.Tests.Remote.CloudRelayLifecycleTests",
+        "TerminalDeck.Core.Tests.Mcp.W12ShellContractTests"
       ]
     },
     {
       "project": "tests\\TerminalDeck.Chat.Windows.Tests\\TerminalDeck.Chat.Windows.Tests.csproj",
       "names": [
-        "TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.Claude_and_Gemini_exclude_extra_children_but_keep_the_apps_own_door",
-        "TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.Codex_disables_each_other_configured_server_and_never_disables_deck_tools",
-        "TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.Unsupported_configurations_refuse_instead_of_pretending_addons_are_off",
-        "TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.A_plugin_cache_refuses_even_when_no_config_section_names_it",
-        "TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.Codex_project_layers_are_measured_and_an_unconfigured_effective_plugin_refuses"
+        "TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests"
       ]
     },
     {
       "project": "src\\TerminalDeck.App\\Views\\Windows\\Tests\\TerminalDeck.Shell.Tests.csproj",
       "names": [
-        "TerminalDeck.App.Shell.SidebarStateTests.CodeAliasDoesNotWriteOrRewriteTheStoredPins",
-        "TerminalDeck.App.Shell.SidebarStateTests.LegacyCodePinsMergeOnceAndKeepTheirOrderAndActions"
+        "TerminalDeck.App.Shell.SidebarStateTests"
       ]
     }
-  ],
-  "retainFrom": {
-    "runId": 44244418695,
-    "artifactId": 14400449087,
-    "artifactSha256": "005ecb222deb43fb142a6974c7093d69afd3c7fafa363155df11f208566af7ab",
-    "runHead": "e603246694fcf7bec88070fd86a2eb420f46c70d",
-    "testedSourceCommit": "288cd69d180ebab6432fa23dbb5fab9e65545867",
-    "sourceTree": "11f471cff3e93013f58f713d6c5f8604e080a2ac",
-    "correctionCommit": "847da8f34ce6aa4cb6727dfab816d8555d2330f1"
-  }
+  ]
 }

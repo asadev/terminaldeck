@@ -152,15 +152,18 @@ public sealed partial class BrowserPane : UserControl
       profileEnvironments[path] = environment;
     }
     pageEnvironments[id] = environment;
-    var view = new WebView2(); SurfaceHost.Children.Add(view);
+    // A native popup's DevTools calls only answer once the opener's
+    // NewWindowRequested deferral has handed it the new page; wait for that.
+    var adopted = options.PopupSourceId is null ? null : popupAdoptions[id] = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var view = new WebView2(); RetainBrowserPage(id, view);
     var controller = environment.CreateCoreWebView2ControllerOptions();
     controller.ProfileName = "Deck"; controller.IsInPrivateModeEnabled = isolated || !Privacy.Read().PersistSignIns;
     try { await view.EnsureCoreWebView2Async(environment, controller); }
-    catch { SurfaceHost.Children.Remove(view); view.Close(); throw; }
+    catch { ReleaseRetainedPage(id); view.Close(); throw; }
     if (view.CoreWebView2.Profile.IsInPrivateModeEnabled != (isolated || !Privacy.Read().PersistSignIns))
-    { SurfaceHost.Children.Remove(view); view.Close(); throw new IOException("The browser profile did not apply its sign-in persistence setting. Try opening it again."); }
-    ct.ThrowIfCancellationRequested();
-    if (disposed) { view.Close(); throw new IOException("The browser is closing."); }
+    { ReleaseRetainedPage(id); view.Close(); throw new IOException("The browser profile did not apply its sign-in persistence setting. Try opening it again."); }
+    if (ct.IsCancellationRequested) { ReleaseRetainedPage(id); view.Close(); ct.ThrowIfCancellationRequested(); }
+    if (disposed) { ReleaseRetainedPage(id); view.Close(); throw new IOException("The browser is closing."); }
     view.CoreWebView2.Settings.IsStatusBarEnabled = false;
     view.CoreWebView2.Settings.IsPasswordAutosaveEnabled = false;
     view.CoreWebView2.Settings.IsGeneralAutofillEnabled = false;
@@ -240,9 +243,15 @@ public sealed partial class BrowserPane : UserControl
         if (popupId is not null) { try { await Core.CloseAsync(popupId); } catch (Exception cleanup) when (cleanup is not OutOfMemoryException) { } }
         RequestUnavailable(tab, ex is ArgumentException or InvalidOperationException ? "The page’s popup could not open: " + ex.Message : "The page’s popup could not open in the built-in browser. Open the site in your browser to continue.");
       }
-      finally { deferral.Complete(); }
+      finally
+      {
+        deferral.Complete();
+        if (popupId is not null && popupAdoptions.Remove(popupId, out var adoption)) adoption.TrySetResult();
+      }
     };
     await InstallPageRequestsAsync(tab);
+    if (adopted is null) await EnablePageRequestsAsync(tab);
+    else _ = FinishPopupAsync(tab, adopted.Task);
     view.CoreWebView2.DownloadStarting += (_, args) => StartDownload(tab, args);
     view.CoreWebView2.WindowCloseRequested += async (_, _) => await GuardAsync(() => CloseAsync(tab), tab);
     view.CoreWebView2.ProcessFailed += (_, args) =>
@@ -273,7 +282,8 @@ public sealed partial class BrowserPane : UserControl
       catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException) { /* Untrusted page messages carry no authority. */ }
     };
     tabs.Add(tab);
-    await ApplyBrowserThemeAsync();
+    // Only the new page: an opener waiting in window.open cannot answer DevTools.
+    if (adopted is null) await ApplyBrowserThemeAsync(tab);
     view.CoreWebView2.SetVirtualHostNameToFolderMapping("start.deck.invalid", Path.Combine(AppContext.BaseDirectory, "Assets", "browser"), CoreWebView2HostResourceAccessKind.DenyCors);
     await RebindRetainedPageAsync(tab);
     DispatcherQueue.TryEnqueueHandled(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => ObserveShellPages());
@@ -461,13 +471,20 @@ public sealed partial class BrowserPane : UserControl
   }
   private async Task ApplyBrowserThemeAsync()
   {
+    foreach (var tab in tabs.ToArray()) if (!popupAdoptions.ContainsKey(tab.Id)) await ApplyBrowserThemeAsync(tab);
+  }
+  private async Task ApplyBrowserThemeAsync(BrowserTab tab)
+  {
     var dark = ActualTheme == ElementTheme.Dark;
-    foreach (var tab in tabs)
-    {
-      tab.View.RequestedTheme = dark ? ElementTheme.Dark : ElementTheme.Light;
-      tab.View.CoreWebView2.Profile.PreferredColorScheme = dark ? CoreWebView2PreferredColorScheme.Dark : CoreWebView2PreferredColorScheme.Light;
-      await tab.Model.CommandAsync("Emulation.setEmulatedMedia", new { features = new[] { new { name = "prefers-color-scheme", value = dark ? "dark" : "light" } } });
-    }
+    tab.View.RequestedTheme = dark ? ElementTheme.Dark : ElementTheme.Light;
+    tab.View.CoreWebView2.Profile.PreferredColorScheme = dark ? CoreWebView2PreferredColorScheme.Dark : CoreWebView2PreferredColorScheme.Light;
+    await tab.Model.CommandAsync("Emulation.setEmulatedMedia", new { features = new[] { new { name = "prefers-color-scheme", value = dark ? "dark" : "light" } } });
+  }
+  private readonly Dictionary<string, TaskCompletionSource> popupAdoptions = [];
+  private async Task FinishPopupAsync(BrowserTab tab, Task adopted)
+  {
+    if (await Task.WhenAny(adopted, Task.Delay(TimeSpan.FromSeconds(30))) != adopted || !adopted.IsCompletedSuccessfully) { popupAdoptions.Remove(tab.Id); return; }
+    await GuardAsync(async () => { await EnablePageRequestsAsync(tab); await ApplyBrowserThemeAsync(tab); }, tab);
   }
   internal Task NavigateForProofAsync(string address) => NavigateCommandForProofAsync("navigate", address);
   internal async Task NavigateCommandForProofAsync(string command, string? argument = null)

@@ -76,7 +76,7 @@ jobs:
           if ! printf '%s\n' "$files" | grep -Ev '^(windows/|\.github/workflows/(ci|windows-release)\.yml$)' | grep -q .; then
             echo "windows_only=true" >> "$GITHUB_OUTPUT"
           fi
-          if printf '%s\n' "$files" | grep -qx 'windows/scripts/windows/ui-check-scope.json'; then
+          if printf '%s\n' "$files" | grep -qx 'windows/scripts/windows/ui-check-scope.json' || python3 -c 'import json; raise SystemExit("reuseFrom" not in json.load(open("windows/scripts/windows/ui-check-scope.json")))'; then
             echo "ui=true" >> "$GITHUB_OUTPUT"
           fi
           if git diff --name-only "$BASE" HEAD | grep -Eq '^(windows/|\.github/workflows/ci\.yml$)'; then
@@ -97,6 +97,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: windows/global.json
@@ -140,15 +141,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $scope = Get-Content windows/scripts/windows/ui-check-scope.json -Raw | ConvertFrom-Json
-          if ($scope.PSObject.Properties.Name -contains 'retainFrom') {
-            python windows/scripts/windows/ui-check-evidence.py preflight
+          if ($scope.PSObject.Properties.Name -contains 'reuseFrom') {
+            python windows/scripts/windows/reuse-ui-check.py
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          ./windows/scripts/windows/check-ui.ps1 -Configuration Release -Platform x64 -ScratchRoot "$env:RUNNER_TEMP\TD-test"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ($scope.PSObject.Properties.Name -contains 'retainFrom') {
-            python windows/scripts/windows/ui-check-evidence.py retain --root windows/.artifacts/windows-check/ui
+          } else {
+            if ($scope.PSObject.Properties.Name -contains 'retainFrom') {
+              python windows/scripts/windows/ui-check-evidence.py preflight
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+            ./windows/scripts/windows/check-ui.ps1 -Configuration Release -Platform x64 -ScratchRoot "$env:RUNNER_TEMP\TD-test"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($scope.PSObject.Properties.Name -contains 'retainFrom') {
+              python windows/scripts/windows/ui-check-evidence.py retain --root windows/.artifacts/windows-check/ui
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
           }
       - name: Keep focused UI receipts
         if: always() && needs.changes.outputs.ui == 'true'

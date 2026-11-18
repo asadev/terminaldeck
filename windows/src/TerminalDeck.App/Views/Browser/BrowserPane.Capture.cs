@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using TerminalDeck.Core.Browser;
@@ -102,6 +103,8 @@ public sealed partial class BrowserPane
       await ShowShotAsync(tab, tab.CapturePath, original);
     }
   }
+  internal const string MinimisedPictureNote = "Terminal Deck's window is minimised, so Windows is not drawing this page and no picture can be taken. Reading, clicking and typing still work. Restore the window and try again.";
+  private static bool WindowNotShown(BrowserTab tab) => tab.View.XamlRoot is { } pageRoot && (!pageRoot.IsHostVisible || AppWindow.GetFromWindowId(pageRoot.ContentIslandEnvironment.AppWindowId).Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized });
   private static async Task<byte[]> CaptureAsync(BrowserTab tab)
   {
     static string Fingerprint(JsonElement result)
@@ -123,7 +126,14 @@ public sealed partial class BrowserPane
       contextId = world.GetProperty("executionContextId").GetInt32();
       var before = Fingerprint(await Step("Runtime.evaluate", new { expression = BrowserAutomation.HidePrivate, contextId, returnByValue = true }));
       JsonElement result;
-      try { result = await Step("Page.captureScreenshot", new { format = "png", fromSurface = true, captureBeyondViewport = false }, 15); }
+      try
+      {
+        // Windows stops drawing a page whose window is minimised or hidden. Say so
+        // in plain words instead of waiting for, or returning, a blank picture.
+        // Reading, clicking and typing keep working there.
+        if (WindowNotShown(tab)) throw new InvalidOperationException(MinimisedPictureNote);
+        result = await Step("Page.captureScreenshot", new { format = "png", fromSurface = true, captureBeyondViewport = false }, 15);
+      }
       catch (TimeoutException) { throw new TimeoutException("The page did not draw a picture within 15 seconds. Reload the page and try again."); }
       var after = Fingerprint(await Step("Runtime.evaluate", new { expression = BrowserAutomation.CaptureFingerprint, contextId, returnByValue = true }));
       if (before != after) throw new InvalidOperationException("A protected field or page changed during capture. No picture was saved; try after the page settles.");
