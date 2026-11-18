@@ -93,13 +93,14 @@ public sealed partial class AgentsPage
 
   private async Task NewLibrarySkillAsync()
   {
-    var name = new TextBox { Header = "Folder name", PlaceholderText = "release-check", MaxLength = 80 };
+    var name = new TextBox { Header = "Name", PlaceholderText = "Release check", MaxLength = 80 };
+    var summary = new TextBox { Header = "Summary", MaxLength = 300 };
     var project = new ComboBox { Header = "Use in", HorizontalAlignment = HorizontalAlignment.Stretch };
     project.Items.Add(new ComboBoxItem { Content = "Every project", Tag = "" });
     foreach (var row in Model.Projects.List().Where(p => p.Folders.Length > 0)) project.Items.Add(new ComboBoxItem { Content = row.Name, Tag = row.HomeFolder });
     project.SelectedIndex = 0;
     var text = new TextBox { Header = "Instructions", AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 200, MaxHeight = 340, MaxLength = 500000 };
-    var form = Stack(12); form.MinWidth = 400; form.Children.Add(name); form.Children.Add(project); form.Children.Add(text);
+    var form = Stack(12); form.MinWidth = 400; form.Children.Add(name); form.Children.Add(summary); form.Children.Add(project); form.Children.Add(text);
     var error = Words("", 12); form.Children.Add(error);
     var dialog = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = "New skill", Content = form, PrimaryButtonText = "Create", CloseButtonText = "Cancel" };
     dialog.PrimaryButtonClick += (_, e) =>
@@ -108,7 +109,14 @@ public sealed partial class AgentsPage
       {
         var folder = (project.SelectedItem as ComboBoxItem)?.Tag as string;
         var root = Path.Combine(string.IsNullOrEmpty(folder) ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) : folder, ".agents", "skills");
-        AgentSkillLibrary.Save(root, name.Text.Trim(), text.Text); librarySkills = null;
+        var title = name.Text.Trim();
+        if (title.Length == 0) throw new ArgumentException("Give this skill a name.");
+        var folderName = System.Text.RegularExpressions.Regex.Replace(title.ToLowerInvariant(), "[^a-z0-9_-]+", "-").Trim('-');
+        if (folderName.Length == 0) folderName = "skill-" + Guid.NewGuid().ToString("N")[..8];
+        folderName = folderName[..Math.Min(80, folderName.Length)];
+        static string Line(string value) => new(value.Where(c => !char.IsControl(c)).ToArray());
+        var instructions = "---\nname: " + Line(title) + "\ndescription: " + Line(summary.Text) + "\n---\n\n" + text.Text;
+        AgentSkillLibrary.Save(root, folderName, instructions); librarySkills = null;
       }
       catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { e.Cancel = true; error.Text = ex.Message; }
     };

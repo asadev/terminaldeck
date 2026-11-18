@@ -9,7 +9,7 @@ public sealed class AgentLibraryTools(IProjects projects, IAgents agents, Func<I
 {
   public static IReadOnlyList<McpToolSpec> Specs => [new("agents.library", "agents_library", McpTier.Read,
     JsonSerializer.SerializeToElement(new { type = "object", properties = new {
-      action = new { type = "string", @enum = new[] { "work", "skills", "read", "save", "assign" } },
+      action = new { type = "string", @enum = new[] { "work", "skills", "read", "save", "assign", "unassign" } },
       projectId = new { type = "string" }, root = new { type = "string" }, name = new { type = "string" },
       text = new { type = "string", maxLength = 524288 }, expected = new { type = "string", maxLength = 524288 },
       agentId = new { type = "string" }
@@ -36,11 +36,12 @@ public sealed class AgentLibraryTools(IProjects projects, IAgents agents, Func<I
     if (action == "read") return JsonSerializer.SerializeToElement(AgentSkillLibrary.Read(root, name));
     await context.EnsureCurrentAsync(ct);
     if (action == "save") return JsonSerializer.SerializeToElement(AgentSkillLibrary.Save(root, name, Text("text") ?? "", Text("expected")));
-    if (action != "assign") throw new McpRefusal("Choose a library action.");
+    if (action is not ("assign" or "unassign")) throw new McpRefusal("Choose a library action.");
     var document = AgentSkillLibrary.Read(root, name);
     var agent = visibleAgents.SingleOrDefault(a => a.Id == Text("agentId")) ?? throw new McpRefusal("Choose an agent in this caller's access.");
     var skills = agent.Skills.IsDefault ? ImmutableArray<string>.Empty : agent.Skills;
-    if (!skills.Contains(document.Name)) agents.Save(agent with { Skills = skills.Add(document.Name) }, agent);
-    return JsonSerializer.SerializeToElement(new { assigned = true, agentId = agent.Id, skill = document.Name });
+    var chosen = action == "assign";
+    if (skills.Contains(document.Name) != chosen) agents.Save(agent with { Skills = chosen ? skills.Add(document.Name) : skills.Remove(document.Name) }, agent);
+    return JsonSerializer.SerializeToElement(new { assigned = chosen, agentId = agent.Id, skill = document.Name });
   });
 }

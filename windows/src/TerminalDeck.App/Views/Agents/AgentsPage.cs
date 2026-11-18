@@ -110,9 +110,11 @@ public sealed partial class AgentsPage : Grid
     var switcher = ViewSwitch(grouping, new[] { "All agents", "Org chart", "At work", "Routines", "Skills" }, name => { grouping = name; Render(); });
     var all = Model.Agents.List().Where(a => a.Status != SavedAgentStatus.Archived).ToArray();
     var working = all.Count(a => Model.Activity(a).State == AgentActivityState.Working);
-    body.Children.Add(PageHeader("Agents", $"{all.Length} {(all.Length == 1 ? "agent" : "agents")} · {working} working now", null, switcher,
-      AsyncButton("Templates", OpenTemplatesAsync),
-      grouping == "Skills" ? AsyncButton("New skill", NewLibrarySkillAsync, true) : AsyncButton("New agent", () => AgentEditors.HireAsync(XamlRoot, Model.Agents, Model.Projects, navigation, Model, projectFilter), true)));
+    var caption = grouping == "Skills" ? librarySkills is null ? "" : librarySkills.Count + " installed skills" :
+      grouping == "At work" ? working + " working now" : $"{all.Length} {(all.Length == 1 ? "agent" : "agents")} · {working} working now";
+    UIElement[] actions = grouping == "Skills" ? [AsyncButton("New skill", NewLibrarySkillAsync, true)] :
+      [AsyncButton("Templates", OpenTemplatesAsync), AsyncButton("New agent", () => AgentEditors.HireAsync(XamlRoot, Model.Agents, Model.Projects, navigation, Model, projectFilter), true)];
+    body.Children.Add(PageHeader("Agents", caption, null, switcher, actions));
     if (grouping == "Routines") { RoutinesTab(body, null); return; }
     if (grouping == "At work") { WorkDirectory(body); return; }
     if (grouping == "Skills") { SkillDirectory(body); return; }
