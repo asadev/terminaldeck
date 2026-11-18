@@ -117,8 +117,9 @@ public sealed class HootTests
     var before = f.Hoot.Read();
     // Creation resolves blank/auto to launch defaults. Set an explicit reset on
     // the existing chat, then prove switching keeps that exact effective choice.
-    await f.Chats.SetOptionsAsync(before.ChatId!, f.Chats.Get(before.ChatId!).Definition.Options with { Effort = effort });
-    Assert.Equal(effort, f.Chats.Get(before.ChatId!).Definition.Options.Effort);
+    var explicitOptions = new ChatOptions("", effort);
+    await f.Chats.SetOptionsAsync(before.ChatId!, explicitOptions);
+    Assert.Equal(explicitOptions, f.Chats.Get(before.ChatId!).Definition.Options);
     var account = await f.Accounts.CreateAsync("claude", "Second fixture", TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey);
     await f.Accounts.SetApiStateAsync(account.Id, true, Guid.NewGuid().ToString("N"));
     var updated = before.Settings! with { AccountId = account.Id, PermissionMode = AiPermissionMode.Plan };
@@ -129,6 +130,7 @@ public sealed class HootTests
     Assert.Equal(account.Id, f.Process.Sent.Last().Chat.Definition.AccountId);
     Assert.Equal(AiPermissionMode.Plan, f.Process.Sent.Last().Chat.Definition.PermissionMode);
     Assert.Equal(effort, f.Process.Sent.Last().Chat.Definition.Options.Effort);
+    Assert.Equal(explicitOptions, f.Process.Sent.Last().Chat.Definition.Options);
     f.Complete(next); await Fixture.Wait(f.Hoot, s => !s.Busy);
   }
   [Theory]
