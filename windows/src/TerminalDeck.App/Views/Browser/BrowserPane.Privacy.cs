@@ -22,7 +22,7 @@ public sealed partial class BrowserPane
     if (tab is not null) return await work(tab.View.CoreWebView2.Profile);
     await storage.EnsureProfileAsync(id, default);
     var options = new BrowserSurfaceOptions(Guid.NewGuid().ToString("N"), id, false, null);
-    var environment = await CoreWebView2Environment.CreateWithOptionsAsync(null, storage.PathFor(options), new CoreWebView2EnvironmentOptions { AreBrowserExtensionsEnabled = true });
+    var environment = await CoreWebView2Environment.CreateWithOptionsAsync(null, storage.PathFor(options), BrowserEnvironmentOptions());
     var view = new WebView2 { Width = 1, Height = 1, Opacity = 0, IsHitTestVisible = false, IsTabStop = false }; SurfaceHost.Children.Add(view);
     try
     {

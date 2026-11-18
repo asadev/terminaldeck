@@ -4,49 +4,44 @@ namespace TerminalDeck.App.Shell;
 
 public sealed class WorkspaceTabSizingTests
 {
-  [Theory]
-  [InlineData(1, 1400, 220)]
-  [InlineData(2, 400, 200)]
-  [InlineData(5, 900, 180)]
-  [InlineData(20, 900, 45)]
-  [InlineData(40, 100, 40)]
-  public void EqualTabsShrinkToIconFloorBeforeScrolling(int count, double available, double width)
+  [Fact] public void EmptyStripHasNoContentWidth() => Assert.Empty(WorkspaceTabSizing.Widths(0, 900, -1));
+  [Fact] public void SeventeenTabsUseTheWholeHeaderAndKeepTheSelectedTitleReadable()
   {
-    Assert.Equal(width, WorkspaceTabSizing.Width(count, available));
-    Assert.Equal(available < count * WorkspaceTabSizing.Minimum, WorkspaceTabSizing.Overflows(count, available));
+    var widths = WorkspaceTabSizing.Widths(17, 1600, 14);
+    Assert.Equal(120, widths[14]); Assert.All(widths, width => Assert.InRange(width, 36, 220));
+    Assert.Equal(1600, widths.Sum() + 16 * WorkspaceTabSizing.Gap, 6);
+    Assert.False(WorkspaceTabSizing.Overflows(17, 1600));
   }
-  [Fact] public void EmptyStripHasNoContentWidth() => Assert.Equal(0, WorkspaceTabSizing.Width(0, 900));
-
   public static IEnumerable<object[]> ShellSizes()
   {
     foreach (var width in new[] { 1280, 1920 })
     foreach (var sidebar in new[] { true, false })
-    foreach (var count in new[] { 5, 15, 30 }) yield return [width, sidebar, count];
+    foreach (var count in new[] { 5, 15, 30, 64 }) yield return [width, sidebar, count];
   }
-  [Theory]
-  [MemberData(nameof(ShellSizes))]
-  public void ShellMatrixReservesChromeAndScrollsOnlyAtMinimum(int window, bool sidebar, int count)
+  [Theory] [MemberData(nameof(ShellSizes))]
+  public void ShellMatrixKeepsTheNewTabControlReachableAndScrollsAtTheFloor(int window, bool sidebar, int count)
   {
-    // Title-bar columns reserve sidebar/toggle, add buttons, drag area and caption.
-    var available = window - (sidebar ? 264 : 48) - 60 - 48 - 138 - 16;
-    var overflow = WorkspaceTabSizing.Overflows(count, available);
-    var viewport = WorkspaceTabSizing.Viewport(count, available);
-    var width = WorkspaceTabSizing.Width(count, viewport);
-    Assert.InRange(width, WorkspaceTabSizing.Minimum, WorkspaceTabSizing.Maximum);
+    var available = window - (sidebar ? 264 : 48) - 30 - 138 - 16;
+    var overflow = WorkspaceTabSizing.Overflows(count, available); var viewport = WorkspaceTabSizing.Viewport(count, available);
+    var widths = WorkspaceTabSizing.Widths(count, viewport, 2);
+    Assert.All(widths, width => Assert.InRange(width, WorkspaceTabSizing.Minimum, WorkspaceTabSizing.Maximum));
+    Assert.True(widths[2] >= WorkspaceTabSizing.SelectedMinimum);
     Assert.Equal(overflow ? available - 56 : available, viewport);
-    if (overflow) Assert.Equal(WorkspaceTabSizing.Minimum, width);
-    else Assert.True(width * count <= viewport);
-    var details = WorkspaceTabSizing.ForWidth(width);
-    Assert.Equal(width >= 72, details.Title);
-    Assert.Equal(width >= 112, details.ProjectPicture);
-    Assert.Equal(width >= 156, details.Close);
+    var total = widths.Sum() + (count - 1) * WorkspaceTabSizing.Gap;
+    if (!overflow) Assert.True(total <= viewport + .01);
+    else Assert.True(total > viewport);
   }
-  [Fact]
-  public void IconOnlyTabsDoNotRetainTitleOrExtraDecorations()
+  [Fact] public void SmallTabShowsOnlyItsIcon()
   {
-    var details = WorkspaceTabSizing.ForWidth(WorkspaceTabSizing.Minimum);
-    Assert.False(details.Title);
-    Assert.False(details.ProjectPicture);
-    Assert.False(details.Close);
+    var detail = WorkspaceTabSizing.ForWidth(36); Assert.False(detail.Title); Assert.False(detail.ProjectPicture); Assert.False(detail.Close);
+    Assert.True(WorkspaceTabSizing.ForWidth(120).Title);
+  }
+  [Fact] public void DraggingAcrossTheWiderSelectedTabUsesItsActualEdges()
+  {
+    double[] widths = [40, 120, 40, 40];
+    Assert.Equal(1, WorkspaceTabSizing.Reorder(widths, 0, 65));
+    Assert.Equal(0, WorkspaceTabSizing.Reorder(widths, 1, -25));
+    Assert.Equal(2, WorkspaceTabSizing.Reorder(widths, 1, 25));
+    Assert.Equal(1, WorkspaceTabSizing.Reorder(widths, 2, -65));
   }
 }

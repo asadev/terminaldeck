@@ -82,7 +82,7 @@ public sealed partial class BrowserPane
     if (anchor is not null)
     {
       content.Children.Insert(0, new TextBlock { Text = "Downloads", FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
-      var popup = new Flyout { Content = content };
+      var popup = new Flyout { Content = content }; DeckMenu.Apply(popup, tab.View.ActualTheme);
       TerminalDeck.App.Views.Projects.ProjectAgentUi.MatchFlyoutTheme(anchor, popup);
       var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
       popup.Closed += (_, _) => closed.TrySetResult();

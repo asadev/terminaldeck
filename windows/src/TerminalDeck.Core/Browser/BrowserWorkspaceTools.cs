@@ -9,8 +9,8 @@ public static class BrowserWorkspaceTools
   {
     type = "object", properties = new
     {
-      window = new { type = "string" }, command = new { type = "string" }, text = new { type = "string" },
-      id = new { type = "string" },
+      window = new { type = "string" }, command = new { type = "string", description = "Read: bookmarks, history, settings, pageRequests, localPorts, viewport, downloads, annotations, drawing. Change: bookmarkAdd (url,title), bookmarkRemove (id), bookmarksBar (visible), questionReview, questionCancel, plus the existing workspace controls." }, text = new { type = "string" },
+      id = new { type = "string" }, url = new { type = "string" }, title = new { type = "string" }, visible = new { type = "boolean" },
       tool = new { type = "string", @enum = new[] { "Draw", "Box", "Arrow", "Text" } },
       points = new { type = "array", minItems = 1, maxItems = 20000, items = new { type = "object", properties = new { x = new { type = "number", minimum = 0, maximum = 1 }, y = new { type = "number", minimum = 0, maximum = 1 } }, required = new[] { "x", "y" }, additionalProperties = false } },
       profile = new { type = "string" }, isolated = new { type = "boolean" }
@@ -33,12 +33,25 @@ public static class BrowserWorkspaceTools
         var profile = DeckCoreTools.Text(args, "profile") ?? browser.Read().ActiveProfileId; caller.Require("profiles", profile);
         if (spec.Tier == McpTier.Read)
         {
+          if (command == "bookmarks") return JsonSerializer.SerializeToElement(new { bookmarks = browser.Bookmarks(profile).Where(b => caller.Has("origins", new Uri(b.Url).GetLeftPart(UriPartial.Authority))), alwaysShow = browser.ShowsBookmarkBar(profile) });
           if (command == "history") return JsonSerializer.SerializeToElement(browser.History(profile, DeckCoreTools.Text(args, "text") ?? "").Where(v => caller.Has("origins", new Uri(v.Url).GetLeftPart(UriPartial.Authority))));
           if (command == "settings") return JsonSerializer.SerializeToElement(new { startUrl = browser.Read().StartUrl, viewports = BrowserViewport.Presets });
         }
         else
         {
           await caller.EnsureCurrentAsync(ct);
+          if (command == "bookmarkAdd")
+          {
+            var url = DeckCoreTools.Required(args, "url"); caller.Require("origins", BrowserModel.Address(url).GetLeftPart(UriPartial.Authority));
+            return JsonSerializer.SerializeToElement(await browser.AddBookmarkAsync(profile, url, DeckCoreTools.Text(args, "title") ?? "", cancellationToken: ct));
+          }
+          if (command == "bookmarkRemove")
+          {
+            var id = DeckCoreTools.Required(args, "id"); var bookmark = browser.Bookmarks(profile).SingleOrDefault(b => b.Id == id) ?? throw new McpRefusal("Choose a bookmark in this profile.");
+            caller.Require("origins", new Uri(bookmark.Url).GetLeftPart(UriPartial.Authority));
+            await browser.RemoveBookmarkAsync(profile, id, ct); return JsonSerializer.SerializeToElement(new { saved = true });
+          }
+          if (command == "bookmarksBar") { await browser.ShowBookmarkBarAsync(profile, args.GetProperty("visible").GetBoolean(), ct); return JsonSerializer.SerializeToElement(new { saved = true }); }
           if (command is "historyForget" or "historyClear")
           {
             var affected = browser.History(profile, DeckCoreTools.Text(args, "text") ?? "")

@@ -15,7 +15,7 @@ public sealed partial class BrowserPane
   private XamlRoot RootFor(BrowserTab tab) => shellViews.TryGetValue(tab.Id, out var panel) ? panel.XamlRoot : XamlRoot;
   private async Task RunForAsync(BrowserTab tab, string command, string? argument = null)
   {
-    await GuardAsync(async () => { await Core.TakeHumanControlAsync(tab.Id); await ExecuteTabAsync(tab, command, argument); }, tab);
+    await GuardAsync(async () => { if (command is "navigate" or "back" or "forward" or "home" or "reload" or "stop") CancelPageQuestions(tab); else if (!pageQuestions.ContainsKey(tab.Id)) { tab.PageRequestNote = null; tab.RequestAttention = new(TaskCreationOptions.RunContinuationsAsynchronously); } await Core.TakeHumanControlAsync(tab.Id); await ExecuteTabAsync(tab, command, argument); }, tab);
     RefreshShellViews();
   }
   private static Button TextAction(string label, Action action)
@@ -27,7 +27,7 @@ public sealed partial class BrowserPane
   private static void CopyText(string text) { var data = new DataPackage(); data.SetText(text); Clipboard.SetContent(data); }
   private MenuFlyoutItem MenuAction(string label, BrowserTab tab, Func<Task> action, bool enabled = true)
   {
-    var item = new MenuFlyoutItem { Text = label, IsEnabled = enabled, FontSize = 13, MinHeight = 28 };
+    var item = new MenuFlyoutItem { Text = label, Icon = BrowserMenuGlyph(label), IsEnabled = enabled, FontSize = 13, MinHeight = 30 };
     item.Click += async (_, _) => await GuardAsync(action, tab); return item;
   }
   private void InstallAddress(BrowserTab tab, AutoSuggestBox address)

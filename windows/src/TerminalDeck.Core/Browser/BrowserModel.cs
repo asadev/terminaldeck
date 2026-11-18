@@ -15,8 +15,10 @@ public sealed record BrowserState(int Version, BrowserProfile[] Profiles, Browse
 {
   public BrowserVisit[] History { get; init; } = [];
   public string StartUrl { get; init; } = "about:blank";
+  public BrowserBookmark[] Bookmarks { get; init; } = [];
+  public string[] BookmarkBarProfiles { get; init; } = [];
 }
-public sealed record BrowserSurfaceOptions(string TabId, string ProfileId, bool Isolated, string? PrivateStoreId, string? AutomationOrigin = null);
+public sealed record BrowserSurfaceOptions(string TabId, string ProfileId, bool Isolated, string? PrivateStoreId, string? AutomationOrigin = null, string? PopupSourceId = null);
 public enum BrowserPageAction { Back, Forward, Stop, Zoom, Find, FindStop, Print, DevTools, UserAgent, Inspect, Record, Recording, RecordClear, Screenshot, Reveal, Size, Send, Read, Step, Handover, WorkspaceRead, WorkspaceChange, TakeOver, Upload, Extract }
 public interface IBrowserPage : IBrowserSurface
 {
@@ -42,7 +44,7 @@ public interface IBrowserProfileStorage
 // An explicit current-tab cookie-store switch recreates that page by design.
 public sealed partial class BrowserModel : IAsyncDisposable
 {
-  public const int MaximumRetainedPages = 12;
+  public const int MaximumRetainedPages = 64;
   public const string DefaultProfileId = "default";
   private sealed record Page(IBrowserPage Surface, string? PrivateStoreId, string? AutomationOrigin = null);
   private readonly IStateStore<BrowserState> store;
@@ -70,6 +72,7 @@ public sealed partial class BrowserModel : IAsyncDisposable
     _ = Address(state.StartUrl);
     if (state.History is null || state.History.Length > 2000 || state.History.Any(v => v is null || !state.Profiles.Any(p => p.Id == v.ProfileId) || !Guid.TryParseExact(v.Id, "N", out _)))
       throw new IOException("The saved browser history could not be read safely.");
+    ValidateBookmarks(state);
     foreach (var visit in state.History) _ = Address(visit.Url);
     foreach (var tab in state.Tabs)
     {
@@ -99,7 +102,7 @@ public sealed partial class BrowserModel : IAsyncDisposable
     }
     finally { gate.Release(); }
   }
-  public async ValueTask<BrowserTab> OpenAsync(string url, bool isolated = false, string? profileId = null, string? sessionId = null, CancellationToken cancellationToken = default, string? automationOrigin = null, bool select = true)
+  public async ValueTask<BrowserTab> OpenAsync(string url, bool isolated = false, string? profileId = null, string? sessionId = null, CancellationToken cancellationToken = default, string? automationOrigin = null, bool select = true, bool deferNavigation = false, string? popupSourceId = null)
   {
     var address = Address(url);
     RequireNavigation(automationOrigin, address);
@@ -107,7 +110,7 @@ public sealed partial class BrowserModel : IAsyncDisposable
     try
     {
       RequireOpen();
-      if (state.Tabs.Length >= MaximumRetainedPages) throw new InvalidOperationException("Close a browser tab before adding another. Up to 12 tabs can stay open.");
+      if (state.Tabs.Length >= MaximumRetainedPages) throw new InvalidOperationException("Close a browser tab before adding another. Up to 64 tabs can stay open.");
       var profile = profileId ?? state.ActiveProfileId; RequireProfile(profile);
       var tab = new BrowserTab(Guid.NewGuid().ToString("N"), "W" + state.NextWindow, address.AbsoluteUri, "", profile, isolated, AutomationOrigin: automationOrigin);
       var ordered = state.Tabs.ToList();
@@ -117,7 +120,7 @@ public sealed partial class BrowserModel : IAsyncDisposable
       if (sessionId is not null) (tab, next) = Bind(next, tab, sessionId);
       var previousSelection = state.SelectedTabId;
       Save(next);
-      try { await EnsurePageAsync(tab, cancellationToken); return tab; }
+      try { await EnsurePageAsync(tab, cancellationToken, popupSourceId, deferNavigation); return tab; }
       catch
       {
         // Failed or origin-blocked first navigation must not leave a saved
@@ -128,11 +131,11 @@ public sealed partial class BrowserModel : IAsyncDisposable
     }
     finally { gate.Release(); }
   }
-  public ValueTask<BrowserTab> OpenPopupAsync(string sourceId, string url, CancellationToken cancellationToken = default, bool select = true)
+  public ValueTask<BrowserTab> OpenPopupAsync(string sourceId, string url, CancellationToken cancellationToken = default, bool select = true, bool nativePopup = false)
   {
     var source = Get(sourceId);
     RequireNavigation(source.AutomationOrigin, Address(url));
-    return OpenAsync(url, source.Isolated, source.ProfileId, source.SessionId, cancellationToken, source.AutomationOrigin, select);
+    return OpenAsync(url, source.Isolated, source.ProfileId, source.SessionId, cancellationToken, source.AutomationOrigin, select, deferNavigation: nativePopup, popupSourceId: nativePopup ? sourceId : null);
   }
   private static void RequireNavigation(string? origin, Uri address)
   {
@@ -209,6 +212,7 @@ public sealed partial class BrowserModel : IAsyncDisposable
   public async ValueTask<JsonElement> PerformAsync(string id, BrowserPageAction action, JsonElement arguments, CancellationToken cancellationToken = default)
   {
     if (!Enum.IsDefined(action)) throw new ArgumentException("Choose an available browser action.");
+    Page page;
     await gate.WaitAsync(cancellationToken);
     try
     {
@@ -219,10 +223,12 @@ public sealed partial class BrowserModel : IAsyncDisposable
         tab = tab with { AutomationOrigin = origin };
         Save(state with { Tabs = state.Tabs.Select(t => t.Id == id ? tab : t).ToArray() });
       }
-      var page = await EnsurePageAsync(tab, cancellationToken);
-      return await page.Surface.PerformAsync(action, arguments, cancellationToken);
+      page = await EnsurePageAsync(tab, cancellationToken);
     }
     finally { gate.Release(); }
+    // A page can synchronously request a popup during a click. Never hold the
+    // workspace gate while Chromium waits for us to create that popup.
+    return await page.Surface.PerformAsync(action, arguments, cancellationToken);
   }
   public async ValueTask CloseAsync(string id, CancellationToken cancellationToken = default)
   {
@@ -285,23 +291,27 @@ public sealed partial class BrowserModel : IAsyncDisposable
     try { RequireOpen(); await CleanupAsync(cancellationToken); }
     finally { gate.Release(); }
   }
-  private async ValueTask<Page> EnsurePageAsync(BrowserTab tab, CancellationToken ct)
+  private async ValueTask<Page> EnsurePageAsync(BrowserTab tab, CancellationToken ct, string? popupSourceId = null, bool deferNavigation = false)
   {
     if (pages.TryGetValue(tab.Id, out var existing)) return existing;
     await CleanupAsync(ct);
     string? privateId = null;
     if (tab.Isolated)
     {
-      privateId = Guid.NewGuid().ToString("N"); Save(state with { PrivateStoresToClean = [.. state.PrivateStoresToClean, privateId] });
-      await storage.CreatePrivateAsync(privateId, ct);
+      if (popupSourceId is not null && pages.TryGetValue(popupSourceId, out var opener) && opener.PrivateStoreId is { } shared) privateId = shared;
+      else
+      {
+        privateId = Guid.NewGuid().ToString("N"); Save(state with { PrivateStoresToClean = [.. state.PrivateStoresToClean, privateId] });
+        await storage.CreatePrivateAsync(privateId, ct);
+      }
     }
     else await storage.EnsureProfileAsync(tab.ProfileId, ct);
     IBrowserPage? surface = null;
     try
     {
-      surface = await factory.CreateAsync(new(tab.Id, tab.ProfileId, tab.Isolated, privateId, tab.AutomationOrigin), ct);
+      surface = await factory.CreateAsync(new(tab.Id, tab.ProfileId, tab.Isolated, privateId, tab.AutomationOrigin, popupSourceId), ct);
       if (surface.TabId != tab.Id) throw new IOException("The browser surface belongs to another window.");
-      await surface.NavigateAsync(Address(tab.Url), ct);
+      if (!deferNavigation) await surface.NavigateAsync(Address(tab.Url), ct);
       var page = new Page(surface, privateId); pages.Add(tab.Id, page); return page;
     }
     catch
@@ -315,7 +325,7 @@ public sealed partial class BrowserModel : IAsyncDisposable
   {
     if (!pages.Remove(id, out var page)) return;
     await page.Surface.DisposeAsync();
-    if (page.PrivateStoreId is { } privateId)
+    if (page.PrivateStoreId is { } privateId && !pages.Values.Any(p => p.PrivateStoreId == privateId))
     {
       await storage.DeletePrivateAsync(privateId, ct);
       Save(state with { PrivateStoresToClean = state.PrivateStoresToClean.Where(s => s != privateId).ToArray() });
@@ -333,7 +343,7 @@ public sealed partial class BrowserModel : IAsyncDisposable
     {
       if (state.Tabs.Any(t => t.ProfileId == id)) throw new IOException("A browser profile waiting for deletion still has an open window.");
       await storage.DeleteProfileAsync(id, ct);
-      Save(state with { Profiles = state.Profiles.Where(p => p.Id != id).ToArray(), ProfilesToDelete = state.ProfilesToDelete.Where(p => p != id).ToArray(), History = state.History.Where(v => v.ProfileId != id).ToArray() });
+      Save(state with { Profiles = state.Profiles.Where(p => p.Id != id).ToArray(), ProfilesToDelete = state.ProfilesToDelete.Where(p => p != id).ToArray(), History = state.History.Where(v => v.ProfileId != id).ToArray(), Bookmarks = state.Bookmarks.Where(b => b.ProfileId != id).ToArray(), BookmarkBarProfiles = state.BookmarkBarProfiles.Where(p => p != id).ToArray() });
     }
   }
   private static (BrowserTab, BrowserState) Bind(BrowserState s, BrowserTab tab, string sessionId)
@@ -357,7 +367,7 @@ public sealed partial class BrowserModel : IAsyncDisposable
     store.Save(Copy(next)); Volatile.Write(ref state, next);
     changes.Writer.TryWrite(Copy(next));
   }
-  private static BrowserState Copy(BrowserState s) => s with { Profiles = [.. s.Profiles], Tabs = [.. s.Tabs], SessionSlots = [.. s.SessionSlots], PrivateStoresToClean = [.. s.PrivateStoresToClean], ProfilesToDelete = [.. s.ProfilesToDelete], History = [.. s.History] };
+  private static BrowserState Copy(BrowserState s) => s with { Profiles = [.. s.Profiles], Tabs = [.. s.Tabs], SessionSlots = [.. s.SessionSlots], PrivateStoresToClean = [.. s.PrivateStoresToClean], ProfilesToDelete = [.. s.ProfilesToDelete], History = [.. s.History], Bookmarks = [.. s.Bookmarks], BookmarkBarProfiles = [.. s.BookmarkBarProfiles] };
   public async ValueTask DisposeAsync()
   {
     await gate.WaitAsync();
