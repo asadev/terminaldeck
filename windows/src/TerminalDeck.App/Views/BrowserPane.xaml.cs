@@ -118,7 +118,6 @@ public sealed partial class BrowserPane : UserControl
     _ = WatchCoreAsync();
     Pending.IsActive = false; ready.TrySetResult();
     _ = RunBrowserProofIfRequestedAsync();
-    _ = RunBrowserParityProofIfRequestedAsync();
   }
   private async Task WatchCoreAsync()
   {

@@ -167,6 +167,9 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
         tools = new(Runtime.Door, dataRoot); Runtime.LocalToolAddress = tools.Address; await Runtime.StartHootToolConnectionAsync();
         renderedPage = null; Refresh();
         SyncSessions(); await browser.PrepareShellAsync(); renderedWindowsStructure = ""; Model.Notice = ""; ready.TrySetResult(); SyncWindows(); OpenOnLaunch();
+        // The browser fixture uses real shell tabs; its own WebView readiness
+        // precedes shell readiness and cannot guarantee a drawn workspace.
+        _ = browser.RunBrowserParityProofIfRequestedAsync();
       }
       catch (Exception ex) when (ex is not OutOfMemoryException) { shellRecoveryRequired = true; UiRecovery.Report("Shell initialization", ex); Model.Notice = "The session service could not connect. Existing terminals were left alone."; ready.TrySetException(ex); }
       _ = CheckForUpdateOnOpenAsync();
