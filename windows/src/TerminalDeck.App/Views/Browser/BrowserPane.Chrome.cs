@@ -23,11 +23,16 @@ public sealed partial class BrowserPane
       "Record steps" or "Stop recording" => "record", "Page size" => "phone", "Developer tools" => "code",
       "Find in page" => "search", "Print…" => "print", "Copy address" => "clipboard", "Open in your browser" => "new-window",
       "Bookmarks" => "star", "Home" => "home", "Browser settings…" => "settings", "Store" => "store",
-      "History" => "clock", "Passwords" => "lock", _ => ""
+      "History" => "clock", "Passwords" => "lock", "Split view" => "split", "Send page to a session" => "send",
+      "Set as start page" => "flag", "Recorded flow" => "record", _ => ""
     };
-    if (label == "Print…") return new FontIcon { Glyph = "\uE749", FontFamily = DeckFonts.Icons, FontSize = 16 };
-    if (DeckIconCatalog.Find(name) is not { } definition) return null;
-    return (PathIcon)XamlReader.Load($"<PathIcon xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" Data=\"{definition.Path}\" />");
+    // Line glyphs like the Mac's menu: the catalog's stroke drawings fill solid in a PathIcon.
+    var glyph = label switch
+    {
+      "Print…" => "\uE749", "Copy address" => "\uE8C8", "Zoom" => "\uE71E", "Store" => "\uE719",
+      _ => DeckIconCatalog.Find(name)?.Glyphs.Split(' ')[0] ?? ""
+    };
+    return glyph.Length == 0 ? null : new FontIcon { Glyph = glyph, FontFamily = DeckFonts.Icons, FontSize = 14 };
   }
   private static UIElement BookmarkGlyph(bool saved)
   {
@@ -113,7 +118,7 @@ public sealed partial class BrowserPane
       sizes.Items.Add(MenuAction("Custom size…", tab, () => { tab.SizeEditing = true; RefreshShellViews(); return Task.CompletedTask; })); menu.Items.Add(sizes);
       Command("Developer tools", "devtools");
       menu.Items.Add(new MenuFlyoutSeparator());
-      var zoom = new MenuFlyoutSubItem { Text = $"Zoom · {tab.Zoom:P0}", Icon = BrowserMenuGlyph("Find in page") };
+      var zoom = new MenuFlyoutSubItem { Text = $"Zoom · {tab.Zoom:P0}", Icon = BrowserMenuGlyph("Zoom") };
       zoom.Items.Add(MenuAction("Zoom out", tab, () => SetZoomAsync(tab, tab.Zoom / 1.1))); zoom.Items.Add(MenuAction("Actual size · 100%", tab, () => SetZoomAsync(tab, 1))); zoom.Items.Add(MenuAction("Zoom in", tab, () => SetZoomAsync(tab, tab.Zoom * 1.1))); menu.Items.Add(zoom);
       Add("Find in page", () => { tab.FindShown = true; RefreshShellViews(); return Task.CompletedTask; });
       Add("Print…", () => { tab.View.CoreWebView2.ShowPrintUI(Microsoft.Web.WebView2.Core.CoreWebView2PrintDialogKind.Browser); return Task.CompletedTask; });
@@ -125,12 +130,12 @@ public sealed partial class BrowserPane
       always.Click += async (_, _) => await GuardAsync(async () => { await Core.ShowBookmarkBarAsync(tab.Profile.Id, always.IsChecked); RefreshShellViews(); }, tab); bookmarks.Items.Add(always);
       foreach (var bookmark in Core.Bookmarks(tab.Profile.Id)) bookmarks.Items.Add(MenuAction(bookmark.Title, tab, () => RunForAsync(tab, "navigate", bookmark.Url)));
       menu.Items.Add(bookmarks);
-      var isolated = new ToggleMenuFlyoutItem { Text = "Isolated tab", IsChecked = tab.Isolated };
+      var isolated = new ToggleMenuFlyoutItem { Text = "Isolated tab", IsChecked = tab.Isolated, Icon = BrowserMenuGlyph("Isolated tab") };
       isolated.Click += async (_, _) => await GuardAsync(() => SwitchStoreAsync(tab, tab.Profile.Id, !tab.Isolated), tab); menu.Items.Add(isolated);
       var toggleSplit = ToggleSplitView;
       if (toggleSplit is not null)
       {
-        var split = new ToggleMenuFlyoutItem { Text = "Split view", IsChecked = SplitViewIsOn(tab.Id) }; split.Click += async (_, _) => await GuardAsync(() => { toggleSplit(tab.Id); return Task.CompletedTask; }, tab); menu.Items.Add(split);
+        var split = new ToggleMenuFlyoutItem { Text = "Split view", IsChecked = SplitViewIsOn(tab.Id), Icon = BrowserMenuGlyph("Split view") }; split.Click += async (_, _) => await GuardAsync(() => { toggleSplit(tab.Id); return Task.CompletedTask; }, tab); menu.Items.Add(split);
       }
       if (tab.Steps.Count > 0 || tab.Recording) Add("Recorded flow", () => { tab.StepsShown = true; RefreshShellViews(); return Task.CompletedTask; }); Command("Send page to a session", "send");
       menu.Items.Add(new MenuFlyoutSeparator()); Command("Home", "home");
