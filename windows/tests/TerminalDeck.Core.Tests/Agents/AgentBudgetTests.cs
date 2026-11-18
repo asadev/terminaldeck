@@ -20,12 +20,12 @@ public sealed class AgentBudgetTests : IDisposable
   {
     var ledger = Ledger();
     await ledger.ObserveAsync(Observation(new("claude:home:message-1", at, 10), new("claude:home:message-1", at, 12)));
-    await ledger.ObserveAsync(Observation(new("claude:home:message-1", at, 8)));
-    await ledger.ObserveAsync(Observation(new("claude:home:message-2", at, 20)));
+    await ledger.ObserveAsync(Observation(new AgentUsageSample("claude:home:message-1", at, 8)));
+    await ledger.ObserveAsync(Observation(new AgentUsageSample("claude:home:message-2", at, 20)));
     var recreated = Ledger();
     Assert.Equal(32, (await recreated.MonthlyAsync("reviewer", false, at)).Tokens);
     Assert.Equal(32, await recreated.TaskTokensAsync("task-run"));
-    await recreated.ObserveAsync(Observation(new("claude:home:message-1", at, 12)) with { AgentId = "another-agent", SessionId = "copied-session" });
+    await recreated.ObserveAsync(Observation(new AgentUsageSample("claude:home:message-1", at, 12)) with { AgentId = "another-agent", SessionId = "copied-session" });
     Assert.Equal(0, (await recreated.MonthlyAsync("another-agent", false, at)).Tokens);
   }
 
@@ -131,11 +131,11 @@ public sealed class AgentBudgetTests : IDisposable
     var run = new AgentRun(sessionId, "reviewer", "Reviewer", "claude", "sample", null, 1, "job", "terminal", AgentRunState.Ended, at.AddMinutes(-1), AccountId: homeId, TaskRunId: "task-run");
     var account = new TerminalDeck.Core.Accounts.AccountProfile(homeId, "claude", "Fixture", null, TerminalDeck.Core.Accounts.AccountAuthentication.Subscription, true, homeId);
     var reader = new AgentUsageReader(() => [run], () => [terminal], _ => null, new(Root), id => id == homeId ? account : null);
-    var observation = Assert.Single((await reader.ReadAsync("reviewer", default)).Where(o => o.SessionId == sessionId));
+    var observation = Assert.Single(await reader.ReadAsync("reviewer", default), o => o.SessionId == sessionId);
     Assert.True(observation.TokensKnown); Assert.Equal(15, Assert.Single(observation.Samples).Tokens);
-    Assert.Empty((await reader.ReadAsync("another-agent", default)).Where(o => o.Samples.Count > 0));
+    Assert.DoesNotContain(await reader.ReadAsync("another-agent", default), o => o.Samples.Count > 0);
     terminal = terminal with { AccountRevision = 1 };
-    var switched = Assert.Single((await reader.ReadAsync("reviewer", default)).Where(o => o.SessionId == sessionId));
+    var switched = Assert.Single(await reader.ReadAsync("reviewer", default), o => o.SessionId == sessionId);
     Assert.False(switched.TokensKnown); Assert.Empty(switched.Samples);
   }
 
