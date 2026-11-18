@@ -107,7 +107,7 @@ public sealed class CloudSubscriptionTests
   }
 
   [Theory]
-  [InlineData("list", McpTier.Read)] [InlineData("read", McpTier.Read)] [InlineData("save", McpTier.Alter)] [InlineData("assign", McpTier.Alter)] [InlineData("unassign", McpTier.Alter)]
+  [InlineData("work", McpTier.Read)] [InlineData("read", McpTier.Read)] [InlineData("save", McpTier.Alter)] [InlineData("assign", McpTier.Alter)] [InlineData("unassign", McpTier.Alter)]
   public void Agent_library_writes_keep_existing_approval_policy(string action, McpTier expected)
   {
     var spec = McpCatalogue.Load().Single(s => s.Id == "agents.library");
@@ -158,6 +158,10 @@ public sealed class CloudSubscriptionTests
     await account.RefreshAsync();
     Assert.Null(account.SyncIdentity); Assert.Equal(CloudPhase.NotAllowed, account.Snapshot.Phase);
     Assert.NotNull(account.Snapshot.Email);
+    var requestsBeforeStalePress = http.Account.Requests.Count;
+    await Assert.ThrowsAsync<CloudProfileRefusal>(() => account.RenameDeviceAsync("old-device", "Kept name"));
+    await Assert.ThrowsAsync<CloudProfileRefusal>(() => account.SignOutDeviceAsync("old-device"));
+    Assert.Equal(requestsBeforeStalePress, http.Account.Requests.Count);
     clock.Utc += TimeSpan.FromMinutes(5); http.Answer = new("on", "gift", Source: "gift");
     await account.RefreshAsync(); Assert.Equal(identity, account.SyncIdentity);
     Assert.Single(http.Account.Requests, r => r.Method == HttpMethod.Post && r.Url.AbsolutePath == "/v1/devices");

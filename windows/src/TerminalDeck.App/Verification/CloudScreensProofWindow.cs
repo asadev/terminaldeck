@@ -52,7 +52,7 @@ internal sealed partial class CloudScreensProofWindow : Window
         {
           at = DateTimeOffset.UtcNow, written, passed, failed,
           standIns = cParity ? new[] { "Agents: actual pages with in-memory made-up projects/runs; Skills: scratch SKILL.md files", "Remote: actual header and capability owner with made-up welcome snapshot; no live host", "Payment: actual Profile/plan pages against in-memory service answers" } : new[] { "side panel frame: the real session and project row builders in a plain column", "agent menu: the real menu's items drawn as a list beside the real Agents page" },
-          notDrawn = cParity ? new[] { "Live provider turn, Hoot response, relay recovery and connected account behavior", "Move/take and remote simulator layout: no supported Windows protocol", "Efficiency controls: separate worker must extend this proof after its source joins" } : new[] { "Devices with the reach switch on and off: the page needs the app's runtime (reach coordinator)", "GitHub page code-backup line and its menu: needs the app's runtime (CodeBackupHolder)" }
+          notDrawn = cParity ? new[] { "Live provider turn, Hoot response, relay recovery and connected account behavior", "Move/take and remote simulator layout: no supported Windows protocol", "Efficiency proof uses local policy/ledger fixtures; no paid turn, child provider or OS process is started" } : new[] { "Devices with the reach switch on and off: the page needs the app's runtime (reach coordinator)", "GitHub page code-backup line and its menu: needs the app's runtime (CodeBackupHolder)" }
         }, new JsonSerializerOptions { WriteIndented = true }));
         Close();
       }

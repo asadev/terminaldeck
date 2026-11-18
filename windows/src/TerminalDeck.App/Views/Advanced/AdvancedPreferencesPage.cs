@@ -24,6 +24,9 @@ public sealed class AdvancedPreferencesPage : UserControl
   {
     this.runtime = runtime; this.browser = browser; this.resetTheme = resetTheme; this.closeConfirmation = closeConfirmation; this.openPaired = openPaired;
     Content = SettingsPanel.Scroll(body); Render();
+    void Changed() => DispatcherQueue.TryEnqueue(Render);
+    Loaded += (_, _) => runtime.Changed += Changed;
+    Unloaded += (_, _) => runtime.Changed -= Changed;
   }
   // Advanced (Mac, 15 Nov): Debug mode · Open logs · Paired with a code · Reset all settings (red). No paths on the
   // surface: a path lives in its info button, the diagnostic details behind one click.
@@ -36,8 +39,8 @@ public sealed class AdvancedPreferencesPage : UserControl
     if (debug.IsOn) rows.Add(SettingsPanel.SettingRow("Diagnostic details", "", Press("Show…", ShowDiagnosticsAsync)));
     var logs = Path.Combine(runtime.Root.DirectoryPath, "logs");
     rows.Add(SettingsPanel.SettingRow("Logs", "This app's logs are kept in " + logs, Press("Open", () => { Reveal(logs, true); return Task.CompletedTask; })));
-    if (openPaired is { } paired)
-      rows.Add(SettingsPanel.SettingRow("Paired with a code", "Phones and computers paired with a code, the web version and phone access to this PC's screen.", Press("Open…", () => { paired(); return Task.CompletedTask; })));
+    if (runtime.CloudServicesAllowed && openPaired is { } paired)
+      rows.Add(SettingsPanel.SettingRow("Paired with a code", "Phones and computers paired with a code, the web version and phone access to this PC's screen.", Press("Open…", () => { if (runtime.CloudServicesAllowed) paired(); return Task.CompletedTask; })));
     body.Children.Add(SettingsPanel.GroupRows(rows));
     var reset = AccountPages.RedButton("Reset all settings…");
     reset.Click += async (_, _) => await ResetAsync();

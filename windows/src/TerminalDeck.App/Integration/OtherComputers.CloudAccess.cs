@@ -22,6 +22,7 @@ public sealed partial class OtherComputersService
       foreach (var id in wanted.Keys) if (!List().Any(row => row.Id == id && row.State is "Online" or "Connecting")) ScheduleReconnect(id);
       Changed?.Invoke(); return;
     }
+    Changed?.Invoke();
     await mutations.WaitAsync();
     try
     {

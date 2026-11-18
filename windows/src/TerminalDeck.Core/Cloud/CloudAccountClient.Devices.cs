@@ -11,6 +11,7 @@ public sealed partial class CloudAccountClient
     await work.WaitAsync(ct);
     try
     {
+      if (!Snapshot.Subscription.AllowsCloudServices) throw new CloudProfileRefusal(CloudSubscriptionPageText.Subscribe);
       if (!Load() || saved is not { } record || !Snapshot.DeviceRows.Any(d => d.DeviceId == deviceId)) throw new CloudProfileRefusal("This device is no longer in your account.");
       record = await RefreshTokenAsync(record, ct);
       var answer = await SignedAsync(record, HttpMethod.Post, "/devices/rename", CloudWire.Canonical(new { device_id = deviceId, name = clean }), ct);
@@ -32,6 +33,7 @@ public sealed partial class CloudAccountClient
     await work.WaitAsync(ct);
     try
     {
+      if (!Snapshot.Subscription.AllowsCloudServices) throw new CloudProfileRefusal(CloudSubscriptionPageText.Subscribe);
       if (!Load() || saved is not { } record) throw new CloudProfileRefusal("Sign in to manage your devices.");
       if (deviceId == record.DeviceId) throw new CloudProfileRefusal("Use Sign out to sign out of this PC.");
       if (!Snapshot.DeviceRows.Any(d => d.DeviceId == deviceId)) throw new CloudProfileRefusal("This device is no longer in your account.");

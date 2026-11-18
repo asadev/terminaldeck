@@ -29,7 +29,7 @@ public sealed partial class AppRuntime
       var accessChanged = allowed != next.AllowsCloudServices;
       var visibilityChanged = shown != next.ShowsSubscription;
       allowed = next.AllowsCloudServices; shown = next.ShowsSubscription;
-      if (accessChanged) _ = ReconcileCloudSubscriptionAsync();
+      if (accessChanged) { Changed?.Invoke(); _ = ReconcileCloudSubscriptionAsync(); }
       else if (visibilityChanged) Changed?.Invoke();
     };
     Cloud.Changed += subscriptionChanged;

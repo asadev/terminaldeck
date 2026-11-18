@@ -20,6 +20,7 @@ internal sealed class RemoteSessionHeader : Grid
   private readonly Action<string> notice;
   private readonly TextBlock title = ChatBar.Title(""), path = new() { FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 200, VerticalAlignment = VerticalAlignment.Center };
   private readonly Button account = ChatBar.AccountChip(""), model = new(), effort = new(), usage = new();
+  private readonly Button more = new();
   private JsonElement controls, accounts;
   private bool refreshing;
   private bool cProof;
@@ -41,7 +42,7 @@ internal sealed class RemoteSessionHeader : Grid
     DeckMenu.Pill(model); DeckMenu.Pill(effort); actions.Children.Add(usage); actions.Children.Add(model); actions.Children.Add(effort);
     var ring = Usage.MeterRing.Create(); Usage.MeterRing.Draw(ring, null, "AccentFillColorDefaultBrush"); Usage.MeterRing.Host(usage, ring); usage.Width = usage.Height = 26;
     AutomationProperties.SetName(usage, "Usage on " + (machine?.Name ?? "the other computer")); ToolTipService.SetToolTip(usage, "Session usage");
-    var more = new Button(); ChatAppearance.IconButton(more, "\uE712", "Session actions");
+    ChatAppearance.IconButton(more, "\uE712", "Session actions");
     more.Click += (_, _) =>
     {
       var menu = DeckMenu.CreateFor(this);
@@ -57,7 +58,6 @@ internal sealed class RemoteSessionHeader : Grid
       if (Has("close")) { var stop = new MenuFlyoutItem { Text = "Stop session" }; stop.Click += async (_, _) => await Run(async () => await service.SendAsync(computer, new { t = "close", id = session })); menu.Items.Add(stop); }
       menu.ShowAt(more);
     };
-    more.Visibility = Has("rename") || Has("close") ? Visibility.Visible : Visibility.Collapsed;
     actions.Children.Add(more); SetColumn(actions, 1); bar.Children.Add(actions); Children.Add(bar);
     account.Click += async (_, _) => await AccountMenuAsync(); model.Click += async (_, _) => await ControlMenuAsync("model", model); effort.Click += async (_, _) => await ControlMenuAsync("effort", effort); usage.Click += async (_, _) => await UsageMenuAsync();
     Loaded += async (_, _) => { service.Changed -= Changed; service.Changed += Changed; Render(); if (!cProof) await ReadAsync(); }; Unloaded += (_, _) => service.Changed -= Changed;
@@ -73,6 +73,7 @@ internal sealed class RemoteSessionHeader : Grid
   private void Changed() => DispatcherQueue.TryEnqueue(Render);
   private void Render()
   {
+    more.Visibility = Has("rename") || Has("close") ? Visibility.Visible : Visibility.Collapsed;
     var row = service.Services(computer).Sessions.FirstOrDefault(s => OtherComputersService.Text(s, "id", "") == session);
     var known = OtherComputersService.Text(row, "title", ""); if (known.Length > 0) title.Text = known;
     path.Text = OtherComputersService.Text(row, "cwd", path.Text); ToolTipService.SetToolTip(path, path.Text);

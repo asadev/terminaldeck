@@ -20,6 +20,7 @@ public sealed partial class ShellWindow
     if (windowState is null || sidebar is null || shownCloudAccess == Runtime.CloudServicesAllowed) return;
     shownCloudAccess = Runtime.CloudServicesAllowed; RenderSidebarPages(); RenderCloudSessionRows();
     if (!Runtime.CloudServicesAllowed) morePagesFlyout?.Hide();
+    renderedWindowsStructure = ""; RenderWindows();
   }
   private IEnumerable<ShellCommand> VisibleShellCommands(string query) => ShellCommands.Matching(query).Where(command => CloudPaidInventory.ShowsCommand(Runtime.Cloud.Snapshot.Subscription, command.Id));
 }

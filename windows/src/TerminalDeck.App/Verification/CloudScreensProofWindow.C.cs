@@ -51,6 +51,19 @@ internal sealed partial class CloudScreensProofWindow
     Check("Skills renders assigned agent and real actions", Texts(agentPage).Contains("Release reviewer") && Buttons(agentPage).Contains("Show skill") && Buttons(agentPage).Contains("Assign skill"));
     agentPage.CProofDirectory("All agents", skills);
     await Shot("agents-library", agentPage, 1100, 700);
+    AgentEfficiency? policy = null;
+    var editor = new StackPanel { Spacing = 16, Margin = new(24), MaxWidth = 700 };
+    foreach (var row in AgentEfficiencyEditor.Rows(() => policy, value => policy = value, failed.Add)) editor.Children.Add(row);
+    await Shot("agent-efficiency", new ScrollViewer { Content = editor }, 900, 1000, dark: true, background: "DeckRailBrush");
+    Check("Efficiency editor exposes all nine real policy fields", WorkspaceVisuals.Tree(editor).OfType<FrameworkElement>().Count(e => Microsoft.UI.Xaml.Automation.AutomationProperties.GetAutomationId(e).StartsWith("agents.efficiency.", StringComparison.Ordinal)) == 9);
+    Check("Viewing efficiency controls writes no default policy", policy is null);
+    var at = DateTimeOffset.UtcNow;
+    var ledger = new AgentBudgetLedger(new JsonStateStore<AgentUsageLedgerState>(data, "c-proof-agent-usage"));
+    await ledger.ObserveAsync(new("fixture-chat", "release-review", "fixture-task", false, at, [new("fixture-request", at, 80), new("fixture-request", at, 80)], true, false));
+    var totals = await ledger.MonthlyAsync("release-review", false, at);
+    Check("Budget ledger counts repeated usage only once", totals.Tokens == 80);
+    Check("Budget warning uses the real eighty-percent policy", AgentBudgetPolicy.Monthly(new(MonthlyTokens: 100), totals, false).Warning is not null);
+    Check("Budget pause uses the real launch policy", AgentBudgetPolicy.Monthly(new(MonthlyTokens: 80, OnExhaustion: "pause"), totals, false).Pause);
 
     await using var computers = OtherComputersService.CProof(data);
     var header = new RemoteSessionHeader(computers, "fixture", "fixture-session", false, _ => { });

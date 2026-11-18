@@ -48,6 +48,7 @@ public sealed partial class AppRuntime
 
   public async Task SetPhoneScreenAllowedAsync(bool allowed)
   {
+    if (!CloudServicesAllowed) throw new IOException(TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Subscribe);
     var next = new PhoneScreenState(allowed);
     phoneScreenStore?.Save(next); Volatile.Write(ref phoneScreen, next);
     // Off: every phone watching this PC is let go at once and told why.

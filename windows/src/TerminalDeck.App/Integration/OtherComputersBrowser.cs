@@ -28,9 +28,11 @@ public sealed partial class OtherComputersService
   }
   public async Task SetBrowserConsentAsync(string id, bool allowed)
   {
+    RequireCloudAccess();
     await mutations.WaitAsync();
     try
     {
+      RequireCloudAccess();
       if (!saved.TryGetValue(id, out var row)) throw new ArgumentException("Choose a paired computer.");
       saved[id] = row with { DrivesWindows = allowed };
       try { Save(); } catch { saved[id] = row; throw; }

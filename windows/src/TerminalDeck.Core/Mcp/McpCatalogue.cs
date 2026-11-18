@@ -53,10 +53,14 @@ public static class McpCatalogue
     foreach (var spec in TerminalDeck.Core.Cloud.CloudProjectSecretFilesTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.WhatsApp.WhatsAppTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Agents.AgentLibraryTools.Specs) result[spec.Id] = spec;
+    foreach (var spec in TerminalDeck.Core.Agents.AgentEfficiencyMcp.Specs) result[spec.Id] = spec;
+    foreach (var spec in TerminalDeck.Core.Agents.AgentHeavyWorkMcp.Specs) result[spec.Id] = spec;
     return result.Values.ToArray();
   }
   public static McpTier EffectiveTier(McpToolSpec spec, JsonElement arguments, bool ownsSession = false)
   {
+    if (spec.Id == TerminalDeck.Core.Agents.AgentEfficiencyMcp.Id) return TerminalDeck.Core.Agents.AgentEfficiencyMcp.Tier(arguments);
+    if (spec.Id == TerminalDeck.Core.Agents.AgentHeavyWorkMcp.Id) return TerminalDeck.Core.Agents.AgentHeavyWorkMcp.Tier(arguments);
     if (TerminalDeck.Core.Tasks.TasksMcp.Specs.Any(t => t.Id == spec.Id)) return TerminalDeck.Core.Tasks.TasksMcp.Tier(spec, arguments);
     if (TerminalDeck.Core.Code.CodeMcp.Specs.Any(t => t.Id == spec.Id)) return TerminalDeck.Core.Code.CodeMcp.Tier(spec, arguments);
     if (TerminalDeck.Core.Accounts.AccountMcp.Specs.Any(t => t.Id == spec.Id)) return TerminalDeck.Core.Accounts.AccountMcp.Tier(spec, arguments);

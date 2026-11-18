@@ -75,6 +75,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
     TerminalDeck.App.Views.Agents.NewSessionPicker.Computers = OtherComputers;
     Mcp = new(new JsonStateStore<McpManagerState>(root, "mcp"), new WindowsCredentialStore(root), root, new WindowsMcpCommandResolver(), new ManagedMcpFactory());
     Door = new(permissions ?? CallerAuthority, wrap: dispatch, preflight: PreflightV2);
+    InitializeAgentBudgets();
     CallerAuthority.Authorized += action =>
     {
       var directory = Path.Combine(Root.DirectoryPath, "mcp"); WindowsPrivateDirectory.Ensure(directory);
@@ -172,9 +173,8 @@ public sealed partial class AppRuntime : IAsyncDisposable
   private async ValueTask<AgentSessionStarted> StartAgentChatAsync(AgentLaunchPlan plan, CancellationToken ct)
   {
     if (!Directory.Exists(plan.Folder)) throw new ArgumentException("Choose an existing folder.");
-    var chat = await Chats.CreateAsync(new(plan.SessionId, plan.Provider, plan.Folder, plan.Title, plan.AccountId, plan.AccountHome, new(plan.Model, plan.Effort), plan.Instructions,
-      plan.Permission is { } chosen && ChatPermissionModes.Supported(plan.Provider).Contains(chosen) ? chosen : General.NewChatPermission(plan.Provider)),
-      customTitle: plan.Title != TerminalDeck.Core.Agents.AgentSeats.ProviderName(plan.Provider), cancellationToken: ct);
+    var chat = await Chats.CreateAsync(AgentTaskChatDefinition(plan),
+      conversationId: plan.ConversationId, customTitle: plan.Title != TerminalDeck.Core.Agents.AgentSeats.ProviderName(plan.Provider), cancellationToken: ct);
     ConnectChatTools(chat.Definition.Id);
     if (plan.Job.Length > 0) await Chats.SendAsync(chat.Definition.Id, plan.SessionId, plan.Job, cancellationToken: ct);
     await RefreshSessionsAsync(); return new(chat.Definition.Id, "chat");
