@@ -15,26 +15,29 @@ public sealed partial class SettingsPane
   private string? callerNotice;
   private async Task AddCallerRowsAsync(StackPanel stack, CancellationToken ct)
   {
-    var allow = new ToggleSwitch { IsOn = runtime.RemoteToolsEnabled, OnContent = "", OffContent = "", MinWidth = 40 };
-    Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(allow, "aiApps.allow");
-    allow.Toggled += async (_, _) =>
+    if (runtime.Cloud.Snapshot.Subscription.AllowsCloudServices)
     {
-      if (allow.IsOn == runtime.RemoteToolsEnabled) return;
-      allow.IsEnabled = false;
-      try { await runtime.SetRemoteToolsAsync(allow.IsOn); }
-      catch (Exception ex) when (ex is not OutOfMemoryException) { model.Notice = "That could not be changed. Try again."; }
-      await RenderAsync();
-    };
-    var access = new List<FrameworkElement> { Settings.SettingsPanel.SettingRow("Let AI apps use this PC",
-      "Lets other AI apps use " + TerminalDeck.Core.Brand.Name + " on this PC from anywhere, through " + TerminalDeck.Core.Brand.Name + "’s server. Each app uses its own key below. Turning this off stops those keys. It turns off when the app closes.", allow) };
-    if (runtime.RemoteToolsEnabled && runtime.Remote.McpAddress is { } address)
-    {
-      var copy = new Button { Content = "Copy" };
-      Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(copy, "aiApps.copyAddress");
-      copy.Click += (_, _) => { var data = new DataPackage(); data.SetText(address); Clipboard.SetContent(data); copy.Content = "Copied"; };
-      access.Add(Settings.SettingsPanel.SettingRow("Connection address", "Paste it into the AI app’s MCP settings together with that app’s key. It works from anywhere.", copy));
+      var allow = new ToggleSwitch { IsOn = runtime.RemoteToolsEnabled, OnContent = "", OffContent = "", MinWidth = 40 };
+      Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(allow, "aiApps.allow");
+      allow.Toggled += async (_, _) =>
+      {
+        if (allow.IsOn == runtime.RemoteToolsEnabled) return;
+        allow.IsEnabled = false;
+        try { await runtime.SetRemoteToolsAsync(allow.IsOn); }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { model.Notice = "That could not be changed. Try again."; }
+        await RenderAsync();
+      };
+      var access = new List<FrameworkElement> { Settings.SettingsPanel.SettingRow("Let AI apps use this PC",
+        "Lets other AI apps use " + TerminalDeck.Core.Brand.Name + " on this PC from anywhere, through " + TerminalDeck.Core.Brand.Name + "’s server. Each app uses its own key below. Turning this off stops those keys. It turns off when the app closes.", allow) };
+      if (runtime.RemoteToolsEnabled && runtime.Remote.McpAddress is { } address)
+      {
+        var copy = new Button { Content = "Copy" };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(copy, "aiApps.copyAddress");
+        copy.Click += (_, _) => { var data = new DataPackage(); data.SetText(address); Clipboard.SetContent(data); copy.Content = "Copied"; };
+        access.Add(Settings.SettingsPanel.SettingRow("Connection address", "Paste it into the AI app’s MCP settings together with that app’s key. It works from anywhere.", copy));
+      }
+      stack.Children.Add(Settings.SettingsPanel.GroupRows(access));
     }
-    stack.Children.Add(Settings.SettingsPanel.GroupRows(access));
 
     IReadOnlyList<McpCallerPolicy> callers = runtime.CallerAuthority.List().Where(c => c.CallerId.StartsWith("ai:", StringComparison.Ordinal)).ToArray();
     if (callerNotice is not null) stack.Children.Add(Description(callerNotice));

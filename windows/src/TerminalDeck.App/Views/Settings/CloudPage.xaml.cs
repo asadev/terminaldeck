@@ -59,6 +59,7 @@ public sealed partial class CloudPage : UserControl
   {
     Body.Children.Clear(); syncDot = null; syncLine = null; syncNow = null; details = null; detailsLine = null; detailsToggle = null;
     var snapshot = account.Snapshot;
+    if (!snapshot.Subscription.AllowsCloudServices) return;
     var summary = CloudPageText.Account(snapshot);
     var page = CloudPageText.For(snapshot);
     if (summary.Button is not null)

@@ -137,8 +137,9 @@ public sealed record CloudDeviceRow(string DeviceId, string Name, bool ThisDevic
 /// What the Cloud page and `cloud.status` show. Never carries a token or a key.
 public sealed record CloudSnapshot(CloudPhase Phase, string? Email = null, string? DisplayName = null, string? ThisDeviceId = null,
   string? ThisDeviceName = null, IReadOnlyList<CloudDeviceRow>? Devices = null, string? Problem = null, string? Provider = null,
-  CloudTrustMode? TrustMode = null, string? TrustNotice = null)
+  CloudTrustMode? TrustMode = null, string? TrustNotice = null, CloudSubscriptionSnapshot? SubscriptionState = null)
 {
+  [JsonIgnore] public CloudSubscriptionSnapshot Subscription => SubscriptionState ?? CloudSubscriptionSnapshot.Unknown;
   public static CloudSnapshot Dormant { get; } = new(CloudPhase.Dormant);
   public IReadOnlyList<CloudDeviceRow> DeviceRows => Devices ?? [];
   /// "Use Cloud on this PC": on from the moment of sign-in (joining is automatic); Paused is the switch turned off.

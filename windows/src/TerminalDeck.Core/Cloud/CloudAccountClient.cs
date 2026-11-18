@@ -88,6 +88,7 @@ public sealed partial class CloudAccountClient : IDisposable
   private long Now => clock.GetUtcNow().ToUnixTimeMilliseconds();
   private void Publish(CloudSnapshot next)
   {
+    next = next with { SubscriptionState = subscription };
     if (next.Phase is CloudPhase.SignedIn or CloudPhase.NotAllowed or CloudPhase.Paused && saved is { } record) next = next with { Provider = record.Session.User.Provider };
     lock (gate) current = next;
     Changed?.Invoke(next);
@@ -248,6 +249,12 @@ public sealed partial class CloudAccountClient : IDisposable
     {
       if (firstSignIn) Stage("Cloud status");
       if (record.Session.ExpiresAt <= Now + 60_000) record = await RefreshTokenAsync(record, ct);
+      await ReadSubscriptionLockedAsync(record, ct);
+      if (!subscription.AllowsCloudServices)
+      {
+        Publish(Snapshot with { Phase = CloudPhase.NotAllowed, Email = record.Session.User.Email, DisplayName = record.Session.User.DisplayName, ThisDeviceId = record.DeviceId, Problem = null });
+        return;
+      }
       var gateAnswer = await CapabilitiesAsync(record, ct);
       if (version != generation) return;
       if (gateAnswer is null)
@@ -322,7 +329,7 @@ public sealed partial class CloudAccountClient : IDisposable
     Publish(new(CloudPhase.SignedOut));
     if (session is not null) await LogoutAsync(session.AccessToken);
   }
-  private void ClearLocal() { saved = null; keys = null; ForgetTrust(); store.Remove(); }
+  private void ClearLocal() { subscriptionReadAt = null; subscription = CloudSubscriptionSnapshot.Unknown; saved = null; keys = null; ForgetTrust(); store.Remove(); }
 
   private bool Load()
   {

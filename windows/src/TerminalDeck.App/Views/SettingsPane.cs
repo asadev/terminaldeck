@@ -146,7 +146,7 @@ public sealed partial class SettingsPane : Grid
     var session = new ComboBox { Header = "Granted conversation", ItemsSource = sessions, DisplayMemberPath = "Title", SelectedIndex = 0, HorizontalAlignment = HorizontalAlignment.Stretch };
     var mode = new ComboBox { Header = "Calling AI’s permission setting", ItemsSource = Enum.GetValues<AiPermissionMode>(), SelectedItem = AiPermissionMode.Ask, HorizontalAlignment = HorizontalAlignment.Stretch };
     var origins = new TextBox { Header = "Granted browser origins · one per line", AcceptsReturn = true, PlaceholderText = "https://example.com", MaxHeight = 160 };
-    var relay = new CheckBox { Content = "Allow this key over the enabled relay", IsEnabled = runtime.RemoteToolsEnabled };
+    var relay = new CheckBox { Content = "Allow this key over the enabled relay", IsEnabled = runtime.RemoteToolsEnabled && runtime.Cloud.Snapshot.Subscription.AllowsCloudServices, Visibility = runtime.Cloud.Snapshot.Subscription.AllowsCloudServices ? Visibility.Visible : Visibility.Collapsed };
     var note = Description("Match the permission setting in the calling AI. Ask uses that AI’s own tool approval. This key cannot manage browser profiles, app security or other conversations. The key expires in eight hours or when this app closes.");
     var form = new StackPanel { Spacing = 16 }; foreach (var control in new UIElement[] { note, name, session, mode, origins, relay }) form.Children.Add(control);
     var dialog = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = "Connect an AI app", Content = form, PrimaryButtonText = "Create connection", CloseButtonText = "Cancel" };
@@ -155,6 +155,7 @@ public sealed partial class SettingsPane : Grid
       try
       {
         if (string.IsNullOrWhiteSpace(name.Text)) throw new ArgumentException("Enter the AI app’s name.");
+        if (relay.IsChecked == true && !runtime.Cloud.Snapshot.Subscription.AllowsCloudServices) throw new InvalidOperationException(TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Subscribe);
         var selected = (TerminalDeck.Core.Projects.ProjectSession)session.SelectedItem;
         var registration = runtime.ConnectCaller(name.Text.Trim(), selected.Id, (AiPermissionMode)mode.SelectedItem,
           origins.Text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries), relay.IsChecked == true);

@@ -142,7 +142,7 @@ public sealed class CloudAccountTests : IDisposable
     Assert.True(await c.Account.FinishAppReturnAsync(Return(url)));
     Assert.Equal(Query(url)["challenge"], CloudWire.Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(c.Http.Verifier!))));
     Assert.Equal(64, c.Http.Verifier!.Length);
-    Assert.Equal(["/v1/auth/exchange", "/v1/capabilities", "/v1/devices", "/v1/devices"], c.Http.Requests.Select(r => r.Url.AbsolutePath).ToArray());
+    Assert.Equal(["/v1/auth/exchange", "/v1/subscription", "/v1/capabilities", "/v1/devices", "/v1/devices"], c.Http.Requests.Select(r => r.Url.AbsolutePath).ToArray());
     Assert.Equal("windows", c.Http.Registered!.Platform); Assert.Equal("OFFICE-PC", c.Http.Registered.Label);
     var s = c.Account.Snapshot;
     Assert.Equal(CloudPhase.SignedIn, s.Phase); Assert.Equal("someone@example.com", s.Email);
