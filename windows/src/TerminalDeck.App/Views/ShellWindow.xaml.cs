@@ -79,6 +79,18 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     AppWindow.Move(new Windows.Graphics.PointInt32(W12Proof || Environment.GetEnvironmentVariable("TD_W13_PROOF") is not null ? -20000 : work.X + (work.Width - width) / 2, W12Proof || Environment.GetEnvironmentVariable("TD_W13_PROOF") is not null ? -20000 : work.Y + (work.Height - height) / 2));
     SessionList.ItemsSource = Model.Sessions;
     browser = new BrowserPane(root, SendBrowserContextAsync);
+    browser.OpenStore = () => Model.Page = ShellPage.Store;
+    browser.ToggleSplitView = id =>
+    {
+      var tab = windowState.Get(id); LeaveSwarm();
+      if (windowState.Layout(tab.Owner, tab.Host).Root?.Tab is null) windowState.One(id, tab.Owner, tab.Host);
+      else windowState.EmptySplit(id, owner: tab.Owner, host: tab.Host);
+    };
+    browser.SplitViewIsOn = id =>
+    {
+      var tab = windowState.Get(id);
+      return windowState.Layout(tab.Owner, tab.Host).Root?.Tab is null;
+    };
     BindPhoneBrowserWorkspace(Runtime.PhoneBrowser);
     Runtime.InitializeStoreExtensions(new BrowserStoreExtensions(browser, OnUiAsync), new Store.StoreConsent(() => Root.XamlRoot, OnUiAsync));
     browser.SessionChoices = () => Model.Sessions.Where(s => s.IsLive && s.State is not ("ended" or "exited"))
@@ -155,6 +167,9 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
         tools = new(Runtime.Door, dataRoot); Runtime.LocalToolAddress = tools.Address; await Runtime.StartHootToolConnectionAsync();
         renderedPage = null; Refresh();
         SyncSessions(); await browser.PrepareShellAsync(); renderedWindowsStructure = ""; Model.Notice = ""; ready.TrySetResult(); SyncWindows(); OpenOnLaunch();
+        // The browser fixture uses real shell tabs; its own WebView readiness
+        // precedes shell readiness and cannot guarantee a drawn workspace.
+        _ = browser.RunBrowserParityProofIfRequestedAsync();
       }
       catch (Exception ex) when (ex is not OutOfMemoryException) { shellRecoveryRequired = true; UiRecovery.Report("Shell initialization", ex); Model.Notice = "The session service could not connect. Existing terminals were left alone."; ready.TrySetException(ex); }
       _ = CheckForUpdateOnOpenAsync();

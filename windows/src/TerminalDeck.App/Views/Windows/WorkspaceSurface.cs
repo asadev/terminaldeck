@@ -52,8 +52,8 @@ internal sealed partial class WorkspaceSurface : Grid
   private StackPanel actions = null!;
   private readonly Button previousTabs;
   private readonly Button nextTabs;
-  private readonly Grid strip = new() { ColumnSpacing = 0, MinWidth = 0 };
-  private readonly ScrollViewer stripViewport = new() { HorizontalScrollMode = ScrollMode.Enabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden, VerticalScrollMode = ScrollMode.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, MinWidth = 0, ZoomMode = ZoomMode.Disabled };
+  private readonly Grid strip = new() { ColumnSpacing = 4, MinWidth = 0 };
+  private readonly ScrollViewer stripViewport = new() { HorizontalAlignment = HorizontalAlignment.Left, HorizontalScrollMode = ScrollMode.Enabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden, VerticalScrollMode = ScrollMode.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, MinWidth = 0, ZoomMode = ZoomMode.Disabled };
   private readonly Grid body = new();
   private Dictionary<string, Border> paneFrames = [];
   // Like browser tabs, rendered panes stay in `body` (hidden) while another tab
@@ -83,9 +83,9 @@ internal sealed partial class WorkspaceSurface : Grid
     // Like Chrome: the new-tab buttons sit right after the last tab and move with
     // the tabs; when the strip is full they stay visible at its end.
     Header.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
-    stripHost.HorizontalAlignment = HorizontalAlignment.Left;
+    stripHost.HorizontalAlignment = HorizontalAlignment.Stretch;
     stripHost.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-    stripHost.ColumnDefinitions.Add(new() { Width = GridLength.Auto, MinWidth = 0 });
+    stripHost.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star), MinWidth = 0 });
     stripHost.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
     stripHost.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
     previousTabs = IconButton("Scroll tabs left", "\uE76B", () => ScrollTabs(-1));
@@ -109,8 +109,12 @@ internal sealed partial class WorkspaceSurface : Grid
     };
     Header.SizeChanged += (_, _) => Header.Clip = new RectangleGeometry { Rect = new(0, 0, Header.ActualWidth, Header.ActualHeight) };
     actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center, Margin = new(4, 0, 0, 0) };
-    actions.Children.Add(NewWindowButton("New terminal tab", "terminal", () => Guard(() => create(state.CreationOwner(owner, Host), "terminal"))));
-    actions.Children.Add(NewWindowButton("New browser tab", "browser", () => Guard(() => create(state.CreationOwner(owner, Host), "browser"))));
+    var add = IconButton("New browser tab", "\uE710", () => Guard(() => create(state.CreationOwner(owner, Host), "browser")));
+    add.Width = add.Height = add.MinWidth = add.MinHeight = 26; add.CornerRadius = new(13);
+    var newMenu = TerminalDeck.App.Views.DeckMenu.CreateFor(Header);
+    Add(newMenu, "New browser tab", () => Guard(() => create(state.CreationOwner(owner, Host), "browser")));
+    Add(newMenu, "New terminal tab", () => Guard(() => create(state.CreationOwner(owner, Host), "terminal")));
+    add.ContextFlyout = newMenu; actions.Children.Add(add);
     SetColumn(actions, 3); stripHost.Children.Add(actions); actions.SizeChanged += (_, _) => FitTabs();
     AddShortcut(VirtualKey.Tab, VirtualKeyModifiers.Control, () => Step(1));
     AddShortcut(VirtualKey.Tab, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => Step(-1));
@@ -213,13 +217,14 @@ internal sealed partial class WorkspaceSurface : Grid
     foreach (var tab in state.Tabs.Where(t => t.Host == Host))
     {
       strip.ColumnDefinitions.Add(new() { Width = new(WorkspaceTabSizing.Minimum), MinWidth = WorkspaceTabSizing.Minimum });
-      var chip = new Grid { CornerRadius = new(6, 6, 0, 0), Margin = new(0, 4, 0, 0), Height = 36, VerticalAlignment = VerticalAlignment.Bottom, MinWidth = 0 };
+      var chip = new Grid { CornerRadius = new(13), Margin = new(0), Height = 26, VerticalAlignment = VerticalAlignment.Center, MinWidth = 0 };
       SetColumn(chip, strip.ColumnDefinitions.Count - 1);
       chip.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); chip.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
       chip.SetResourceReference(BackgroundProperty, "DeckTransparentBrush");
-      // The flared bottom shares the opaque page fill and reaches its top edge.
       bool Selected() => headerActive == tab.Id;
       var flare = (double)Application.Current.Resources["DeckTabFlare"];
+      // A zero flare asks the shared shape owner for the closed capsule contour.
+      flare = 0;
       var shape = new Microsoft.UI.Xaml.Shapes.Path { Tag = "selected-tab", Margin = new(-flare, 0, -flare, 0), IsHitTestVisible = false, Visibility = Selected() ? Visibility.Visible : Visibility.Collapsed };
       shape.SetResourceReference(Microsoft.UI.Xaml.Shapes.Shape.FillProperty, WorkspacePaper.For(tab, session(tab)));
       SetColumnSpan(shape, 2); chip.Children.Add(shape);
@@ -237,10 +242,7 @@ internal sealed partial class WorkspaceSurface : Grid
       }
       chip.SizeChanged += (_, _) => Shape();
       chip.PointerEntered += (_, _) => { if (!Selected()) chip.Background = (Brush)ShellTheme.Resource(chip, "DeckHoverBrush"); };
-      chip.PointerExited += (_, _) => chip.Background = (Brush)ShellTheme.Resource(chip, "DeckTransparentBrush");
-      var divider = new Border { Width = 1, Height = 14, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
-      divider.Visibility = Selected() ? Visibility.Collapsed : Visibility.Visible;
-      divider.SetResourceReference(Border.BackgroundProperty, "DeckTabDividerBrush"); SetColumnSpan(divider, 2); chip.Children.Add(divider);
+      chip.PointerExited += (_, _) => chip.Background = (Brush)ShellTheme.Resource(chip, "DeckControlBrush");
       var label = new Grid { ColumnSpacing = 6, HorizontalAlignment = HorizontalAlignment.Stretch, MinWidth = 0 };
       if (tab.Subject == "Hoot" && tab.Kind == "page") label.Children.Add(new Image { Width = 14, Height = 14, Source = new Microsoft.UI.Xaml.Media.Imaging.SvgImageSource(new Uri("ms-appx:///Assets/icons/hoot.svg")) });
       else if (tab.Kind == "browser" && BrowserIdentity?.Invoke(tab) is { } browser)
@@ -255,7 +257,7 @@ internal sealed partial class WorkspaceSurface : Grid
         label.Children.Add(new TerminalDeck.App.Views.BrandIcon { Kind = row.Provider, Shell = row.Shell, Width = 14, Height = 14 });
       }
       else label.Children.Add(new TerminalDeck.App.Views.DeckIcon { Glyph = WorkspaceIcons.For(tab.Kind == "page" ? tab.Subject : tab.Kind), FontSize = 13 });
-      var title = new TextBlock { Text = tab.Title, FontWeight = active == tab.Id ? Microsoft.UI.Text.FontWeights.Medium : Microsoft.UI.Text.FontWeights.Normal, FontSize = 12, LineHeight = 13, LineStackingStrategy = LineStackingStrategy.BlockLineHeight, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center }; label.Children.Add(title); tabTitles[tab.Id] = title;
+      var title = new TextBlock { Text = tab.Title, FontWeight = active == tab.Id ? Microsoft.UI.Text.FontWeights.Medium : Microsoft.UI.Text.FontWeights.Normal, FontSize = 12, LineHeight = 13, LineStackingStrategy = LineStackingStrategy.BlockLineHeight, TextTrimming = TextTrimming.None, VerticalAlignment = VerticalAlignment.Center }; label.Children.Add(title); tabTitles[tab.Id] = title;
       Border? accountBadge = null;
       if (AccountBadge?.Invoke(tab) is { Length: > 0 } accountName)
       {
@@ -273,9 +275,18 @@ internal sealed partial class WorkspaceSurface : Grid
         SetColumn(child, label.ColumnDefinitions.Count);
         label.ColumnDefinitions.Add(new() { Width = ReferenceEquals(child, title) ? new(1, GridUnitType.Star) : GridLength.Auto });
       }
-      var select = new Button { ClickMode = ClickMode.Press, Style = (Style)Application.Current.Resources["DeckTabButtonStyle"], Content = label, Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new(0), Padding = new(8, 4, 4, 4), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch, MinWidth = 0, MinHeight = 0, Height = 36 };
+      var titleFade = new Border { Width = 14, HorizontalAlignment = HorizontalAlignment.Right, IsHitTestVisible = false };
+      SetColumn(titleFade, GetColumn(title)); label.Children.Add(titleFade);
+      title.SizeChanged += (_, _) => title.Clip = new RectangleGeometry { Rect = new(0, 0, title.ActualWidth, title.ActualHeight) };
+      void FadeInk()
+      {
+        if (ShellTheme.Resource(chip, Selected() ? WorkspacePaper.For(tab, session(tab)) : "DeckControlBrush") is not SolidColorBrush fill) return;
+        var transparent = fill.Color; transparent.A = 0;
+        titleFade.Background = new LinearGradientBrush { StartPoint = new(0, .5), EndPoint = new(1, .5), GradientStops = { new GradientStop { Color = transparent, Offset = 0 }, new GradientStop { Color = fill.Color, Offset = 1 } } };
+      }
+      var select = new Button { ClickMode = ClickMode.Press, Style = (Style)Application.Current.Resources["DeckTabButtonStyle"], Content = label, Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new(0), Padding = new(8, 0, 4, 0), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch, MinWidth = 0, MinHeight = 0, Height = 26 };
       TerminalAppearanceBridge.EnsureInkResources();
-      void TabInk() => select.Foreground = (Brush)ShellTheme.Resource(select, headerActive == tab.Id ? WorkspacePaper.For(tab, session(tab)) == WorkspacePaper.Terminal ? WorkspacePaper.Ink : "DeckInkBrush" : "DeckSecondaryInkBrush");
+      void TabInk() { select.Foreground = (Brush)ShellTheme.Resource(select, headerActive == tab.Id ? WorkspacePaper.For(tab, session(tab)) == WorkspacePaper.Terminal ? WorkspacePaper.Ink : "DeckInkBrush" : "DeckSecondaryInkBrush"); FadeInk(); }
       TabInk(); select.ActualThemeChanged += (_, _) => TabInk();
       ToolTipService.SetToolTip(select, tab.Title + " · " + tab.Kind + (BrowserIdentity?.Invoke(tab) is { } identity ? "\n" + identity.Address + "\n" + identity.Status : "")); AutomationProperties.SetName(select, TabAccessibility(tab)); tabButtons[tab.Id] = select; AutomationProperties.SetHelpText(select, tab.Kind + " window. Right-click for split, rename and move actions.");
       select.SizeChanged += (_, _) => select.Clip = new RectangleGeometry { Rect = new(0, 0, Math.Max(0, select.ActualWidth), select.ActualHeight) };
@@ -348,8 +359,8 @@ internal sealed partial class WorkspaceSurface : Grid
       {
         var detail = WorkspaceTabSizing.ForWidth(chip.ActualWidth);
         narrow = !detail.Close; CloseButton();
-        title.Visibility = detail.Title ? Visibility.Visible : Visibility.Collapsed;
-        var icons = label.Children.OfType<FrameworkElement>().Where(element => !ReferenceEquals(element, title) && !ReferenceEquals(element, accountBadge)).ToArray();
+        title.Visibility = titleFade.Visibility = detail.Title ? Visibility.Visible : Visibility.Collapsed;
+        var icons = label.Children.OfType<FrameworkElement>().Where(element => !ReferenceEquals(element, title) && !ReferenceEquals(element, titleFade) && !ReferenceEquals(element, accountBadge)).ToArray();
         // Keep one identity at the icon-only floor. Project/account decoration
         // yields first, and every tab stays the same width.
         for (var i = 0; i < icons.Length; i++) icons[i].Visibility = detail.ProjectPicture || i == icons.Length - 1 ? Visibility.Visible : Visibility.Collapsed;
@@ -364,8 +375,7 @@ internal sealed partial class WorkspaceSurface : Grid
       {
         var on = Selected();
         shape.Visibility = rim.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
-        divider.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
-        if (on) chip.Background = (Brush)ShellTheme.Resource(chip, "DeckTransparentBrush");
+        chip.Background = (Brush)ShellTheme.Resource(chip, on ? "DeckTransparentBrush" : "DeckControlBrush");
         title.FontWeight = on ? Microsoft.UI.Text.FontWeights.Medium : Microsoft.UI.Text.FontWeights.Normal;
         x.Foreground = (Brush)ShellTheme.Resource(x, Selected() && WorkspacePaper.For(tab, session(tab)) == WorkspacePaper.Terminal ? WorkspacePaper.Ink : "DeckInkBrush");
         TabInk(); CloseButton();
@@ -409,6 +419,10 @@ internal sealed partial class WorkspaceSurface : Grid
         unread.SetBinding(TerminalDeck.App.Views.SessionStatusMark.UnreadProperty, new Microsoft.UI.Xaml.Data.Binding { Source = unreadSession, Path = new PropertyPath("Unread") });
         SetColumnSpan(unread, 2); chip.Children.Add(unread);
       }
+      if (tab.Kind == "browser" && BrowserIdentity?.Invoke(tab)?.NeedsAttention == true)
+      {
+        var attention = new Border { Width = 5, Height = 5, CornerRadius = new(2.5), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new(0, 2, 3, 0), IsHitTestVisible = false }; attention.SetResourceReference(Border.BackgroundProperty, "AccentFillColorDefaultBrush"); SetColumnSpan(attention, 2); chip.Children.Add(attention);
+      }
       tabFrames[tab.Id] = chip; strip.Children.Add(chip);
     }
     FitTabs(); RevealActiveTab();
@@ -417,14 +431,16 @@ internal sealed partial class WorkspaceSurface : Grid
   {
     var count = strip.ColumnDefinitions.Count;
     // Room for tabs = the header minus the new-tab buttons that follow them.
-    var buttons = actions.ActualWidth > 0 ? actions.ActualWidth + actions.Margin.Left : 64;
+    var buttons = actions.ActualWidth > 0 ? actions.ActualWidth + actions.Margin.Left : 30;
     var available = Math.Max(0, Header.ActualWidth - buttons);
     var overflow = WorkspaceTabSizing.Overflows(count, available);
     previousTabs.Visibility = nextTabs.Visibility = overflow ? Visibility.Visible : Visibility.Collapsed;
     var viewport = WorkspaceTabSizing.Viewport(count, available);
-    var width = WorkspaceTabSizing.Width(count, viewport);
-    foreach (var column in strip.ColumnDefinitions) column.Width = new(width);
-    stripViewport.Width = Math.Min(count * width, viewport);
+    var peers = state.Tabs.Where(t => t.Host == Host).ToArray();
+    var selectedIndex = Array.FindIndex(peers, t => t.Id == headerActive);
+    var widths = WorkspaceTabSizing.Widths(count, viewport, selectedIndex);
+    for (var i = 0; i < count; i++) strip.ColumnDefinitions[i].Width = new(widths[i]);
+    stripViewport.Width = Math.Min(widths.Sum() + Math.Max(0, count - 1) * WorkspaceTabSizing.Gap, viewport);
     if (!overflow) stripViewport.ChangeView(0, null, null, true);
     else DispatcherQueue.TryEnqueue(RevealActiveTab); // after a resize the selected tab (and its ×) scrolls back into view
     UpdateScrollButtons();
@@ -739,12 +755,12 @@ internal sealed partial class WorkspaceSurface : Grid
     var selectedTab = state.Tabs.FirstOrDefault(tab => tab.Id == active);
     body.SetResourceReference(BackgroundProperty, selectedTab is null ? WorkspacePaper.Page : WorkspacePaper.For(selectedTab, session(selectedTab)));
     foreach (var style in chipStyles.Values) style();
-    if (changed) RevealActiveTab();
+    if (changed) { FitTabs(); RevealActiveTab(); }
   }
   private string TabAccessibility(WorkspaceTab tab)
   {
     if (session(tab) is { } row) return tab.Title + ", " + row.DisplaySubtitle + ", " + SessionStatus.From(row.State).Label + (row.Unread ? ", unread output" : "") + ", " + row.Folder;
-    if (BrowserIdentity?.Invoke(tab) is { } browser) return tab.Title + ", " + browser.Binding + (browser.Loading ? ", loading" : "") + ", " + browser.Address;
+    if (BrowserIdentity?.Invoke(tab) is { } browser) return tab.Title + ", " + browser.Binding + (browser.Loading ? ", loading" : "") + (browser.NeedsAttention ? ", needs your review" : "") + ", " + browser.Address;
     return tab.Title;
   }
   // Strip columns follow this host's tab order, so a column is also the index
@@ -756,14 +772,16 @@ internal sealed partial class WorkspaceSurface : Grid
     var chips = strip.Children.OfType<Grid>().ToArray();
     var from = GetColumn(chip); var width = strip.ColumnDefinitions[from].ActualWidth;
     if (width <= 0) return;
-    var offset = Math.Clamp(dx, -from * width, (chips.Length - 1 - from) * width);
-    var to = Math.Clamp((int)Math.Round(from + offset / width), 0, chips.Length - 1);
+    var widths = strip.ColumnDefinitions.Select(column => column.ActualWidth).ToArray();
+    var start = widths.Take(from).Sum() + from * WorkspaceTabSizing.Gap;
+    var offset = Math.Clamp(dx, -start, widths.Sum() + (chips.Length - 1) * WorkspaceTabSizing.Gap - width - start);
+    var to = WorkspaceTabSizing.Reorder(widths, from, offset);
     Canvas.SetZIndex(chip, 1); chip.TranslationTransition = null; chip.Translation = new((float)offset, 0, 0);
     foreach (var other in chips)
     {
       if (ReferenceEquals(other, chip)) continue;
       var column = GetColumn(other);
-      var shift = from < to && column > from && column <= to ? -width : from > to && column < from && column >= to ? width : 0;
+      var shift = from < to && column > from && column <= to ? -(width + WorkspaceTabSizing.Gap) : from > to && column < from && column >= to ? width + WorkspaceTabSizing.Gap : 0;
       other.TranslationTransition ??= new Vector3Transition { Duration = TimeSpan.FromMilliseconds(150) };
       other.Translation = new((float)shift, 0, 0);
     }

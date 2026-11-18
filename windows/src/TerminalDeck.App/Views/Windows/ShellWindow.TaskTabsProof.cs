@@ -42,7 +42,7 @@ public sealed partial class ShellWindow
           double Left(FrameworkElement element) => element.TransformToVisual(Root).TransformPoint(new(0, 0)).X;
           var headerLeft = data.GetProperty("HeaderLeft").GetDouble();
           var headerRight = data.GetProperty("HeaderRight").GetDouble();
-          var ok = data.GetProperty("EqualWidths").GetBoolean() && data.GetProperty("MinimumRespected").GetBoolean() &&
+          var ok = data.GetProperty("WidthsMatchLayout").GetBoolean() && data.GetProperty("MinimumRespected").GetBoolean() &&
             data.GetProperty("ArrowsOnlyAfterMinimum").GetBoolean() && data.GetProperty("TitlesMatchWidth").GetBoolean() &&
             data.GetProperty("NoOverflowWithoutArrows").GetBoolean() &&
             data.GetProperty("ViewportClearOfNewTabButtons").GetBoolean() && data.GetProperty("ViewportInsideHeader").GetBoolean() &&

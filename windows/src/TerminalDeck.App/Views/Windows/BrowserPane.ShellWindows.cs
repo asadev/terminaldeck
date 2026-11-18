@@ -60,24 +60,32 @@ public sealed partial class BrowserPane
     var back = WorkspaceSurface.IconButton("Back", "\uE72B", () => Run("back"));
     var forward = WorkspaceSurface.IconButton("Forward", "\uE72A", () => Run("forward"));
     var reload = WorkspaceSurface.IconButton("Reload page", "\uE72C", () => Run(tab.Loading ? "stop" : "reload", Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down) ? "bypass" : null));
-    var home = WorkspaceSurface.IconButton("Home", "\uE80F", () => Run("home"));
     InstallHistoryMenu(tab, back, false); InstallHistoryMenu(tab, forward, true);
-    navigation.Children.Add(back); navigation.Children.Add(forward); navigation.Children.Add(reload); navigation.Children.Add(home);
-    var sessionButton = SessionButton(tab); navigation.Children.Add(sessionButton); bar.Children.Add(navigation);
-    var address = new AutoSuggestBox { PlaceholderText = "Enter a URL, or search", MinWidth = 100, MinHeight = 28, Height = 28, Padding = new(10, 0, 10, 0), CornerRadius = new(8), Margin = new(4, 0, 4, 0), FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
+    navigation.Children.Add(back); navigation.Children.Add(forward); navigation.Children.Add(reload);
+    var sessionButton = SessionButton(tab, out var refreshConnection); bar.Children.Add(navigation);
+    var address = new AutoSuggestBox { PlaceholderText = "Enter a URL, or search", MinWidth = 100, MinHeight = 28, Height = 28, Padding = new(10, 0, 10, 0), CornerRadius = new(15), Margin = new(0), FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
     InstallAddress(tab, address);
     address.Loaded += (_, _) => { if (tab.Address.Length == 0 && Core.Read().SelectedTabId == tab.Id) address.Focus(FocusState.Programmatic); };
-    Grid.SetColumn(address, 1); bar.Children.Add(address);
-    var profile = new Button { Width = 26, Height = 26, MinWidth = 26, MinHeight = 26, FontSize = 12, Padding = new(0), CornerRadius = new(13), Content = System.Globalization.StringInfo.GetNextTextElement(tab.Profile.Name).ToUpperInvariant(), Flyout = ProfileMenu(tab) };
+    var addressGroup = new Grid { CornerRadius = new(15), Margin = new(4, 0, 4, 0), ColumnSpacing = 2 };
+    addressGroup.SetResourceReference(Grid.BackgroundProperty, "DeckControlBrush");
+    addressGroup.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); addressGroup.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); addressGroup.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+    addressGroup.Children.Add(address);
+    var star = WorkspaceSurface.IconButton("Save bookmark", "\uE734", async () => await GuardAsync(() => ToggleBookmarkAsync(tab), tab)); star.Width = star.Height = star.MinWidth = star.MinHeight = 26; star.Padding = new(0); star.CornerRadius = new(13); Grid.SetColumn(star, 2); addressGroup.Children.Add(star);
+    Grid.SetColumn(addressGroup, 1); bar.Children.Add(addressGroup);
+    var profile = new Button { Width = 26, Height = 26, MinWidth = 26, MinHeight = 26, FontSize = 12, Padding = new(0), CornerRadius = new(13), Content = ProfileAvatar(tab.Profile, 24, tab.Isolated), Flyout = ProfileCard(tab) };
     foreach (var button in navigation.Children.OfType<Button>())
     { button.Width = button.Height = button.MinWidth = button.MinHeight = 26; button.CornerRadius = new(8); button.Padding = new(0); }
     var profileActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
     var tools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
-    var toolStrip = new ScrollViewer { Content = tools, Width = 194, MinWidth = 26, Height = 26, HorizontalScrollMode = ScrollMode.Enabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden, VerticalScrollMode = ScrollMode.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled };
+    var toolStrip = tools;
+    var phoneMode = TextAction("Page size", async () => await GuardAsync(async () => { tab.Viewport = TerminalDeck.Core.Browser.BrowserViewport.Presets[0]; tab.PhoneAgent = false; await ApplyViewportAsync(tab); }, tab));
+    DeckMenu.Pill(phoneMode); phoneMode.Height = phoneMode.MinHeight = 26; profileActions.Children.Add(phoneMode);
     profileActions.Children.Add(toolStrip);
-    var resetZoom = TextAction("100%", async () => await GuardAsync(() => SetZoomAsync(tab, 1), tab)); profileActions.Children.Add(resetZoom);
+    var resetZoom = TextAction("100%", async () => await GuardAsync(() => SetZoomAsync(tab, 1), tab)); Grid.SetColumn(resetZoom, 1); addressGroup.Children.Add(resetZoom);
     Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(profile, "Browser profile and actions");
     ToolTipService.SetToolTip(profile, "Profile · " + tab.Profile.Name); Grid.SetColumn(profileActions, 2); bar.Children.Add(profileActions); chrome.Children.Add(bar);
+    var bookmarks = BookmarkBar(tab, out var refreshBookmarks); chrome.Children.Add(bookmarks);
+    panel.SizeChanged += (_, _) => toolStrip.Visibility = panel.ActualWidth < 620 ? Visibility.Collapsed : Visibility.Visible;
     var progress = new ProgressBar { Minimum = 0, Maximum = 1, Height = 2, Visibility = Visibility.Collapsed }; chrome.Children.Add(progress);
     var find = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Visibility = Visibility.Collapsed };
     var query = new TextBox { PlaceholderText = "Find in Page", MinWidth = 160, Text = tab.FindText };
@@ -95,7 +103,12 @@ public sealed partial class BrowserPane
       if (!double.IsFinite(customWidth.Value) || !double.IsFinite(customHeight.Value)) throw new ArgumentException("Enter a width and height.");
       tab.Viewport = TerminalDeck.Core.Browser.BrowserViewport.Custom((int)customWidth.Value, (int)customHeight.Value); await ApplyViewportAsync(tab);
     }, tab)));
-    custom.Children.Add(TextAction("Done", () => { tab.SizeEditing = false; RefreshShellViews(); })); chrome.Children.Add(custom); panel.Children.Add(chrome);
+    custom.Children.Add(TextAction("Done", () => { tab.SizeEditing = false; RefreshShellViews(); })); chrome.Children.Add(custom);
+    var questionBar = new Grid { ColumnSpacing = 8, Padding = new(8, 6, 8, 6), CornerRadius = new(8), Visibility = Visibility.Collapsed }; questionBar.SetResourceReference(Grid.BackgroundProperty, "DeckControlBrush");
+    questionBar.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); questionBar.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); questionBar.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+    var questionText = new TextBlock { FontSize = 12, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center }; questionBar.Children.Add(questionText);
+    var reviewQuestion = TextAction("Review", () => ReviewPageQuestion(tab)); Grid.SetColumn(reviewQuestion, 1); questionBar.Children.Add(reviewQuestion);
+    var cancelQuestion = TextAction("Cancel", () => CancelPageQuestion(tab)); Grid.SetColumn(cancelQuestion, 2); questionBar.Children.Add(cancelQuestion); chrome.Children.Add(questionBar); panel.Children.Add(chrome);
 
     var details = new StackPanel { Spacing = 8, Padding = new(12, 8, 12, 8) };
     details.SetResourceReference(Grid.BackgroundProperty, "DeckRailBrush");
@@ -122,8 +135,11 @@ public sealed partial class BrowserPane
     var status = new Notices.CompactNotice { Scope = panel };
     var lastStatus = "";
     var failure = StartView(tab);
-    var page = new Grid(); SurfaceHost.Children.Remove(tab.View);
-    var viewport = new Grid(); viewport.Children.Add(tab.View);
+    var page = new Grid();
+    var viewport = new Grid(); pageSlots[id] = viewport;
+    viewport.Loaded += (_, _) => { TrackBrowserRoot(panel); RefreshBackgroundPages(); };
+    viewport.Unloaded += (_, _) => DispatcherQueue.TryEnqueueHandled(() => RefreshBackgroundPages());
+    viewport.LayoutUpdated += (_, _) => RefreshBackgroundPage(tab);
     var fitted = new Viewbox { Child = viewport, Stretch = Microsoft.UI.Xaml.Media.Stretch.Uniform, StretchDirection = StretchDirection.DownOnly, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     page.Children.Add(fitted); page.Children.Add(failure); Grid.SetRow(page, 3); panel.Children.Add(page);
     void FitViewport()
@@ -140,35 +156,42 @@ public sealed partial class BrowserPane
       var button = WorkspaceSurface.IconButton(name, glyph, run); button.Width = button.Height = 26;
       button.MinWidth = button.MinHeight = 26; button.CornerRadius = new(8); button.Padding = new(0); tools.Children.Add(button); return button;
     }
-    var mode = Tool(tab.Isolated ? "Isolated" : "Shared", "\uE72E", async () => await GuardAsync(() => SwitchStoreAsync(tab, tab.Profile.Id, !tab.Isolated), tab));
-    ToolTipService.SetToolTip(mode, "Shared keeps this profile’s sign-ins. Isolated discards them when the tab closes.");
-    var inspect = Tool("Annotate", "\uE77A", () => Run("inspect"));
-    var record = Tool("Record", "\uE7C8", () => Run("record"));
-    Tool("Shot", "\uE722", () => Run("shot"));
-    Tool("Draw", "\uE70F", () => Run("draw"));
-    var size = Tool("Size", "\uE8EA", () => { }); size.Flyout = SizeMenu(tab);
-    Tool("Devtools", "\uE943", () => Run("devtools"));
+    var inspect = Tool("Annotate page", "\uE77A", () => Run("inspect"));
+    Tool("Screenshot", "\uE722", () => Run("shot"));
+    var record = Tool("Record steps", "\uE7C8", () => Run("record"));
+    profileActions.Children.Add(sessionButton);
     Button? downloadButton = null;
     downloadButton = WorkspaceSurface.IconButton("Downloads", "\uE896", async () => await GuardAsync(() => ShowDownloadsAsync(tab, downloadButton), tab));
     downloadButton.Width = downloadButton.Height = downloadButton.MinWidth = downloadButton.MinHeight = 26; downloadButton.CornerRadius = new(8); downloadButton.Padding = new(0);
     profileActions.Children.Add(downloadButton);
-    Tool("Send", "\uE724", () => Run("send"));
     profileActions.Children.Add(profile);
-    // The Browser's own settings (Mac, 15 Nov): one plain gear where the toolbar ends; it opens their small window.
-    var gear = WorkspaceSurface.IconButton("Browser settings", "\uE713", async () => await GuardAsync(OpenProfileSettingsAsync, tab));
-    gear.Width = gear.Height = gear.MinWidth = gear.MinHeight = 26; gear.CornerRadius = new(8); gear.Padding = new(0);
-    profileActions.Children.Add(gear);
+    var more = WorkspaceSurface.IconButton("More browser actions", "\uE712", () => { }); more.Flyout = MoreMenu(tab);
+    more.Width = more.Height = more.MinWidth = more.MinHeight = 26; more.CornerRadius = new(13); more.Padding = new(0); profileActions.Children.Add(more);
     Grid.SetRow(status, 5); panel.Children.Add(status);
     var annotationCount = -1; var renderedSelection = -1;
     shellRefresh[id] = () =>
     {
+      questionBar.Visibility = tab.PageRequestNote is null ? Visibility.Collapsed : Visibility.Visible; questionText.Text = tab.PageRequestNote ?? "";
+      var waitingQuestion = pageQuestions.TryGetValue(tab.Id, out var questions) && questions.Count > 0;
+      reviewQuestion.Visibility = waitingQuestion ? Visibility.Visible : Visibility.Collapsed; reviewQuestion.IsEnabled = PersonCanAnswer(tab); cancelQuestion.Content = waitingQuestion ? "Cancel" : "Dismiss";
       driving.Visibility = tab.AutomationOrigin is null ? Visibility.Collapsed : Visibility.Visible;
       drivingNotice.Message = (Core.Driver(tab.Id) ?? "An agent") + " is driving on " + (Uri.TryCreate(tab.Address, UriKind.Absolute, out var driverPage) ? driverPage.Host : "this page") + ".";
       drivingNotice.IsOpen = tab.AutomationOrigin is not null;
       resetZoom.Visibility = Math.Abs(tab.Zoom - 1) < 0.001 ? Visibility.Collapsed : Visibility.Visible; resetZoom.Content = $"{tab.Zoom:P0}";
+      refreshBookmarks();
+      star.IsEnabled = Uri.TryCreate(tab.Address, UriKind.Absolute, out var bookmarkAddress) && bookmarkAddress.Scheme is "http" or "https";
+      var savedBookmark = Core.Bookmarks(tab.Profile.Id).Any(b => b.Url == tab.Address);
+      star.Content = BookmarkGlyph(savedBookmark);
+      profile.Content = ProfileAvatar(tab.Profile, 24, tab.Isolated);
+      ToolTipService.SetToolTip(profile, (tab.Isolated ? "Isolated tab · " : "Profile · ") + tab.Profile.Name);
+      ToolTipService.SetToolTip(star, savedBookmark ? "Remove bookmark" : "Save bookmark");
       var binding = Core.Get(tab.Id);
-      sessionButton.Visibility = SessionChoices().Count > 0 || binding.SessionId is not null ? Visibility.Visible : Visibility.Collapsed;
-      sessionButton.Content = binding.SessionSlot is { } slot ? slot : new DeckIcon { Glyph = "\uE71B", FontSize = 14 };
+      sessionButton.Visibility = Visibility.Visible;
+      refreshConnection(panel.ActualWidth >= 740 && !tab.Recording && !tab.Inspecting && tab.Viewport.Width == 0);
+      phoneMode.Visibility = (tab.Viewport.Width > 0 || tab.PhoneAgent) && panel.ActualWidth >= 500 ? Visibility.Visible : Visibility.Collapsed;
+      phoneMode.Width = panel.ActualWidth >= 900 ? double.NaN : 26; phoneMode.Padding = panel.ActualWidth >= 900 ? new(8, 0, 8, 0) : new(0);
+      phoneMode.Content = panel.ActualWidth >= 900 ? tab.Viewport.Name + " ×" : new DeckIcon { Glyph = "\uE8EA", FontSize = 14 };
+      ToolTipService.SetToolTip(phoneMode, tab.Viewport.Name + " · Click to fill the window");
       ToolTipService.SetToolTip(sessionButton, binding.SessionId is { } linked ? "Linked to " + (SessionChoices().FirstOrDefault(s => s.Id == linked)?.Title ?? "Session") : "Connect a session");
       back.IsEnabled = tab.View.CoreWebView2.CanGoBack; forward.IsEnabled = tab.View.CoreWebView2.CanGoForward;
       ((DeckIcon)reload.Content).Glyph = tab.Loading ? "\uE711" : "\uE72C";
@@ -177,15 +200,22 @@ public sealed partial class BrowserPane
       if (lastStatus != tab.Status)
       {
         lastStatus = tab.Status; status.Message = tab.Status;
-        status.IsOpen = tab.Status is not ("Page ready" or "New tab" or "Loading page…" or "Opening page…");
+        status.IsOpen = tab.Status is not ("Page ready" or "Popup ready" or "New tab" or "Loading page…" or "Opening page…");
       }
       flow.Visibility = tab.StepsShown ? Visibility.Visible : Visibility.Collapsed; hide.IsEnabled = !tab.Recording;
       heading.Text = tab.Recording ? $"Recording · {tab.Steps.Count}" : $"Recorded steps · {tab.Steps.Count}";
       stepsText.Text = tab.Steps.Count > 0 ? string.Join('\n', tab.Steps) : "Use the page — clicks, entries and navigation appear here. Typed values are omitted.";
       copy.IsEnabled = clear.IsEnabled = sendFlow.IsEnabled = tab.Steps.Count > 0;
-      ((DeckIcon)record.Content).Glyph = tab.Recording ? "\uE71A" : "\uE7C8";
+      record.Width = tab.Recording ? double.NaN : 26;
+      record.Content = tab.Recording ? $"Recording · {tab.Steps.Count}" : new DeckIcon { Glyph = "\uE7C8", FontSize = 14 };
+      if (tab.Recording) DeckMenu.Pill(record);
+      record.Height = record.MinHeight = 26; record.CornerRadius = new(13);
+      record.SetResourceReference(Control.ForegroundProperty, tab.Recording ? "DeckAgentRedBrush" : WorkspacePaper.Ink);
       Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(record, tab.Recording ? $"Stop recording · {tab.Steps.Count}" : "Record");
-      inspect.Opacity = tab.Inspecting ? 1 : .7;
+      inspect.Width = tab.Inspecting ? double.NaN : 26;
+      inspect.Content = tab.Inspecting ? "Annotating" : new DeckIcon { Glyph = "\uE77A", FontSize = 14 };
+      if (tab.Inspecting) DeckMenu.Pill(inspect);
+      inspect.Height = inspect.MinHeight = 26; inspect.CornerRadius = new(13);
       custom.Visibility = tab.SizeEditing ? Visibility.Visible : Visibility.Collapsed; FitViewport();
       find.Visibility = tab.FindShown ? Visibility.Visible : Visibility.Collapsed; found.Text = tab.FindResult;
       if (instruction.Text != tab.AnnotationDraft) instruction.Text = tab.AnnotationDraft;
@@ -210,7 +240,7 @@ public sealed partial class BrowserPane
       }
       var running = downloads.Count(d => d.Operation.State == Microsoft.Web.WebView2.Core.CoreWebView2DownloadState.InProgress);
       ToolTipService.SetToolTip(downloadButton, running > 0 ? $"Downloads · {running}" : "Downloads");
-      failure.Visibility = tab.Failed || tab.Address.Length == 0 ? Visibility.Visible : Visibility.Collapsed; tab.View.Visibility = tab.Failed || tab.Address.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+      failure.Visibility = tab.Failed || tab.Address.Length == 0 && !tab.NativePopup ? Visibility.Visible : Visibility.Collapsed; tab.View.Visibility = Visibility.Visible;
     };
     void Shortcut(VirtualKey key, VirtualKeyModifiers modifiers, Action action)
     { var shortcut = new KeyboardAccelerator { Key = key, Modifiers = modifiers }; shortcut.Invoked += (_, args) => { action(); args.Handled = true; }; panel.KeyboardAccelerators.Add(shortcut); }
@@ -251,16 +281,13 @@ public sealed partial class BrowserPane
       else if (tab.FindShown) { args.Handled = true; tab.FindShown = false; RefreshShellViews(); }
     };
     panel.KeyboardAccelerators.Add(escape);
-    tab.View.RegisterPropertyChangedCallback(VisibilityProperty, (_, _) =>
-    {
-      var desired = tab.Failed || tab.Address.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
-      if (tab.View.Visibility != desired) tab.View.Visibility = desired;
-    });
     tab.View.Visibility = Visibility.Visible;
     tab.View.CoreWebView2.NavigationCompleted += (_, _) => { address.Text = tab.Address; RefreshShellViews(); };
     tab.View.CoreWebView2.NavigationStarting += (_, _) => RefreshShellViews();
     tab.View.CoreWebView2.HistoryChanged += (_, _) => RefreshShellViews();
-    shellViews.Add(id, panel); shellRefresh[id](); return panel;
+    shellViews.Add(id, panel); shellRefresh[id]();
+    panel.SizeChanged += (_, _) => { if (shellRefresh.TryGetValue(id, out var refresh)) refresh(); };
+    return panel;
   }
   internal async Task SelectShellWindowAsync(string id)
   {
@@ -274,9 +301,9 @@ public sealed partial class BrowserPane
     // Handover belongs to the requested page. Overlay its content without
     // reserving a row or shifting that page's toolbar.
     Canvas.SetZIndex(HandoverBar, 1000);
-    if (shellViews.TryGetValue(tabId, out var panel))
+    if (retainedPages.TryGetValue(tabId, out var retained))
     {
-      Grid.SetRow(HandoverBar, 3); panel.Children.Add(HandoverBar);
+      Grid.SetRow(HandoverBar, 0); retained.Host.Children.Add(HandoverBar);
     }
     else if (Content is Grid engine) { Grid.SetRow(HandoverBar, 4); engine.Children.Add(HandoverBar); }
   }

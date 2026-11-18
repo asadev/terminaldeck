@@ -2,7 +2,7 @@ using TerminalDeck.App.Shell;
 
 namespace TerminalDeck.App.Views;
 
-internal sealed record BrowserShellIdentity(string? Favicon, bool Loading, string Status, string Binding, string Address);
+internal sealed record BrowserShellIdentity(string? Favicon, bool Loading, string Status, string Binding, string Address, bool NeedsAttention = false);
 
 public sealed partial class BrowserPane
 {
@@ -18,6 +18,6 @@ public sealed partial class BrowserPane
     var saved = Core.Read().Tabs.FirstOrDefault(t => t.Id == id);
     var favicon = tab.View.CoreWebView2?.FaviconUri;
     if (!Uri.TryCreate(favicon, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http")) favicon = null;
-    return new(favicon, tab.Loading, tab.Status, saved?.SessionSlot ?? saved?.Window ?? "", tab.Address);
+    return new(favicon, tab.Loading, tab.PageRequestNote ?? tab.Status, saved?.SessionSlot ?? saved?.Window ?? "", tab.Address, tab.PageRequestNote is not null);
   }
 }

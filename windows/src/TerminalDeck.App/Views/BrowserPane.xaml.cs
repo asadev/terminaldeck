@@ -31,6 +31,13 @@ internal sealed class BrowserTab(string id, BrowserProfile profile, bool isolate
   public bool Recording { get; set; }
   public bool StepsShown { get; set; }
   public string? AutomationOrigin { get; set; }
+  public Func<Task>? PrepareBackground { get; set; }
+  public string? PageRequestNote { get; set; }
+  public bool? ParkedForTools { get; set; }
+  public bool? PersonPresent { get; set; }
+  public TaskCompletionSource RequestAttention { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+  public double RenderWidth { get; set; } = 1280;
+  public double RenderHeight { get; set; } = 800;
   public List<string> Steps { get; } = [];
   public double Zoom { get; set; } = 1;
   public BrowserViewport Viewport { get; set; } = BrowserViewport.Presets[0];
@@ -51,6 +58,7 @@ internal sealed class BrowserTab(string id, BrowserProfile profile, bool isolate
   public byte[]? DrawingImage { get; set; }
   public Action? DrawingChanged { get; set; }
   public SemaphoreSlim CaptureGate { get; } = new(1, 1);
+  public bool NativePopup { get; set; }
   public bool Failed { get; set; }
   public bool StopRequested { get; set; }
 
@@ -73,6 +81,8 @@ public sealed partial class BrowserPane : UserControl
   private string defaultProfile = "default";
   private readonly WindowsBrowserProfileStorage storage;
   public BrowserModel Core { get; }
+  private readonly Dictionary<string, CoreWebView2Environment> pageEnvironments = [];
+  private readonly Dictionary<string, CoreWebView2Environment> profileEnvironments = [];
   private bool initialized;
   private bool disposed;
   private readonly TaskCompletionSource ready = new();
@@ -89,13 +99,14 @@ public sealed partial class BrowserPane : UserControl
     BrowserStatus.RegisterPropertyChangedCallback(TextBlock.TextProperty, (_, _) =>
     {
       notice.Message = BrowserStatus.Text;
-      notice.IsOpen = BrowserStatus.Text is not ("Page ready" or "New tab" or "Loading page…" or "Opening page…" or "Opening browser…");
+      notice.IsOpen = BrowserStatus.Text is not ("Page ready" or "Popup ready" or "New tab" or "Loading page…" or "Opening page…" or "Opening browser…");
     });
     storage = new(root);
     Core = new(new JsonStateStore<CoreState>(root, "browser-core"), new SurfaceFactory(this), storage);
     Loaded += async (_, _) => { if (!initialized) { initialized = true; await GuardAsync(InitializeAsync); } };
     KeyDown += Browser_KeyDown;
     ActualThemeChanged += async (_, _) => await GuardAsync(ApplyBrowserThemeAsync);
+    TerminalDeck.App.Shell.WindowActivity.Changed += BrowserActivityChanged;
   }
 
   private async Task InitializeAsync()
@@ -132,20 +143,32 @@ public sealed partial class BrowserPane : UserControl
   {
     var profile = Core.Read().Profiles.Single(p => p.Id == options.ProfileId);
     var id = options.TabId; var isolated = options.Isolated;
-    var environment = await CoreWebView2Environment.CreateWithOptionsAsync(null, storage.PathFor(options), new CoreWebView2EnvironmentOptions { AreBrowserExtensionsEnabled = true });
-    var view = new WebView2(); SurfaceHost.Children.Add(view);
+    var path = storage.PathFor(options);
+    CoreWebView2Environment environment;
+    if (options.PopupSourceId is { } opener && pageEnvironments.TryGetValue(opener, out var inherited)) environment = inherited;
+    else if (!profileEnvironments.TryGetValue(path, out environment!))
+    {
+      environment = await CoreWebView2Environment.CreateWithOptionsAsync(null, path, BrowserEnvironmentOptions());
+      profileEnvironments[path] = environment;
+    }
+    pageEnvironments[id] = environment;
+    // A native popup's DevTools calls only answer once the opener's
+    // NewWindowRequested deferral has handed it the new page; wait for that.
+    var adopted = options.PopupSourceId is null ? null : popupAdoptions[id] = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var view = new WebView2(); RetainBrowserPage(id, view);
     var controller = environment.CreateCoreWebView2ControllerOptions();
     controller.ProfileName = "Deck"; controller.IsInPrivateModeEnabled = isolated || !Privacy.Read().PersistSignIns;
     try { await view.EnsureCoreWebView2Async(environment, controller); }
-    catch { SurfaceHost.Children.Remove(view); view.Close(); throw; }
+    catch { ReleaseRetainedPage(id); view.Close(); throw; }
     if (view.CoreWebView2.Profile.IsInPrivateModeEnabled != (isolated || !Privacy.Read().PersistSignIns))
-    { SurfaceHost.Children.Remove(view); view.Close(); throw new IOException("The browser profile did not apply its sign-in persistence setting. Try opening it again."); }
-    ct.ThrowIfCancellationRequested();
-    if (disposed) { view.Close(); throw new IOException("The browser is closing."); }
+    { ReleaseRetainedPage(id); view.Close(); throw new IOException("The browser profile did not apply its sign-in persistence setting. Try opening it again."); }
+    if (ct.IsCancellationRequested) { ReleaseRetainedPage(id); view.Close(); ct.ThrowIfCancellationRequested(); }
+    if (disposed) { ReleaseRetainedPage(id); view.Close(); throw new IOException("The browser is closing."); }
     view.CoreWebView2.Settings.IsStatusBarEnabled = false;
     view.CoreWebView2.Settings.IsPasswordAutosaveEnabled = false;
     view.CoreWebView2.Settings.IsGeneralAutofillEnabled = false;
-    var tab = new BrowserTab(id, new BrowserProfile(profile.Id, profile.Name), isolated, view, new BrowserViewModel(new WebViewBrowserSurface(view, id))) { AutomationOrigin = options.AutomationOrigin };
+    var tab = new BrowserTab(id, new BrowserProfile(profile.Id, profile.Name), isolated, view, new BrowserViewModel(new WebViewBrowserSurface(view, id))) { AutomationOrigin = options.AutomationOrigin, NativePopup = options.PopupSourceId is not null };
+    tab.PrepareBackground = () => PrepareBackgroundPageAsync(tab);
     // Navigation cancellation can arrive after Chromium has followed a redirect.
     // Intercept before the network stack adds cookies/authentication headers.
     view.CoreWebView2.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All, CoreWebView2WebResourceRequestSourceKinds.All);
@@ -165,22 +188,23 @@ public sealed partial class BrowserPane : UserControl
         args.Cancel = true;
         if (args.IsUserInitiated && Uri.TryCreate(args.Uri, UriKind.Absolute, out var external) && external.Scheme is not ("file" or "javascript" or "data" or "about"))
           await GuardAsync(async () => { if (!await Launcher.LaunchUriAsync(external)) throw new InvalidOperationException("Windows has no app registered for this link."); }, tab);
-        else SetTabStatus(tab, "Only http and https pages can open here.");
+        else RequestUnavailable(tab, "This page requested an unsupported address. Only HTTP and HTTPS pages can open here.");
         return;
       }
+      CancelPageQuestions(tab);
       tab.StopRequested = false;
       tab.Address = args.Uri == "https://start.deck.invalid/index.html" ? "" : args.Uri;
       tab.Failed = false; tab.Loading = true; tab.LoadProgress = 0.1; tab.Status = "Loading page…";
       if (selected == tab) { ReloadIcon.Glyph = "\uE711"; BrowserStatus.Text = tab.Status; }
     };
     view.CoreWebView2.ContentLoading += (_, _) => { tab.LoadProgress = 0.45; RefreshShellViews(); };
-    view.CoreWebView2.DOMContentLoaded += (_, _) => { tab.LoadProgress = 0.8; RefreshShellViews(); };
+    view.CoreWebView2.DOMContentLoaded += (_, _) => { tab.LoadProgress = 0.8; tab.PersonPresent = null; RefreshBackgroundPage(tab); RefreshShellViews(); };
     view.CoreWebView2.NavigationCompleted += async (_, args) =>
     {
       tab.Address = view.CoreWebView2.Source;
       if (tab.Address is "about:blank" or "https://start.deck.invalid/index.html") tab.Address = "";
       var stopped = tab.StopRequested && args.WebErrorStatus == CoreWebView2WebErrorStatus.OperationCanceled;
-      tab.Failed = !args.IsSuccess && !stopped; tab.Loading = false; tab.LoadProgress = 1; tab.Status = stopped ? "Loading stopped." : args.IsSuccess ? (tab.Address.Length == 0 ? "New tab" : "Page ready") : "Page could not load. Check the address or reload to try again.";
+      tab.Failed = !args.IsSuccess && !stopped; tab.Loading = false; tab.LoadProgress = 1; tab.Status = stopped ? "Loading stopped." : args.IsSuccess ? (tab.Address.Length == 0 ? tab.NativePopup ? "Popup ready" : "New tab" : "Page ready") : "Page could not load. Check the address or reload to try again.";
       if (selected == tab) { UpdateChrome(); BrowserStatus.Text = tab.Status; }
       if (tab.Recording)
       {
@@ -198,22 +222,36 @@ public sealed partial class BrowserPane : UserControl
     view.CoreWebView2.HistoryChanged += (_, _) => { if (selected == tab) UpdateChrome(); };
     view.CoreWebView2.NewWindowRequested += async (_, args) =>
     {
-      args.Handled = true;
-      if (!AllowedAddress(args.Uri)) { SetTabStatus(tab, "Only http and https pages can open here."); return; }
-      // Core checks the source pin before creating a view, and passes that pin
-      // to the popup before its first navigation (including redirects).
-      var shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-      var control = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-      var middle = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.MiddleButton).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-      var background = !args.IsUserInitiated || !shift && (control || middle);
-      await GuardAsync(async () =>
+      args.Handled = true; var deferral = args.GetDeferral(); string? popupId = null;
+      try
       {
-        var made = await Core.OpenPopupAsync(tab.Id, args.Uri, select: !background);
+        if (!AllowedAddress(args.Uri)) { RequestUnavailable(tab, "This page requested a popup using an unsupported address. Open the site in your browser to continue."); return; }
+        var shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        var control = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        var middle = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.MiddleButton).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        var background = !PersonCanAnswer(tab) || !shift && (control || middle);
+        // Assign an un-navigated WebView from the opener's exact environment.
+        // This retains window.opener, POST bodies and the sign-in popup protocol.
+        var made = await Core.OpenPopupAsync(tab.Id, args.Uri, select: !background, nativePopup: true);
+        popupId = made.Id; args.NewWindow = tabs.Single(t => t.Id == made.Id).View.CoreWebView2;
         SyncCore(); ObserveShellPages(); ShellChanged?.Invoke();
         if (!background) ShellSelected?.Invoke(made.Id);
-      }, tab);
+        else SetTabStatus(tab, "This page opened a popup in another browser tab. Open that tab to continue.");
+      }
+      catch (Exception ex) when (ex is not OutOfMemoryException)
+      {
+        if (popupId is not null) { try { await Core.CloseAsync(popupId); } catch (Exception cleanup) when (cleanup is not OutOfMemoryException) { } }
+        RequestUnavailable(tab, ex is ArgumentException or InvalidOperationException ? "The page’s popup could not open: " + ex.Message : "The page’s popup could not open in the built-in browser. Open the site in your browser to continue.");
+      }
+      finally
+      {
+        deferral.Complete();
+        if (popupId is not null && popupAdoptions.Remove(popupId, out var adoption)) adoption.TrySetResult();
+      }
     };
-    view.CoreWebView2.PermissionRequested += (_, args) => { args.State = CoreWebView2PermissionState.Deny; SetTabStatus(tab, "This preview does not grant camera, microphone or location access."); };
+    await InstallPageRequestsAsync(tab);
+    if (adopted is null) await EnablePageRequestsAsync(tab);
+    else _ = FinishPopupAsync(tab, adopted.Task);
     view.CoreWebView2.DownloadStarting += (_, args) => StartDownload(tab, args);
     view.CoreWebView2.WindowCloseRequested += async (_, _) => await GuardAsync(() => CloseAsync(tab), tab);
     view.CoreWebView2.ProcessFailed += (_, args) =>
@@ -229,6 +267,7 @@ public sealed partial class BrowserPane : UserControl
       {
         using var message = JsonDocument.Parse(args.WebMessageAsJson);
         var data = message.RootElement;
+        if (data.GetProperty("kind").GetString() == "td-page-request") { if (data.TryGetProperty("clear", out var clear) && clear.GetBoolean()) { if (!pageQuestions.ContainsKey(tab.Id)) { tab.PageRequestNote = null; tab.RequestAttention = new(TaskCreationOptions.RunContinuationsAsynchronously); RefreshShellViews(); ShellChanged?.Invoke(); } } else RequestUnavailable(tab, data.GetProperty("message").GetString() ?? "The page needs your attention."); return; }
         if (data.GetProperty("kind").GetString() == "td-inspect") { ReceiveAnnotation(tab, data); return; }
         if (!tab.Recording || tab.Steps.Count >= 200 || data.GetProperty("kind").GetString() != "td-record") return;
         var action = data.GetProperty("action").GetString();
@@ -243,7 +282,8 @@ public sealed partial class BrowserPane : UserControl
       catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException) { /* Untrusted page messages carry no authority. */ }
     };
     tabs.Add(tab);
-    await ApplyBrowserThemeAsync();
+    // Only the new page: an opener waiting in window.open cannot answer DevTools.
+    if (adopted is null) await ApplyBrowserThemeAsync(tab);
     view.CoreWebView2.SetVirtualHostNameToFolderMapping("start.deck.invalid", Path.Combine(AppContext.BaseDirectory, "Assets", "browser"), CoreWebView2HostResourceAccessKind.DenyCors);
     await RebindRetainedPageAsync(tab);
     DispatcherQueue.TryEnqueueHandled(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => ObserveShellPages());
@@ -267,7 +307,7 @@ public sealed partial class BrowserPane : UserControl
   private void Present(BrowserTab tab)
   {
     selected = tab;
-    foreach (var item in tabs) item.View.Visibility = item == tab ? Visibility.Visible : Visibility.Collapsed;
+    foreach (var item in tabs) item.View.Visibility = Visibility.Visible;
     UpdateChrome(); BrowserStatus.Text = tab.Status; RenderTabs();
   }
   private void UpdateChrome()
@@ -431,13 +471,20 @@ public sealed partial class BrowserPane : UserControl
   }
   private async Task ApplyBrowserThemeAsync()
   {
+    foreach (var tab in tabs.ToArray()) if (!popupAdoptions.ContainsKey(tab.Id)) await ApplyBrowserThemeAsync(tab);
+  }
+  private async Task ApplyBrowserThemeAsync(BrowserTab tab)
+  {
     var dark = ActualTheme == ElementTheme.Dark;
-    foreach (var tab in tabs)
-    {
-      tab.View.RequestedTheme = dark ? ElementTheme.Dark : ElementTheme.Light;
-      tab.View.CoreWebView2.Profile.PreferredColorScheme = dark ? CoreWebView2PreferredColorScheme.Dark : CoreWebView2PreferredColorScheme.Light;
-      await tab.Model.CommandAsync("Emulation.setEmulatedMedia", new { features = new[] { new { name = "prefers-color-scheme", value = dark ? "dark" : "light" } } });
-    }
+    tab.View.RequestedTheme = dark ? ElementTheme.Dark : ElementTheme.Light;
+    tab.View.CoreWebView2.Profile.PreferredColorScheme = dark ? CoreWebView2PreferredColorScheme.Dark : CoreWebView2PreferredColorScheme.Light;
+    await tab.Model.CommandAsync("Emulation.setEmulatedMedia", new { features = new[] { new { name = "prefers-color-scheme", value = dark ? "dark" : "light" } } });
+  }
+  private readonly Dictionary<string, TaskCompletionSource> popupAdoptions = [];
+  private async Task FinishPopupAsync(BrowserTab tab, Task adopted)
+  {
+    if (await Task.WhenAny(adopted, Task.Delay(TimeSpan.FromSeconds(30))) != adopted || !adopted.IsCompletedSuccessfully) { popupAdoptions.Remove(tab.Id); return; }
+    await GuardAsync(async () => { await EnablePageRequestsAsync(tab); await ApplyBrowserThemeAsync(tab); }, tab);
   }
   internal Task NavigateForProofAsync(string address) => NavigateCommandForProofAsync("navigate", address);
   internal async Task NavigateCommandForProofAsync(string command, string? argument = null)
@@ -462,7 +509,7 @@ public sealed partial class BrowserPane : UserControl
 
   public void DisposeViews()
   {
-    disposed = true; _ = Core.DisposeAsync();
+    disposed = true; TerminalDeck.App.Shell.WindowActivity.Changed -= BrowserActivityChanged; _ = Core.DisposeAsync();
   }
   private sealed class SurfaceFactory(BrowserPane owner) : IBrowserSurfaceFactory
   {
@@ -473,11 +520,12 @@ public sealed partial class BrowserPane : UserControl
     public string TabId => tab.Id;
     public async Task NavigateAsync(Uri address, CancellationToken ct = default)
     {
+      owner.CancelPageQuestions(tab);
       var done = new TaskCompletionSource();
       void Completed(CoreWebView2 sender, CoreWebView2NavigationCompletedEventArgs args)
       { done.TrySetResult(); }
       tab.View.CoreWebView2.NavigationCompleted += Completed;
-      try { tab.View.CoreWebView2.Navigate(address.AbsoluteUri); await done.Task.WaitAsync(TimeSpan.FromSeconds(30), ct); }
+      try { tab.View.CoreWebView2.Navigate(address.AbsoluteUri); await Task.WhenAny(done.Task, tab.RequestAttention.Task).WaitAsync(TimeSpan.FromSeconds(30), ct); }
       finally { tab.View.CoreWebView2.NavigationCompleted -= Completed; }
     }
     public Task<JsonElement> DevToolsAsync(string method, JsonElement arguments, CancellationToken ct = default) => tab.Model.CommandAsync(method, arguments);
@@ -485,6 +533,9 @@ public sealed partial class BrowserPane : UserControl
     public async ValueTask<JsonElement> PerformAsync(BrowserPageAction action, JsonElement args, CancellationToken ct)
     {
       string? Text(string key) => args.TryGetProperty(key, out var v) ? v.GetString() : null;
+      if (tab.PageRequestNote is { } request && action is BrowserPageAction.Read or BrowserPageAction.Step or BrowserPageAction.Upload or BrowserPageAction.Screenshot) throw new InvalidOperationException(request);
+      if (action is BrowserPageAction.Print or BrowserPageAction.Send or BrowserPageAction.DevTools && !owner.PersonCanAnswer(tab)) throw new InvalidOperationException("This action needs you in the browser tab. Open the tab and try it again.");
+      if (action is not (BrowserPageAction.WorkspaceRead or BrowserPageAction.WorkspaceChange or BrowserPageAction.TakeOver)) await owner.PrepareBackgroundPageAsync(tab);
       switch (action)
       {
         case BrowserPageAction.TakeOver: owner.Core.ClearDriver(tab.Id); tab.AutomationOrigin = null; owner.RefreshShellViews(); break;
@@ -497,17 +548,19 @@ public sealed partial class BrowserPane : UserControl
           var query = args.TryGetProperty("waitFor", out var waitFor) ? JsonSerializer.SerializeToElement(new { selector = waitFor.GetString(), frame = args.TryGetProperty("frame", out var frame) ? frame.GetString() : null }) : args;
           while (true)
           {
-            var found = await BrowserPane.EvaluateFrameDomAsync(tab, query, false, ct);
+            var found = await owner.WithPageQuestionsAsync(tab, BrowserPane.EvaluateFrameDomAsync(tab, query, false, ct), ct);
             var textReady = Text("waitText") is not { } wantedText || found.TryGetProperty("text", out var pageText) && (pageText.GetString() ?? "").Contains(wantedText, StringComparison.Ordinal);
             var urlReady = Text("waitUrl") is not { } wantedUrl || found.TryGetProperty("url", out var pageUrl) && (pageUrl.GetString() ?? "").Contains(wantedUrl, StringComparison.Ordinal);
             if (found.GetProperty("found").GetBoolean() && textReady && urlReady) break;
             if (DateTimeOffset.UtcNow >= until) throw new InvalidOperationException("The requested page element did not appear.");
             await Task.Delay(100, ct);
           }
-          return await BrowserPane.EvaluateFrameDomAsync(tab, args, false, ct);
+          var read = await owner.WithPageQuestionsAsync(tab, BrowserPane.EvaluateFrameDomAsync(tab, args, false, ct), ct);
+          var response = System.Text.Json.Nodes.JsonNode.Parse(read.GetRawText())!.AsObject(); response["pageRequest"] = tab.PageRequestNote; response["background"] = tab.ParkedForTools == true;
+          return JsonSerializer.SerializeToElement(response);
         case BrowserPageAction.Step:
           tab.AutomationOrigin = new Uri(tab.View.CoreWebView2.Source).GetLeftPart(UriPartial.Authority); owner.RefreshShellViews();
-          var stepped = await BrowserPane.EvaluateFrameDomAsync(tab, args, true, ct);
+          var stepped = await owner.WithPageQuestionsAsync(tab, BrowserPane.EvaluateFrameDomAsync(tab, args, true, ct), ct);
           if (Text("verb") == "press")
           {
             var key = Text("key") ?? throw new ArgumentException("Choose a key.");
@@ -515,6 +568,8 @@ public sealed partial class BrowserPane : UserControl
             await tab.Model.CommandAsync("Input.dispatchKeyEvent", new { type = "keyDown", key, windowsVirtualKeyCode = code, text = key == "Enter" ? "\r" : "" });
             await tab.Model.CommandAsync("Input.dispatchKeyEvent", new { type = "keyUp", key, windowsVirtualKeyCode = code });
           }
+          await Task.Yield();
+          if (tab.PageRequestNote is { } requestNote) throw new InvalidOperationException(requestNote);
           return stepped;
         case BrowserPageAction.Upload:
           tab.AutomationOrigin = new Uri(tab.View.CoreWebView2.Source).GetLeftPart(UriPartial.Authority); owner.RefreshShellViews();
@@ -530,8 +585,8 @@ public sealed partial class BrowserPane : UserControl
           await tab.Model.CommandAsync("DOM.setFileInputFiles", new { nodeId, files = args.GetProperty("paths").EnumerateArray().Select(p => p.GetString()).ToArray() });
           return JsonSerializer.SerializeToElement(new { done = true, url = tab.View.CoreWebView2.Source });
         case BrowserPageAction.Screenshot:
-          var captured = await CaptureAsync(tab);
-          return JsonSerializer.SerializeToElement(new { url = tab.View.CoreWebView2.Source, mimeType = "image/png", data = Convert.ToBase64String(captured), privateFieldsHidden = true });
+          var captured = await owner.WithPageQuestionsAsync(tab, CaptureAsync(tab), ct);
+          return JsonSerializer.SerializeToElement(new { url = tab.View.CoreWebView2.Source, mimeType = "image/png", data = Convert.ToBase64String(captured), privateFieldsHidden = true, pageRequest = tab.PageRequestNote });
         case BrowserPageAction.Handover:
           var continued = await owner.HandoverAsync(tab.Id, Text("prompt") ?? "Finish the step in the page, then carry on.", ct);
           return JsonSerializer.SerializeToElement(new { url = tab.View.CoreWebView2.Source, continued });
@@ -570,7 +625,7 @@ public sealed partial class BrowserPane : UserControl
       return result.GetProperty("result").GetProperty("value").Clone();
     }
     public ValueTask DisposeAsync()
-    { owner.StageReplacement(tab); owner.ForgetShellView(tab.Id); owner.tabs.Remove(tab); if (tab.View.Parent is Panel parent) parent.Children.Remove(tab.View); tab.View.Close(); return ValueTask.CompletedTask; }
+    { owner.CancelPageQuestions(tab); owner.CloseBackgroundPage(tab); owner.StageReplacement(tab); owner.ForgetShellView(tab.Id); owner.tabs.Remove(tab); owner.ReleasePageEnvironment(tab); if (tab.View.Parent is Panel parent) parent.Children.Remove(tab.View); tab.View.Close(); return ValueTask.CompletedTask; }
   }
   private TaskCompletionSource<bool>? handover;
   private async Task<bool> HandoverAsync(string tabId, string prompt, CancellationToken ct)
