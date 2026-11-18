@@ -54,7 +54,15 @@ public sealed class AccountSwitchCoordinator
     try
     {
       var pending = journal.Entries.Where(e => e.State == SwitchState.Pending && e.Plan.Before.SessionId == sessionId).ToArray();
-      foreach (var entry in pending) await CompleteAsync(entry.Plan, cancellationToken);
+      foreach (var entry in pending)
+      {
+        try { await CompleteAsync(entry.Plan, cancellationToken); }
+        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException &&
+          journal.Entries.Any(saved => saved.Plan.TransactionId == entry.Plan.TransactionId && saved.State == SwitchState.RolledBack))
+        {
+          // A restored old choice must not block the person's new choice.
+        }
+      }
       if (pending.LastOrDefault() is { Plan: var recovered } && recovered.After.AccountId == accounts.Get(destination).Id &&
           await runtime.ReadAsync(sessionId, cancellationToken) == recovered.After) return recovered;
       var plan = await PlanAsync(sessionId, destination, cancellationToken);

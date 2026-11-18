@@ -74,6 +74,25 @@ public sealed class WindowsAccountParityTests : IDisposable
     Assert.All(journal.Value!.Entries, entry => Assert.Equal(SwitchState.Committed, entry.State));
   }
 
+  [Fact] public async Task AnExpiredInterruptedChoiceRollsBackAndTheNewChoiceStillApplies()
+  {
+    var accounts = new AccountService(new MemoryState<AccountState>(), [new FakeAccountProvider("codex")]);
+    var expired = await accounts.CreateAsync("codex", "Expired API", AccountAuthentication.ApiKey);
+    var latest = await accounts.CreateAsync("codex", "Latest API", AccountAuthentication.ApiKey);
+    await accounts.SetApiStateAsync(expired.Id, true, Guid.NewGuid().ToString("N"));
+    await accounts.SetApiStateAsync(latest.Id, true, Guid.NewGuid().ToString("N"));
+    var runtime = new FakeAccountRuntime { FailApply = true, FailRollback = true };
+    var journal = new MemoryState<AccountSwitchJournal>();
+    var switches = new AccountSwitchCoordinator(accounts, runtime, journal);
+    await Assert.ThrowsAsync<IOException>(async () => await switches.SwitchAsync("session", expired.Id));
+    await accounts.SetApiStateAsync(expired.Id, false, Guid.NewGuid().ToString("N"));
+    runtime.FailApply = false; runtime.FailRollback = false;
+    await switches.SwitchAsync("session", latest.Id);
+    Assert.Equal(latest.Id, runtime.Binding.AccountId);
+    Assert.Equal("stable-chat", runtime.Binding.ConversationId);
+    Assert.Equal(new[] { SwitchState.RolledBack, SwitchState.Committed }, journal.Value!.Entries.Select(entry => entry.State));
+  }
+
   private sealed class Response(HttpStatusCode code, string body = "{}") : HttpMessageHandler
   {
     public HttpStatusCode Code { get; set; } = code;
