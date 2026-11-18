@@ -52,7 +52,7 @@ public sealed class CloudWiringTests : IDisposable
     Assert.Equal(McpTier.Read, CloudTools.Specs.Single(s => s.Id == "cloud.status").Tier);
     var cloud = McpCatalogue.Load().Where(s => s.Id.StartsWith("cloud.", StringComparison.Ordinal)).ToArray();
     // Account management is part of Settings: its edits ask through the existing approval flow.
-    Assert.Equal(["cloud.artifacts", "cloud.devices", "cloud.folder", "cloud.folder_add", "cloud.profile", "cloud.project_secrets", "cloud.reach.status", "cloud.status"], cloud.Select(s => s.Id).Order(StringComparer.Ordinal));
+    Assert.Equal(["cloud.artifacts", "cloud.devices", "cloud.folder", "cloud.folder_add", "cloud.profile", "cloud.project_secrets", "cloud.reach.status", "cloud.status", "cloud.subscription"], cloud.Select(s => s.Id).Order(StringComparer.Ordinal));
     Assert.All(cloud, s => Assert.Equal(s.Id is "cloud.folder_add" or "cloud.profile" or "cloud.devices" ? McpTier.Alter : McpTier.Read, s.Tier));
     var door = new McpDoor(new NeverAsked());
     using var account = CloudComposition.Create(CloudConfiguration.Today("PC", "1"), new Watched(), new Watched());
