@@ -35,7 +35,7 @@ public static class DeckMenu
     menu.MenuFlyoutPresenterStyle = SurfaceStyle("MenuFlyoutPresenter", 5);
     menu.Opening += (_, _) => CompactRows(menu.Items);
   }
-  private static void CompactRows(IEnumerable<MenuFlyoutItemBase> rows)
+  public static void CompactRows(IEnumerable<MenuFlyoutItemBase> rows)
   {
     foreach (var row in rows)
     {

@@ -5,8 +5,11 @@
       "project": "tests\\TerminalDeck.Core.Tests\\TerminalDeck.Core.Tests.csproj",
       "names": [
         "CloudProfileTests",
+        "CloudProfileManagementTests",
         "CloudDeviceRowsTests",
         "CloudDeviceNamesTests",
+        "SessionKeeperTests",
+        "UsageMeterTests",
         "TerminalControlsTests"
       ]
     },
