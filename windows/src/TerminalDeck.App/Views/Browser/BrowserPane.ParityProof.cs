@@ -21,6 +21,7 @@ public sealed partial class BrowserPane
   }
   // Explicit one-run fixture for the release runner. It only changes a marked
   // scratch data root and writes the exact captures used to judge the pixels.
+  internal Func<Task>? OpenAgentsAtWorkForProof { get; set; }
   internal async Task RunBrowserParityProofIfRequestedAsync()
   {
     if (Environment.GetEnvironmentVariable("TD_BROWSER_PARITY_PROOF") != "1") return;
@@ -56,6 +57,26 @@ public sealed partial class BrowserPane
       await Core.PerformAsync(tab.Id, BrowserPageAction.Step, JsonSerializer.SerializeToElement(new { verb = "click", selector = "#target" }));
       var kept = await tab.Model.CommandAsync("Runtime.evaluate", new { expression = "window.__tdProofIdentity==='kept' && document.body.dataset.clicked==='yes' && document.getElementById('ordinary').value==='Background typed text'", returnByValue = true });
       Check("hidden tab click and type retain document", kept.GetProperty("result").GetProperty("value").GetBoolean());
+      // A page that rebuilds drops keyboard focus; Windows then picks the next
+      // focusable element. A parked page must never be that element (it
+      // refuses focus and WebView2 fails fast), and must refuse direct focus.
+      Stage("parked-focus");
+      if (XamlRoot.Content is Panel rootPanel)
+      {
+        // Put the rebuilding control just before the parked page's layer, so the
+        // parked page is the next element in focus order when it disappears.
+        var layerIndex = rootPanel.Children.IndexOf(VisualTreeHelper.GetParent(retainedPages[tab.Id].Host) as UIElement);
+        foreach (var focusState in new[] { FocusState.Pointer, FocusState.Keyboard })
+        {
+          var rebuilt = new Button { Content = "Rebuilding page", Width = 40, Height = 20 }; rootPanel.Children.Insert(Math.Max(0, layerIndex), rebuilt); await Task.Delay(150);
+          rebuilt.Focus(focusState); await Task.Delay(150); rootPanel.Children.Remove(rebuilt); await Task.Delay(600);
+        }
+      }
+      if (OpenAgentsAtWorkForProof is { } atWork) { await atWork(); Check("Agents 'At work' rebuild with a parked page keeps the app up", true); ShellSelected?.Invoke(other.Id); await Wait(() => pageSlots.TryGetValue(other.Id, out var back) && IsDrawn(back)); }
+      var parkedFocus = await Microsoft.UI.Xaml.Input.FocusManager.TryFocusAsync(tab.View, FocusState.Programmatic); await Task.Delay(400);
+      Check("parked page refuses keyboard focus and the app stays up", !parkedFocus.Succeeded && !ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(XamlRoot), tab.View));
+      var afterFocus = await Core.PerformAsync(tab.Id, BrowserPageAction.Read, JsonSerializer.SerializeToElement(new { selector = "h1" }));
+      Check("parked page still answers a read after the focus attempt", afterFocus.GetRawText().Contains("Browser parity fixture", StringComparison.Ordinal));
       async Task Capture(string name)
       {
         var bytes = await CaptureAsync(tab); await File.WriteAllBytesAsync(Path.Combine(output, name + ".png"), bytes);

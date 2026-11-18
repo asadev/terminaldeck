@@ -23,11 +23,20 @@ public sealed partial class BrowserPane
     private readonly Panel owner;
     private readonly Canvas layer = new();
     private Matrix transform;
+    private readonly WebView2 view;
+    private bool shown;
     public XamlRoot Root { get; }
     public Grid Host { get; } = new() { Width = 1280, Height = 800, Opacity = 0, IsHitTestVisible = false };
     public BrowserParking(XamlRoot xamlRoot, WebView2 view)
     {
-      Root = xamlRoot;
+      Root = xamlRoot; this.view = view;
+      // A parked page must never take keyboard focus: WebView2 hands focus to a
+      // hidden controller, which refuses it and the WinUI control then fails
+      // fast. It is not a tab stop while parked, and any focus that still heads
+      // for it (a page rebuild, focus recovery) is cancelled before WebView2
+      // sees it. Reads, clicks, typing and pictures go through DevTools, not focus.
+      view.IsTabStop = false;
+      view.GettingFocus += (_, args) => { if (!shown) args.TryCancel(); };
       owner = xamlRoot.Content as Panel ?? throw new InvalidOperationException("This browser window has no retained page host.");
       // This is the WebView's only parent, attached before initialization. A
       // workspace placeholder supplies its geometry; the live control never unloads.
@@ -50,6 +59,18 @@ public sealed partial class BrowserPane
         if (!next.Equals(transform)) { transform = next; Host.RenderTransform = new MatrixTransform { Matrix = next }; }
       }
       Host.Opacity = visible ? 1 : 0; Host.IsHitTestVisible = visible;
+      if (shown != visible)
+      {
+        shown = visible; view.IsTabStop = visible;
+        // Leaving the screen: move focus off the page before it is parked.
+        if (!visible && Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Root) is DependencyObject focused && IsInside(focused, Host))
+          Microsoft.UI.Xaml.Input.FocusManager.TryMoveFocus(Microsoft.UI.Xaml.Input.FocusNavigationDirection.Next, new() { SearchRoot = Root.Content });
+      }
+    }
+    private static bool IsInside(DependencyObject node, DependencyObject ancestor)
+    {
+      for (DependencyObject? at = node; at is not null; at = VisualTreeHelper.GetParent(at)) if (ReferenceEquals(at, ancestor)) return true;
+      return false;
     }
     public void Close() { owner.Children.Remove(layer); layer.Children.Clear(); }
   }
