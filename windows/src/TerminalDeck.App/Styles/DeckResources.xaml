@@ -9,6 +9,7 @@
    <SolidColorBrush x:Key="DeckModalScrimBrush" Color="#32000000"/>
    <SolidColorBrush x:Key="DeckAgentTileBrush" Color="#10234B"/>
    <SolidColorBrush x:Key="DeckBadgeInkBrush" Color="#FFFFFF"/>
+   <SolidColorBrush x:Key="DeckPhotoChangeBrush" Color="#99000000"/>
    <SolidColorBrush x:Key="DeckAccountBadgeBrush" Color="#795AA6"/>
    <SolidColorBrush x:Key="DeckSidebarSelectionBrush" Color="#0067C0"/>
    <SolidColorBrush x:Key="DeckSidebarSelectionInkBrush" Color="#FFFFFF"/>
@@ -80,6 +81,7 @@
    <SolidColorBrush x:Key="DeckModalScrimBrush" Color="#32000000"/>
    <SolidColorBrush x:Key="DeckAgentTileBrush" Color="#10234B"/>
    <SolidColorBrush x:Key="DeckBadgeInkBrush" Color="#FFFFFF"/>
+   <SolidColorBrush x:Key="DeckPhotoChangeBrush" Color="#99000000"/>
    <SolidColorBrush x:Key="DeckAccountBadgeBrush" Color="#795AA6"/>
    <SolidColorBrush x:Key="DeckSidebarSelectionBrush" Color="#0067C0"/>
    <SolidColorBrush x:Key="DeckSidebarSelectionInkBrush" Color="#FFFFFF"/>
@@ -153,6 +155,7 @@
    <SolidColorBrush x:Key="DeckSessionAvatarBrush" Color="{ThemeResource SystemColorWindowColor}"/>
    <SolidColorBrush x:Key="DeckAgentTileBrush" Color="{ThemeResource SystemColorWindowColor}"/>
    <SolidColorBrush x:Key="DeckBadgeInkBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+   <SolidColorBrush x:Key="DeckPhotoChangeBrush" Color="{ThemeResource SystemColorWindowColor}"/>
    <SolidColorBrush x:Key="DeckAccountBadgeBrush" Color="{ThemeResource SystemColorWindowColor}"/>
    <SolidColorBrush x:Key="DeckSidebarSelectionBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
    <SolidColorBrush x:Key="DeckSidebarSelectionInkBrush" Color="{ThemeResource SystemColorHighlightTextColor}"/>

@@ -244,10 +244,11 @@ public sealed class CloudAccountTests : IDisposable
       new ProtectedCloudSecretStore(Path.Combine(folder, "b"), new XorProtector()), http, new CountingRandom(), new FakeBrowser()));
   }
 
-  [Fact] public void AgentsGetOneReadToolAndNoWayToSignIn()
+  [Fact] public void AgentsReadFreelyAndAccountChangesAsk()
   {
-    Assert.Equal(["cloud.status"], CloudTools.Specs.Select(s => s.Id).ToArray());
-    Assert.All(CloudTools.Specs, s => Assert.Equal(McpTier.Read, s.Tier));
+    Assert.Equal(["cloud.devices", "cloud.profile", "cloud.status"], CloudTools.Specs.Select(s => s.Id).Order(StringComparer.Ordinal).ToArray());
+    Assert.Equal(McpTier.Read, CloudTools.Specs.Single(s => s.Id == "cloud.status").Tier);
+    Assert.All(CloudTools.ProfileSpecs, s => Assert.Equal(McpTier.Alter, s.Tier));
     var status = CloudTools.Status(CloudSnapshot.Dormant);
     Assert.Equal("dormant", status.GetProperty("phase").GetString()); Assert.False(status.GetProperty("cloudOpen").GetBoolean());
   }

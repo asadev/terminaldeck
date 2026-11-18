@@ -104,7 +104,7 @@ public sealed record CloudDeviceRegistrationReceipt(string DeviceId, string Stat
 /// else the recorded label, else the kind of device ("Mac", "PC", "iPhone"). Never empty; display only.
 public sealed record CloudDevice(string DeviceId, string Label, string Platform, string AppVersion, string Status, bool SecretsApproved, long LastSeenAt,
   CloudPublicJwk SignPublicJwk, CloudPublicJwk WrapPublicJwk, long? RegisteredAt = null,
-  [property: System.Text.Json.Serialization.JsonPropertyName("displayName")] string? FriendlyName = null)
+  [property: System.Text.Json.Serialization.JsonPropertyName("displayName")] string? FriendlyName = null, string? Model = null)
 {
   [System.Text.Json.Serialization.JsonIgnore] public string DisplayName => CloudDeviceNames.Shown(FriendlyName, Label, Platform);
 }
@@ -129,7 +129,7 @@ public sealed record CloudDeviceList(IReadOnlyList<CloudDevice> Devices, string?
 /// `DeviceId` and `Trust` (the device as this PC's trusted list sees it) are for presses and are never drawn.
 /// `Joined`: show "joined your account".
 public sealed record CloudDeviceRow(string DeviceId, string Name, bool ThisDevice, DateTimeOffset? Added, DateTimeOffset? LastSeen,
-  CloudTrustRow? Trust = null, bool Joined = false, string? Platform = null)
+  CloudTrustRow? Trust = null, bool Joined = false, string? Platform = null, string? ReportedModel = null)
 {
   public override string ToString() => "<Cloud device row>";
 }

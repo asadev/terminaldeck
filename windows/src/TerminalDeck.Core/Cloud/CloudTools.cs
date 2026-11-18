@@ -3,16 +3,20 @@ using TerminalDeck.Core.Mcp;
 
 namespace TerminalDeck.Core.Cloud;
 
-/// Cloud's agent tools on Windows, slice 1: reads only. Signing in, signing out and anything that changes state stay
-/// with the person's own presses on the Settings page; no tool can start a sign-in.
-public static class CloudTools
+/// The account status reads freely. Profile and device edits use the same owners as Settings and ask through the
+/// caller's existing permission flow. No tool starts a new account sign-in.
+public static partial class CloudTools
 {
   public static IReadOnlyList<McpToolSpec> Specs => [
+    .. ProfileSpecs,
     new("cloud.status", "cloud_status", McpTier.Read, JsonSerializer.SerializeToElement(new { type = "object", properties = new { }, additionalProperties = false }))
   ];
 
-  public static void Register(CloudAccountClient account, McpDoor door, Func<System.Text.Json.Nodes.JsonObject?>? sessions = null) =>
+  public static void Register(CloudAccountClient account, McpDoor door, Func<System.Text.Json.Nodes.JsonObject?>? sessions = null)
+  {
     door.Register("cloud.status", (_, _, _) => ValueTask.FromResult(WithSessions(Status(account.Snapshot), sessions?.Invoke())));
+    RegisterProfile(account, door);
+  }
 
   /// Lane C: the sessions and chat histories line (counts only, read only), when the uploader runs.
   private static JsonElement WithSessions(JsonElement status, System.Text.Json.Nodes.JsonObject? sessions)
