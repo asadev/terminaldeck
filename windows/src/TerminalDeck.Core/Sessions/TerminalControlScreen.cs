@@ -50,6 +50,9 @@ internal static class TerminalControlScreen
             continue;
           }
           if (command is 'm' or 'q' or 'n' or 'c' or 't') continue;
+          // ConPTY's Claude replay also emits mode 25 without the private prefix.
+          // Cursor visibility changes neither the cells nor the input position.
+          if (args == "25" && (command is 'h' or 'l')) continue;
           var values = args.Split(';');
           int Number(int index = 0, int fallback = 1) => index < values.Length && int.TryParse(values[index], out var n) && n > 0 ? Math.Min(n, 10000) : fallback;
           switch (command)
