@@ -29,6 +29,9 @@ public sealed class ApiAccountService(AccountService accounts, AccountCredential
     if (row.Authentication != AccountAuthentication.ApiKey) throw new ArgumentException("Choose an API-key account.");
     var previous = ApiAccountFiles.Read(root, row.HomeId);
     var connection = Connection(draft) with { CredentialReference = previous?.CredentialReference };
+    // Saving an unchanged form must not erase the last refusal or key-store failure.
+    if (string.IsNullOrEmpty(key) && previous is not null && connection == (previous with { CheckState = null, CheckDetail = null, CheckedAt = null }))
+      connection = previous;
     ApiKinds.Validate(row.Provider, connection);
     if (!string.IsNullOrEmpty(key)) ApiKinds.ValidateKey(key);
     else if (connection.RequiresKey && connection.CredentialReference is null) throw new ArgumentException("Paste the key for this account.");
@@ -98,7 +101,7 @@ public sealed class ApiAccountService(AccountService accounts, AccountCredential
     if (!connection.RequiresKey) connection = connection with { CredentialReference = null };
     ApiAccountFiles.Write(root, row.HomeId, connection);
     if (oldReference is not null && oldReference != connection.CredentialReference) await credentials.DeleteAsync(oldReference, ct);
-    return await accounts.SetApiStateAsync(row.Id, connection.Configured, connection.CredentialReference, ct);
+    return await accounts.SetApiStateAsync(row.Id, CanUse(connection), connection.CredentialReference, ct);
   }
   public static bool CanUse(ApiConnection? connection) => connection is { Configured: true } && connection.CheckState is not ("invalid" or "no-access" or "needs-key" or "unreadable");
   private async ValueTask<ApiConnection> StoreAsync(AccountProfile row, ApiConnection connection, CancellationToken ct)

@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using TerminalDeck.Core.Accounts;
 using TerminalDeck.Core.Storage;
+using TerminalDeck.Core.Platform;
 using TerminalDeck.Core.Tests.Mcp;
 using TerminalDeck.Core.Tests.Sessions;
 
@@ -25,6 +26,57 @@ public sealed class WindowsAccountParityTests : IDisposable
     await api.CheckAsync(account.Id);
     Assert.True((await accounts.RequireSignedInAsync(account.Id)).SignedIn);
     Assert.Equal("Chosen API name", accounts.Get(account.Id).Name);
+  }
+
+  [Theory]
+  [InlineData("invalid")]
+  [InlineData("no-access")]
+  [InlineData("needs-key")]
+  [InlineData("unreadable")]
+  public async Task SavingUnchangedRefusedConnectionCannotReactivateIt(string expected)
+  {
+    var accounts = new AccountService(new MemoryState<AccountState>(), [new FakeAccountProvider("claude")]);
+    var secrets = new ReadControlSecrets();
+    var response = new Response(expected == "no-access" ? HttpStatusCode.Forbidden : HttpStatusCode.Unauthorized);
+    var api = new ApiAccountService(accounts, new AccountCredentials(secrets, root), root, new HttpClient(response));
+    var draft = new ApiAccountDraft(ApiKinds.Anthropic, "https://api.example.test", "workspace_1", "chosen-model");
+    var account = await api.AddAsync("claude", "Refused account", draft, "made-up-test-key");
+    secrets.Missing = expected == "needs-key"; secrets.Unreadable = expected == "unreadable";
+    var checkedConnection = await api.CheckAsync(account.Id);
+    Assert.Equal(expected, checkedConnection.CheckState); Assert.NotNull(checkedConnection.CheckedAt);
+    // The UI trims these fields; whitespace-equivalent resaves also retain the check receipt.
+    var saved = await api.UpdateAsync(account.Id, draft with { BaseUrl = " https://api.example.test ", WorkspaceId = " workspace_1 ", Model = " chosen-model " }, "");
+    Assert.Equal(checkedConnection, api.Read(account.Id));
+    Assert.False(saved.SignedIn); Assert.False(accounts.Get(account.Id).SignedIn);
+    await Assert.ThrowsAsync<ApiAccountUnavailableException>(async () => await accounts.RequireSignedInAsync(account.Id));
+  }
+
+  [Fact] public async Task ChangedConnectionClearsOldCheckAndCanBeCheckedAgain()
+  {
+    var accounts = new AccountService(new MemoryState<AccountState>(), [new FakeAccountProvider("claude")]);
+    var response = new Response(HttpStatusCode.Forbidden);
+    var api = new ApiAccountService(accounts, new AccountCredentials(new TestSecretStore(), root), root, new HttpClient(response));
+    var account = await api.AddAsync("claude", "API", new(ApiKinds.Anthropic), "made-up-test-key");
+    var refused = await api.CheckAsync(account.Id);
+    await api.UpdateAsync(account.Id, new(ApiKinds.Anthropic, "https://different.example.test"), null);
+    var changed = api.Read(account.Id)!;
+    Assert.Equal(refused.CredentialReference, changed.CredentialReference);
+    Assert.Null(changed.CheckState); Assert.Null(changed.CheckedAt); Assert.Null(changed.CheckDetail);
+    response.Code = HttpStatusCode.OK;
+    Assert.Equal("valid", (await api.CheckAsync(account.Id)).CheckState);
+    Assert.True((await accounts.RequireSignedInAsync(account.Id)).SignedIn);
+  }
+
+  private sealed class ReadControlSecrets : ISecretStore
+  {
+    private readonly TestSecretStore saved = new();
+    public bool Missing;
+    public bool Unreadable;
+    public ValueTask<byte[]?> ReadAsync(string name, CancellationToken ct = default) => Unreadable
+      ? ValueTask.FromException<byte[]?>(new IOException("Test store read failed"))
+      : Missing ? ValueTask.FromResult<byte[]?>(null) : saved.ReadAsync(name, ct);
+    public ValueTask WriteAsync(string name, ReadOnlyMemory<byte> value, CancellationToken ct = default) => saved.WriteAsync(name, value, ct);
+    public ValueTask DeleteAsync(string name, CancellationToken ct = default) => saved.DeleteAsync(name, ct);
   }
 
   [Fact] public async Task MissingCredentialIsDifferentFromAServiceOutage()
