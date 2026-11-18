@@ -43,7 +43,7 @@ public sealed partial class HootPage
             var efforts = ModelEfforts.For(account.Provider, model);
             if (account.Provider == current.Provider && current.Options.Effort is { Length: > 0 } and not "auto" && !efforts.Contains(current.Options.Effort))
               throw new InvalidOperationException("Hoot's current effort is not offered by this account. Open Hoot settings to choose its model and effort together.");
-            var effort = efforts.Contains(current.Options.Effort ?? "") ? current.Options.Effort : efforts.Contains(ModelCatalog.TopEffort(account.Provider) ?? "") ? ModelCatalog.TopEffort(account.Provider) : efforts.LastOrDefault();
+            var effort = account.Provider == current.Provider ? current.Options.Effort : efforts.Contains(current.Options.Effort ?? "") ? current.Options.Effort : efforts.Contains(ModelCatalog.TopEffort(account.Provider) ?? "") ? ModelCatalog.TopEffort(account.Provider) : efforts.LastOrDefault();
             var modes = TerminalDeck.Core.Chats.ChatPermissionModes.Supported(account.Provider);
             var mode = modes.Contains(current.PermissionMode) ? current.PermissionMode : AiPermissionMode.Ask;
             // Configure owns the connection transition; keep all unrelated choices.

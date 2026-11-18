@@ -105,9 +105,15 @@ public sealed class HootTests
     Assert.Equal(before.Lines, after.Lines); Assert.False(f.Chats.Get(after.ChatId!).Ended); Assert.Single(f.Process.Sent);
     Assert.Equal(new("fixture", "high"), f.Chats.Get(after.ChatId!).Definition.Options);
   }
-  [Fact] public async Task AccountAndPermissionChangesKeepTheBackingChatAndNextTurnUsesNewAccount()
+  [Theory]
+  [InlineData("")]
+  [InlineData("auto")]
+  [InlineData("high")]
+  public async Task AccountAndPermissionChangesKeepTheBackingChatAndNextTurnUsesNewAccount(string effort)
   {
-    await using var f = new Fixture(); await f.Ready(); var first = await f.Say(); f.Complete(first); await Fixture.Wait(f.Hoot, s => !s.Busy);
+    await using var f = new Fixture(); await f.Ready();
+    await f.Hoot.ConfigureAsync(f.Hoot.Read().Settings! with { Options = new("fixture", effort) });
+    var first = await f.Say(); f.Complete(first); await Fixture.Wait(f.Hoot, s => !s.Busy);
     var before = f.Hoot.Read(); var account = await f.Accounts.CreateAsync("claude", "Second fixture", TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey);
     await f.Accounts.SetApiStateAsync(account.Id, true, Guid.NewGuid().ToString("N"));
     var updated = before.Settings! with { AccountId = account.Id, PermissionMode = AiPermissionMode.Plan };
@@ -117,6 +123,7 @@ public sealed class HootTests
     var next = await f.Say("Continue on the chosen account");
     Assert.Equal(account.Id, f.Process.Sent.Last().Chat.Definition.AccountId);
     Assert.Equal(AiPermissionMode.Plan, f.Process.Sent.Last().Chat.Definition.PermissionMode);
+    Assert.Equal(effort, f.Process.Sent.Last().Chat.Definition.Options.Effort);
     f.Complete(next); await Fixture.Wait(f.Hoot, s => !s.Busy);
   }
   [Fact] public async Task ArchivedBackingChatKeepsItsSelfControlFence()
