@@ -25,6 +25,7 @@ public sealed partial class AppRuntime
   /// Called once after InitializeCloud (start-up wiring line).
   private void InitializeReach()
   {
+    OtherComputers.AccountGuest = () => ReachGuest;
     Cloud.Changed += snapshot => { _ = FollowCloudForReachAsync(); };
     ReachAccountTools.Register(Door, async () => Reach is { } reach ? await reach.StatusAsync() : null);
     _ = FollowCloudForReachAsync();
@@ -50,6 +51,7 @@ public sealed partial class AppRuntime
       var identity = Cloud.SyncIdentity;
       var wanted = identity is { } id ? id.Subject + "/" + id.DeviceId : null;
       if (wanted == reachFor) return;
+      await OtherComputers.DisconnectAccountMachinesAsync();
       // Signed out, or another account or device id: nothing of the old one stays reachable.
       if (Reach is { } old)
       {

@@ -6,11 +6,9 @@ using TerminalDeck.Core.Cloud;
 
 namespace TerminalDeck.App.Views.Chat;
 
-/// A session that runs on another of his machines (DESIGN-WINDOWS-CLOUD.md 5, Mac `runs-on-*`): the session's name, ONE
-/// secondary line "Runs on Mac mini" (", which is off"), then its chat as the Cloud's readable copy. Windows has no live
-/// link to another machine's session yet (no guest chat client), so the page is read only whether that machine is on or
-/// off: no message box, no send button, no line saying so. No "Switch to this PC" (left out by decision).
-/// New messages arrive by themselves while the page is open (a quiet look every 15 seconds).
+/// The readable Cloud copy of a session. It has no input or controls that need
+/// a live host. CloudSessionRoute replaces it only when the real session is
+/// reachable. The existing 15-second refresh keeps this saved copy current.
 public sealed class CloudChatPage : UserControl
 {
   private readonly SidebarCloudRow row;
@@ -35,7 +33,15 @@ public sealed class CloudChatPage : UserControl
     var runsOn = new TextBlock { Text = look.RunsOn, FontSize = 12, MaxLines = 1, TextTrimming = TextTrimming.CharacterEllipsis };
     runsOn.SetResourceReference(TextBlock.ForegroundProperty, "DeckSecondaryInkBrush");
     AutomationProperties.SetAutomationId(runsOn, "cloud.chat.runsOn");
-    identity.Children.Add(runsOn);
+    var location = ChatBar.Line();
+    if (row.Folder.Length > 0)
+    {
+      location.Children.Add(new DeckIcon { Glyph = "folder", FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+      var path = new TextBlock { Text = row.Folder, FontSize = 12, MaxWidth = 240, TextTrimming = TextTrimming.CharacterEllipsis };
+      path.SetResourceReference(TextBlock.ForegroundProperty, "DeckSecondaryInkBrush"); ToolTipService.SetToolTip(path, row.Folder); location.Children.Add(path); location.Children.Add(ChatBar.Dot());
+    }
+    location.Children.Add(new DeckIcon { Glyph = Settings.DeviceKinds.Glyph(Settings.DeviceKinds.Of(row.Platform, row.MachineName)), FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+    location.Children.Add(runsOn); identity.Children.Add(location);
     bar.Children.Add(identity);
     page.Children.Add(bar);
     messages.HorizontalAlignment = HorizontalAlignment.Stretch;

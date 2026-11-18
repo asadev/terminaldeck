@@ -49,6 +49,11 @@ public sealed partial class ChatPage
       ToolTipService.SetToolTip(rewind, reason); ToolTipService.SetToolTip(fork, reason);
     }
     actions.Children.Add(rewind); actions.Children.Add(fork);
+    if (HandoffRequested is not null)
+    {
+      var handoff = ChatAppearance.MessageAction("rich-document", "Handoff: everything through this message", () => HandoffMessageAsync(row));
+      handoff.IsEnabled = recorded is not null; actions.Children.Add(handoff);
+    }
     return actions;
   }
 

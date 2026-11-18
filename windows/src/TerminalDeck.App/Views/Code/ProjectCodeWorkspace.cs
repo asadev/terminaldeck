@@ -17,7 +17,7 @@ public sealed class ProjectCodeWorkspace : Grid
     this.create = create;
     RowDefinitions.Add(new() { Height = GridLength.Auto }); RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
     var choices = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-    foreach (var section in new[] { "Changes", "Pull requests", "Issues", "Actions" })
+    foreach (var section in new[] { "Files", "Changes", "Pull requests", "Issues", "Actions" })
     {
       var button = new ToggleButton { Content = section, MinHeight = 30, Padding = new(12, 4, 12, 4) };
       Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, section + " in this project");
@@ -26,7 +26,7 @@ public sealed class ProjectCodeWorkspace : Grid
     Children.Add(new ScrollViewer { Content = choices, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollMode = ScrollMode.Enabled, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled });
     SetRow(content, 1); Children.Add(content); Select("Changes");
   }
-  private void Select(string section)
+  public void Select(string section)
   {
     if (!pages.TryGetValue(section, out var page)) pages[section] = page = create(section);
     content.Content = null;

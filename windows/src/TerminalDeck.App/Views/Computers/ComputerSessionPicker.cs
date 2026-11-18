@@ -38,7 +38,7 @@ public static class ComputerSessionPicker
         var fields = new System.Text.Json.Nodes.JsonObject { ["provider"] = provider.SelectedItem?.ToString() };
         if (!string.IsNullOrWhiteSpace(folder.Text)) fields["cwd"] = folder.Text;
         var session = await service.CreateSessionAsync(id, fields, ct);
-        var pane = new RemoteSessionPane(service, id, session.GetProperty("id").GetString()!);
+        var pane = new RemoteSessionPane(service, id, session.GetProperty("id").GetString()!) { RequestedTheme = (root.Content as FrameworkElement)?.ActualTheme ?? ElementTheme.Default };
         var window = new Window { Title = OtherComputersService.Text(session, "title", "Remote session"), Content = pane };
         window.Closed += async (_, _) => await pane.DisposeAsync(); window.Activate(); starting = false; start.Hide();
       }

@@ -100,9 +100,9 @@ public sealed partial class ShellWindow
         if (project is null) throw new InvalidOperationException("Choose a project or one of its sessions first.");
         Projects.OpenProject(project, "Overview"); Model.Page = ShellPage.Projects; break;
       case "artifacts": Model.Page = ShellPage.Artifacts; break;
-      case "files": Model.Page = ShellPage.Files; break;
-      case "source-control": Model.Page = ShellPage.SourceControl; break;
-      case "github": Model.Page = ShellPage.GitHub; break;
+      case "files": CodeWorkspaceView("Files"); Model.Page = ShellPage.Code; break;
+      case "source-control": CodeWorkspaceView("Changes"); Model.Page = ShellPage.Code; break;
+      case "github": CodeWorkspaceView("Pull requests"); Model.Page = ShellPage.Code; break;
       case "return-windows": if (tab is not null) DockOwner(tab.Owner); break;
       case "shortcuts": await ShowShortcutsAsync(target); break;
       case "help": await ShowHelpAsync(target); break;

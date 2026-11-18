@@ -89,6 +89,7 @@ public sealed partial class OtherComputersService : IAsyncDisposable
   }
   public async Task ConnectAsync(string id, CancellationToken ct = default)
   {
+    if (ReachGuest.IsReachLink(id)) { await ConnectReachAsync(id, ct); return; }
     await mutations.WaitAsync(ct);
     try
     {
@@ -187,6 +188,10 @@ public sealed partial class OtherComputersService : IAsyncDisposable
   }
   public async Task ForgetAsync(string id)
   {
+    if (ReachGuest.IsReachLink(id))
+    {
+      await DisconnectAsync(id); lock (views) views.Remove(id); Changed?.Invoke(); return;
+    }
     await DisconnectAsync(id); await mutations.WaitAsync();
     try
     {

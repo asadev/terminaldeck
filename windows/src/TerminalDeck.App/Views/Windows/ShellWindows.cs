@@ -306,6 +306,7 @@ public sealed partial class ShellWindow
       ShellPage.Store => new Store.StorePage(Runtime.AppStore, () => { Model.Page = ShellPage.Mcp; }),
       ShellPage.Mcp => ConnectionPage(page),
       ShellPage.Files or ShellPage.SourceControl or ShellPage.GitHub => CodePageView(page),
+      ShellPage.Code => CodeWorkspaceView(),
       ShellPage.Receiver when Runtime.Receiver is not null => new TerminalDeck.App.Views.Receiver.ReceiverPage(new(Runtime.Receiver, Runtime.ReceiverIntake), Runtime.ReceiverProjectChoices(), ShowReceiverKeyAsync, sourceSettings: Runtime.ReceiverSources),
       ShellPage.Artifacts when Runtime.Artifacts is not null && Runtime.Receiver is not null => new TerminalDeck.App.Views.Receiver.ArtifactsPage(Runtime.Artifacts, Runtime.Receiver, Runtime.ReceiverArtifactFolders(), OpenSession),
       _ => new WorkspaceLoadingView()

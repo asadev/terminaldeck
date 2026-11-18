@@ -595,5 +595,5 @@ public sealed partial class HootPage : Grid, IDisposable
     if (panel.Children.Count == 0) panel.Children.Add(Words("No background turns yet."));
     await new ContentDialog { Title = "Background turns", Content = new ScrollViewer { Content = panel, MaxHeight = 540 }, CloseButtonText = "Done", XamlRoot = XamlRoot, RequestedTheme = ActualTheme }.ShowAsync();
   }
-  public void Dispose() => Model.Dispose();
+  public void Dispose() { handoffDocument?.Dispose(); Model.Dispose(); }
 }

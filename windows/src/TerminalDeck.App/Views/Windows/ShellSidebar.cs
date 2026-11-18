@@ -176,6 +176,7 @@ public sealed partial class ShellWindow
   private void OpenSidebarPage(string id)
   {
     morePagesFlyout?.Hide();
+    if (id is "Files" or "SourceControl" or "GitHub") { CodeWorkspaceView(id == "Files" ? "Files" : id == "SourceControl" ? "Changes" : "Pull requests"); id = "Code"; }
     if (id == "Devices") { ShowDevicesPopup(); return; }
     if (Enum.TryParse<ShellPage>(id, out var page)) Model.Page = page;
     SyncNavigation();
@@ -287,12 +288,12 @@ public sealed partial class ShellWindow
     CloudSessionRows.Visibility = CloudSessionRows.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
   }
 
-  /// A session on another machine opens as its Cloud chat page (read only: Windows has no live link to it yet).
+  /// Start with its readable Cloud copy; its existing live host route replaces it when reachable.
   private void OpenCloudChat(SidebarCloudRow row)
   {
     if (Runtime.CloudChats is null) return;
     cloudChatRef = row.Ref;
-    cloudChatView = new TerminalDeck.App.Views.Chat.CloudChatPage(row, () => Runtime.CloudChatsDoor());
+    cloudChatView = new TerminalDeck.App.Views.Chat.CloudSessionRoute(row, Runtime);
     SessionList.SelectedItem = null;
     renderedWindowsStructure = "";
     Model.Page = ShellPage.CloudChat;

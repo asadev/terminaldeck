@@ -5,6 +5,13 @@ namespace TerminalDeck.Core.Tests.Mcp;
 
 public sealed class W12ShellContractTests
 {
+  [Fact] public void CodeAndLegacyAliasesUseTheExistingWorkspaceContract()
+  {
+    var spec = McpCatalogue.Load().Single(t => t.Id == "ui.workspace");
+    foreach (var page in new[] { "code", "files", "sourcecontrol", "github" }) McpSchema.Validate(spec.InputSchema, JsonSerializer.SerializeToElement(new { page }));
+    McpSchema.Validate(spec.InputSchema, JsonSerializer.SerializeToElement(new { sidebarAction = new { action = "pin-page", pageId = "Code", pinned = true } }));
+    Assert.Equal(McpTier.Act, McpCatalogue.EffectiveTier(spec, JsonSerializer.SerializeToElement(new { page = "code" })));
+  }
   [Fact] public async Task ShellReadsNeverPromptButPinMutationsUseTheExistingApprovalDoor()
   {
     var permission = new FakePermission(); var door = new McpDoor(permission);

@@ -138,9 +138,16 @@ public sealed partial class OtherComputersService
   }
   private async Task RestoreWatchesAsync(string id, CancellationToken ct)
   {
+    await RestoreChatWatchesAsync(id, ct);
     foreach (var pair in attached.Where(p => p.Key.Computer == id))
       if (Services(id).Sessions.Any(s => Text(s, "id", "") == pair.Key.Session))
         try { await AttachAsync(id, pair.Key.Session, pair.Value.Cols, pair.Value.Rows, ct); } catch (Exception ex) when (ex is not OutOfMemoryException) { }
+  }
+  private async Task RestoreChatWatchesAsync(string id, CancellationToken ct)
+  {
+    foreach (var watched in watchedChats.Keys.Where(key => key.Computer == id))
+      if (Services(id).Sessions.Any(row => Text(row, "id", "") == watched.Session))
+        try { await ChatActionAsync(id, watched.Session, "watch", ct: ct); } catch (Exception ex) when (ex is not OutOfMemoryException) { }
   }
   public void Nudge()
   {

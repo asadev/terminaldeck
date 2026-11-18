@@ -10,10 +10,10 @@ public sealed class SidebarState
     new("Artifacts", "Artifacts", "rich-document"), new("Projects", "Projects", "\uE8B7"),
     new("Servers", "Servers", "\uE968"), new("Devices", "Devices", "\uE975"),
     new("Store", "Store", "store"), new("Hooks", "Hooks", "link"), new("Receiver", "Receiver", "\uE704"), new("Mcp", "MCP servers", "\uEA86"),
-    new("Files", "Files", "folder"), new("SourceControl", "Source control", "branch"),
-    new("GitHub", "GitHub", "repository"), new("Cloud", "Cloud", "\uE753")
+    new("Code", "Code", "repository"), new("Cloud", "Cloud", "\uE753")
   ];
   private readonly Action<SidebarSaved>? persist;
+  private string[] storedPagePins = [];
   public SidebarSaved Read { get; private set; }
   public event Action? Changed;
   public SidebarState(SidebarSaved? saved, bool upgrading, Action<SidebarSaved>? persist = null)
@@ -23,7 +23,8 @@ public sealed class SidebarState
     // W11 displayed projects without writing sidebar.json. New default pins must
     // retain that section on upgrade; an explicit saved unpin still wins.
     var pages = saved?.Pages ?? ["Agents", "Tasks", "Projects"];
-    Read = new(pages.Where(id => Catalogue.Any(p => p.Id == id)).Distinct().ToArray(),
+    storedPagePins = pages.ToArray();
+    Read = new(pages.Select(CanonicalPage).Where(id => Catalogue.Any(p => p.Id == id)).Distinct().ToArray(),
       saved?.SessionPins.Distinct().ToArray() ?? [], saved?.SessionOrder.Distinct().ToArray() ?? [], saved?.HiddenSessions.Distinct().ToArray() ?? [],
       double.IsFinite(saved?.Width ?? 264) ? Math.Clamp(saved?.Width ?? 264, 240, 340) : 264, saved?.Visible ?? true, saved?.ConfirmDelete ?? true, saved?.ArchivedChats?.Distinct().ToArray() ?? []);
   }
@@ -35,9 +36,11 @@ public sealed class SidebarState
     if (archived) ids.Add(id);
     Save(Read with { ArchivedChats = [.. ids] });
   }
-  public bool Pinned(string id) => Read.Pages.Contains(id);
+  public static string CanonicalPage(string id) => id is "Files" or "SourceControl" or "GitHub" ? "Code" : id;
+  public bool Pinned(string id) => Read.Pages.Contains(CanonicalPage(id));
   public void Pin(string id, bool pinned)
   {
+    id = CanonicalPage(id);
     if (!Catalogue.Any(p => p.Id == id)) throw new ArgumentException("Choose a page from More.");
     if (Pinned(id) == pinned) return;
     var pages = Read.Pages.Where(p => p != id).ToList();
@@ -46,11 +49,14 @@ public sealed class SidebarState
   }
   public void OrderPages(string[] ids)
   {
+    if (ids.Distinct().Count() != ids.Length) throw new ArgumentException("Keep each pinned page exactly once.");
+    ids = ids.Select(CanonicalPage).Distinct().ToArray();
     if (ids.Length != Read.Pages.Length || ids.Distinct().Count() != ids.Length || !ids.ToHashSet().SetEquals(Read.Pages)) throw new ArgumentException("Keep each pinned page exactly once.");
     Save(Read with { Pages = [.. ids] });
   }
   public void MovePage(string source, string target)
   {
+    source = CanonicalPage(source); target = CanonicalPage(target);
     if (!Pinned(source) || !Pinned(target) || source == target) return;
     var ids = Read.Pages.ToList(); var index = ids.IndexOf(target); ids.Remove(source); ids.Insert(index, source); OrderPages([.. ids]);
   }
@@ -84,5 +90,18 @@ public sealed class SidebarState
     Save(Read with { Width = fitted, Visible = visible });
   }
   public void AskBeforeDelete(bool ask) => Save(Read with { ConfirmDelete = ask });
-  private void Save(SidebarSaved next) { persist?.Invoke(next); Read = next; Changed?.Invoke(); }
+  private void Save(SidebarSaved next)
+  {
+    var stored = storedPagePins;
+    if (!next.Pages.SequenceEqual(Read.Pages))
+    {
+      var sameOrder = Read.Pages.Where(next.Pages.Contains).SequenceEqual(next.Pages.Where(Read.Pages.Contains));
+      stored = sameOrder
+        ? storedPagePins.Where(id => next.Pages.Contains(CanonicalPage(id))).Concat(next.Pages.Where(id => !storedPagePins.Any(old => CanonicalPage(old) == id))).ToArray()
+        : next.Pages.SelectMany(id => storedPagePins.Where(old => CanonicalPage(old) == id).DefaultIfEmpty(id)).ToArray();
+    }
+    // Code is a display alias. An unrelated geometry/session change must not
+    // rewrite the person's legacy Files/GitHub/Source control pin records.
+    persist?.Invoke(next with { Pages = stored }); storedPagePins = stored; Read = next; Changed?.Invoke();
+  }
 }

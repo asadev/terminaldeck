@@ -95,7 +95,7 @@ public sealed class ComputerServicesWindow
       var open = new Button { Content = "Open session" };
       open.Click += (_, _) =>
       {
-        var terminal = new RemoteSessionPane(service, computer, id); terminals.Add(terminal);
+        var terminal = new RemoteSessionPane(service, computer, id) { RequestedTheme = ((FrameworkElement)window.Content).ActualTheme }; terminals.Add(terminal);
         var child = new Window { Title = OtherComputersService.Text(session, "title", id), Content = terminal };
         child.Closed += async (_, _) => { terminals.Remove(terminal); await terminal.DisposeAsync(); }; child.Activate();
       };
