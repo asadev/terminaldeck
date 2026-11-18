@@ -31,14 +31,50 @@ CORE = r'tests\TerminalDeck.Core.Tests\TerminalDeck.Core.Tests.csproj'
 CHAT = r'tests\TerminalDeck.Chat.Windows.Tests\TerminalDeck.Chat.Windows.Tests.csproj'
 SHELL = r'src\TerminalDeck.App\Views\Windows\Tests\TerminalDeck.Shell.Tests.csproj'
 FRESH = [dict(project=CORE, names=[NEW_MCP, BUDGET]),
-    dict(project=CHAT, names=['TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests']),
-    dict(project=SHELL, names=['TerminalDeck.App.Shell.SidebarStateTests'])]
+    dict(project=CHAT, names=[
+        'TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.Claude_and_Gemini_exclude_extra_children_but_keep_the_apps_own_door',
+        'TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.Codex_disables_each_other_configured_server_and_never_disables_deck_tools',
+        'TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.Unsupported_configurations_refuse_instead_of_pretending_addons_are_off',
+        'TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.A_plugin_cache_refuses_even_when_no_config_section_names_it',
+        'TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.Codex_project_layers_are_measured_and_an_unconfigured_effective_plugin_refuses']),
+    dict(project=SHELL, names=[
+        'TerminalDeck.App.Shell.SidebarStateTests.CodeAliasDoesNotWriteOrRewriteTheStoredPins',
+        'TerminalDeck.App.Shell.SidebarStateTests.LegacyCodePinsMergeOnceAndKeepTheirOrderAndActions'])]
 FIXTURES = {'windows/tests/TerminalDeck.Core.Tests/Mcp/W12ShellContractTests.cs',
     'windows/tests/TerminalDeck.Core.Tests/Cloud/CloudTaskBudgetTests.cs'}
 MACHINERY = {SCOPE, 'windows/scripts/windows/ui-check-evidence.py',
     '.github/workflows/ci.yml', '.github/workflows/windows-release.yml',
     'windows/docs/WINDOWS-C-CHECK-RETENTION-20261118.md'}
 FAILED_IDS = {'96eef165-56c9-c40c-5310-40d771a719a4', 'e30a7c6a-595a-a620-830d-4c928b380a96'}
+
+
+def fresh_source_counts():
+    """Require exact source methods and derive case counts before any test runs."""
+    sources = {
+        CORE: ['windows/tests/TerminalDeck.Core.Tests/Mcp/W12ShellContractTests.cs',
+            'windows/tests/TerminalDeck.Core.Tests/Cloud/CloudTaskBudgetTests.cs'],
+        CHAT: ['windows/tests/TerminalDeck.Chat.Windows.Tests/AgentAddonLaunchTests.cs'],
+        SHELL: ['windows/src/TerminalDeck.App/Views/Windows/Tests/SidebarStateTests.cs']}
+    totals = []
+    for check in FRESH:
+        total = 0
+        for name in check['names']:
+            method = name.rsplit('.', 1)[-1]
+            found = []
+            for path in sources[check['project']]:
+                text = (ROOT / path).read_text()
+                declarations = list(re.finditer(r'public\s+(?:async\s+)?(?:void|Task)\s+' + re.escape(method) + r'\s*\(', text))
+                for match in declarations:
+                    prefix = text[:match.start()]
+                    start = max(prefix.rfind('[Fact]'), prefix.rfind('[Theory]'))
+                    require(start >= 0, 'Selected method has no source test attribute: ' + name)
+                    attributes = prefix[start:]
+                    found.append(1 if attributes.startswith('[Fact]') else attributes.count('[InlineData('))
+            require(len(found) == 1 and found[0] > 0, 'Selection must name exactly one actual test method: ' + name)
+            total += found[0]
+        totals.append(total)
+    require(totals == [2, 7, 2], 'Source-declared fresh cases differ from Core2/Chat7/new-Sidebar2')
+    return totals
 
 
 def require(value, reason):
@@ -94,6 +130,7 @@ def source_bounds():
     require(changed <= MACHINERY, 'Retained tests cannot cover new product/fixture changes: ' + ', '.join(sorted(changed - MACHINERY)))
     scope = json.loads((ROOT / SCOPE).read_text())
     require(scope == dict(part='C', checks=FRESH, retainFrom=PIN), 'C remainder selection or provenance changed')
+    fresh_source_counts()
     return sorted(changed)
 
 
@@ -129,13 +166,13 @@ def fresh(receipt, folder):
         and receipt['outcome'] == 'passed', 'New receipt is not green for the current source')
     require(len(receipt['tests']) == 3, 'All three remaining project selections are required')
     combined = []
-    for row, check, count in zip(receipt['tests'], FRESH, [2, 7, 1]):
+    for row, check, count in zip(receipt['tests'], FRESH, [2, 7, 2]):
         require(row['project'] == check['project'] and row['filter'] == select(check['names'])
             and [row[k] for k in ['total', 'passed', 'failed', 'skippedOrOther']] == [count, count, 0, 0], 'New selection/count mismatch')
         data = (folder / basename(row['trx'])).read_bytes()
         parsed = results(data)
         require(len(parsed) == count and all(r['outcome'] == 'Passed' for r in parsed), 'New TRX does not match its receipt')
-        require(all(any(r['method'] == name or r['method'].startswith(name + '.') for name in check['names']) for r in parsed), 'New TRX contains a test outside the remainder')
+        require(all(any(r['method'] == name for name in check['names']) for r in parsed), 'New TRX contains a test outside the remainder')
         combined.extend(parsed)
     require({r['method'] for r in combined if r['method'].startswith((MCP, BUDGET))} == {NEW_MCP, BUDGET}, 'Each corrected method must pass once')
     return combined
@@ -166,12 +203,12 @@ def retain(receipt_path):
         originalReceiptSha256=sha(old_receipt), originalTrxSha256=sha(old_trx), sourceChanges=changed,
         artifactFile='prior/artifact.zip', receiptFile='prior/receipt.original.json', trxFile='prior/Core.original.trx',
         retainedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), testsRerun=False)
-    current['combined'] = dict(total=163, passed=163, failed=0, retainedPassed=153, newlyPassed=10,
+    current['combined'] = dict(total=164, passed=164, failed=0, retainedPassed=153, newlyPassed=11,
         originalFailuresCountedAsPasses=False)
     current['sourceTree'] = git('rev-parse', 'HEAD^{tree}')
     receipt_path.write_text(json.dumps(current, indent=2) + '\n')
     validate(receipt_path, current['sourceCommit'])
-    print('C receipt: 153 original passes retained + 10 newly passed = 163; no original pass rerun.')
+    print('C receipt: 153 original passes retained + 11 newly passed = 164; no original pass rerun.')
 
 
 def validate(receipt_path, commit):
@@ -192,7 +229,7 @@ def validate(receipt_path, commit):
         and retained['excludedFailed'] == 2 and retained['sourceChanges'] == changed, 'Retained cases or source bounds changed')
     now = fresh(receipt, receipt_path.parent)
     require(not ({r['testId'] for r in now} & {r['testId'] for r in passed}), 'A retained pass was rerun')
-    require(receipt['combined'] == dict(total=163, passed=163, failed=0, retainedPassed=153, newlyPassed=10,
+    require(receipt['combined'] == dict(total=164, passed=164, failed=0, retainedPassed=153, newlyPassed=11,
         originalFailuresCountedAsPasses=False) and receipt['sourceTree'] == git('rev-parse', 'HEAD^{tree}'), 'Combined counts/tree mismatch')
 
 

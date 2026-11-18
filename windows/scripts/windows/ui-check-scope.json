@@ -11,13 +11,18 @@
     {
       "project": "tests\\TerminalDeck.Chat.Windows.Tests\\TerminalDeck.Chat.Windows.Tests.csproj",
       "names": [
-        "TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests"
+        "TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.Claude_and_Gemini_exclude_extra_children_but_keep_the_apps_own_door",
+        "TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.Codex_disables_each_other_configured_server_and_never_disables_deck_tools",
+        "TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.Unsupported_configurations_refuse_instead_of_pretending_addons_are_off",
+        "TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.A_plugin_cache_refuses_even_when_no_config_section_names_it",
+        "TerminalDeck.Chat.Windows.Tests.AgentAddonLaunchTests.Codex_project_layers_are_measured_and_an_unconfigured_effective_plugin_refuses"
       ]
     },
     {
       "project": "src\\TerminalDeck.App\\Views\\Windows\\Tests\\TerminalDeck.Shell.Tests.csproj",
       "names": [
-        "TerminalDeck.App.Shell.SidebarStateTests"
+        "TerminalDeck.App.Shell.SidebarStateTests.CodeAliasDoesNotWriteOrRewriteTheStoredPins",
+        "TerminalDeck.App.Shell.SidebarStateTests.LegacyCodePinsMergeOnceAndKeepTheirOrderAndActions"
       ]
     }
   ],

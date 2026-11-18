@@ -10,18 +10,18 @@ The Cloud budget correction uses separate durable `TaskStore.At(root)` owners, m
 
 ## Next selection
 
-The C scope runs exactly:
+The C scope names exact methods, never whole classes. The six inherited A SidebarState cases remain unselected. It runs exactly:
 
 | Project | Selection | Expected cases |
 |---|---|---:|
 | Core | New supported-pin fact and the previously failed Cloud budget method | 2 |
-| Chat Windows | Previously unrun AgentAddonLaunchTests | 7 |
-| Shell | Previously unrun SidebarStateTests | 1 |
-| Fresh total | No previously passed case selected | 10 |
+| Chat Windows | Five explicit AgentAddonLaunch methods (four Facts + three theory rows) | 7 |
+| Shell | Only CodeAliasDoesNotWriteOrRewriteTheStoredPins and LegacyCodePinsMergeOnceAndKeepTheirOrderAndActions | 2 |
+| Fresh total | No previously passed case selected | 11 |
 
 `ui-check-evidence.py preflight` verifies the current source/selection boundary before any selected test runs. `retain` runs after those selected checks pass. It verifies the original CI metadata, artifact identity/digest, downloaded ZIP hash, original receipt source/tree/filter/counts and all original TRX result identities. It retains only the 153 Passed rows; neither failed result is counted as a pass. It also rejects any product/fixture change after the pinned correction and any fresh result matching a retained passed test ID. The current source-owned selection cannot expand the allowed paths or counts by editing metadata alone.
 
-The final receipt keeps its ten fresh results and adds an explicit retained section with the original 153 case identities, original failed identities, commit/tree/run/artifact provenance, content hashes and preserved original ZIP/receipt/TRX. `combined` can become 163/163 only after all ten new cases pass. Old results keep their old source attribution. This is not a new execution of 163 tests.
+The final receipt keeps its eleven fresh results and adds an explicit retained section with the original 153 case identities, original failed identities, commit/tree/run/artifact provenance, content hashes and preserved original ZIP/receipt/TRX. `combined` can become 164/164 only after all eleven new cases pass. Old results keep their old source attribution. This is not a new execution of 164 tests.
 
 The release workflow downloads the exact green current-commit CI artifact, then calls the same validator. The validator reopens the pinned ZIP and fresh TRXs, checks all counts and case identities and rechecks source bounds/tree. Failed evidence, a missing original, duplicate reruns, changed source, partial selection or forged combined counts prevent packaging. The exact-commit green CI requirement remains in place.
 
