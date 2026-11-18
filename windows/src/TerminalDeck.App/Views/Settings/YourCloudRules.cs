@@ -20,6 +20,11 @@ public static class YourCloudRules
     BringBack = "Bring back", PutInCloudAgain = "Put in Cloud again", BinCloud = "Cloud", BinEverywhere = "Everywhere", Open = "Open",
     BinInfo = "Items in the Bin are deleted for good after 30 days. Put back brings them back on every device.";
 
+  public static bool Nameless(CloudContentsRow row) => row.State == CloudItemState.NotOnThisPc && (row.Kind is CloudContentsKind.Tasks or CloudContentsKind.Agents or CloudContentsKind.Projects)
+    && (row.Name == CloudContentsWords.Title(row.Kind) || row.Name.Contains("not on this", StringComparison.OrdinalIgnoreCase));
+
+  public static string MissingName(CloudContentsKind kind, int count) => count.ToString(CultureInfo.CurrentCulture) + " " + (kind switch { CloudContentsKind.Tasks => "tasks", CloudContentsKind.Agents => "agents", _ => "projects" }) + " that are not on this PC";
+
   /// Memory … Saved passwords in the page order (only kinds Core lists), then Code, then the Bin.
   public static IReadOnlyList<YourCloudPlaceRow> Places(CloudContentsSnapshot snapshot)
   {

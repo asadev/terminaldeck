@@ -75,7 +75,7 @@ public sealed class CompactNotice : Grid
   {
     if (!IsLoaded) return;
     card.RequestedTheme = ActualTheme;
-    card.Background = (Brush)TerminalDeck.App.Shell.ShellTheme.Resource(this, "DeckGlassBrush");
+    card.Background = (Brush)TerminalDeck.App.Shell.ShellTheme.Resource(this, "DeckCardBrush");
     words.Foreground = (Brush)TerminalDeck.App.Shell.ShellTheme.Resource(this, "DeckInkBrush");
   }
   private void Refresh()

@@ -47,14 +47,13 @@ public sealed class CloudWiringTests : IDisposable
   }
 
   [Fact]
-  public void AgentToolsAreReadOnly()
+  public void AccountToolsRegisterWithApprovedManagementActions()
   {
-    Assert.All(CloudTools.Specs, s => Assert.Equal(McpTier.Read, s.Tier));
+    Assert.Equal(McpTier.Read, CloudTools.Specs.Single(s => s.Id == "cloud.status").Tier);
     var cloud = McpCatalogue.Load().Where(s => s.Id.StartsWith("cloud.", StringComparison.Ordinal)).ToArray();
-    // The account's own tools stay reads (no tool signs in or out). Joined 15 Nov: the Cloud folder, artifacts and reach
-    // status and project secret files' status are reads too; adding a file to the Cloud folder is the one change, and it asks (Alter).
-    Assert.Equal(["cloud.artifacts", "cloud.folder", "cloud.folder_add", "cloud.project_secrets", "cloud.reach.status", "cloud.status"], cloud.Select(s => s.Id).Order(StringComparer.Ordinal));
-    Assert.All(cloud, s => Assert.Equal(s.Id == "cloud.folder_add" ? McpTier.Alter : McpTier.Read, s.Tier));
+    // Account management is part of Settings: its edits ask through the existing approval flow.
+    Assert.Equal(["cloud.artifacts", "cloud.devices", "cloud.folder", "cloud.folder_add", "cloud.profile", "cloud.project_secrets", "cloud.reach.status", "cloud.status"], cloud.Select(s => s.Id).Order(StringComparer.Ordinal));
+    Assert.All(cloud, s => Assert.Equal(s.Id is "cloud.folder_add" or "cloud.profile" or "cloud.devices" ? McpTier.Alter : McpTier.Read, s.Tier));
     var door = new McpDoor(new NeverAsked());
     using var account = CloudComposition.Create(CloudConfiguration.Today("PC", "1"), new Watched(), new Watched());
     CloudTools.Register(account, door);

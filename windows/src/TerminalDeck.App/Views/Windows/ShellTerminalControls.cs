@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using TerminalDeck.App.Shell;
 using TerminalDeck.Core.Accounts;
 using TerminalDeck.Core.Sessions;
 
@@ -19,7 +20,9 @@ public sealed partial class ShellWindow
     void Refresh()
     {
       var context = Runtime.Usage.Context(tab.Subject);
-      model.Content = new TextBlock { Text = context.ModelLabel ?? context.Model ?? "Model", TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 140 };
+      var active = Runtime.Sessions.FirstOrDefault(row => row.Definition.Id == tab.Subject);
+      model.Content = TerminalChoiceLabel(context.ModelLabel ?? context.Model ?? active?.Definition.Model, "Model");
+      effort.Content = TerminalChoiceLabel(active?.Definition.Effort is { } level ? Chat.ChatAppearance.EffortName(level) : null, "Effort");
       ToolTipService.SetToolTip(model, context.Model is null ? "Choose the model for this terminal" : "Model from the last reply: " + (context.ModelLabel ?? context.Model));
     }
     void Changed() => controls.DispatcherQueue.TryEnqueue(Refresh);
@@ -67,7 +70,7 @@ public sealed partial class ShellWindow
     }
     model.Click += async (_, _) =>
     {
-      var menu = new MenuFlyout();
+      var menu = DeckMenu.CreateFor(controls);
       PopulateModels(menu, Runtime.Accounts.InstantModels(record.Definition.Provider, record.Definition.AccountId).Models); menu.ShowAt(model);
       if (record.Definition.AccountId is not { } account || record.Definition.Provider != "claude") return;
       try { PopulateModels(menu, (await Runtime.Accounts.ModelsAsync(account)).Models); }
@@ -75,7 +78,7 @@ public sealed partial class ShellWindow
     };
     effort.Click += (_, _) =>
     {
-      var menu = new MenuFlyout();
+      var menu = DeckMenu.CreateFor(controls);
       if (!Refused(menu))
         foreach (var value in ModelEfforts.For(record.Definition.Provider, null))
         {
@@ -87,9 +90,19 @@ public sealed partial class ShellWindow
     return controls;
   }
 
+  private static StackPanel TerminalChoiceLabel(string? value, string fallback)
+  {
+    var empty = string.IsNullOrWhiteSpace(value) || value.Equals("unknown", StringComparison.OrdinalIgnoreCase);
+    var label = new TextBlock { Text = empty ? fallback : value, FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 140, VerticalAlignment = VerticalAlignment.Center };
+    if (empty) label.SetResourceReference(TextBlock.ForegroundProperty, "DeckSecondaryInkBrush");
+    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
+    row.Children.Add(label); row.Children.Add(new DeckIcon { Glyph = "\uE70D", FontSize = 7, VerticalAlignment = VerticalAlignment.Center }); return row;
+  }
+
   private static Button TerminalControlChip(string label, string automationId)
   {
-    var chip = new Button { Content = label, Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"], FontSize = 12, Width = double.NaN, MinWidth = 0, Height = 28, MinHeight = 28, Padding = new(6, 0, 6, 0) };
+    var chip = new Button { Content = label };
+    DeckMenu.Pill(chip);
     AutomationProperties.SetAutomationId(chip, automationId); AutomationProperties.SetName(chip, label + " for this terminal");
     ToolTipService.SetToolTip(chip, label + " for this terminal"); return chip;
   }

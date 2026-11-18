@@ -74,6 +74,68 @@ public sealed class SessionKeeperTests
     Assert.Equal("observe:" + d.Id, Assert.Single(process.Calls));
   }
 
+  [Fact] public async Task ReopenAdoptsALostLaunchReplyWithoutStartingTwice()
+  {
+    var store = new MemoryState<SessionLedger>(); var process = new FakeProcessKeeper { LoseReply = true }; var keeper = new SessionKeeper(store, process); var definition = Definition();
+    await Assert.ThrowsAsync<IOException>(async () => await keeper.CreateAsync(definition));
+    var held = keeper.Get(definition.Id); process.Calls.Clear();
+    var reopened = await keeper.ReopenAsync(definition.Id);
+    Assert.Equal(SessionState.Running, reopened.State); Assert.Equal(held.CreationKey, reopened.CreationKey);
+    Assert.Equal("observe:" + definition.Id, Assert.Single(process.Calls)); Assert.Single(process.Leases);
+    await keeper.ReopenAsync(definition.Id); Assert.Single(process.Leases);
+  }
+
+  [Fact] public async Task ReopenNeverDuplicatesAnUnknownProcess()
+  {
+    var store = new MemoryState<SessionLedger>(); var process = new FakeProcessKeeper(); var original = new SessionKeeper(store, process); var row = await original.CreateAsync(Definition());
+    process.Observations[row.Definition.Id] = new(ProcessPresence.Unknown);
+    var keeper = new SessionKeeper(store, process); await keeper.RecoverAsync(); process.Calls.Clear();
+    var result = await keeper.ReopenAsync(row.Definition.Id);
+    Assert.Equal(SessionState.Held, result.State); Assert.Equal(row.Definition, result.Definition);
+    Assert.Equal("observe:" + row.Definition.Id, Assert.Single(process.Calls)); Assert.Single(process.Leases);
+  }
+
+  [Fact] public async Task ReopenResumesAProvenDeadConversationAndKeepsItsOutputAndIdentity()
+  {
+    var store = new MemoryState<SessionLedger>(); var process = new FakeProcessKeeper(); var original = new SessionKeeper(store, process);
+    var row = await original.CreateAsync(Definition() with { InitialPrompt = "do not send this again" }); await original.AppendOutputAsync(row.Definition.Id, "saved screen");
+    store.Value = store.Value! with { Sessions = store.Value.Sessions.Select(s => s with { State = SessionState.Held }).ToArray() };
+    process.Observations[row.Definition.Id] = new(ProcessPresence.Dead); process.Calls.Clear();
+    var keeper = new SessionKeeper(store, process); var result = await keeper.ReopenAsync(row.Definition.Id);
+    Assert.Equal(row.Definition.Id, result.Definition.Id); Assert.Equal(row.Definition.ConversationId, result.Definition.ConversationId);
+    Assert.Equal("saved screen", result.Replay); Assert.Null(result.Definition.InitialPrompt); Assert.Equal(SessionState.Running, result.State);
+    Assert.Equal(new[] { "observe:" + row.Definition.Id, "resume:" + row.Definition.Id }, process.Calls);
+  }
+
+  [Fact] public async Task ReopenDoesNotReplaceAnUnidentifiedConversationWithANewOne()
+  {
+    var store = new MemoryState<SessionLedger>(); var process = new FakeProcessKeeper(); var original = new SessionKeeper(store, process); var row = await original.CreateAsync(Definition(conversation: null));
+    store.Value = store.Value! with { Sessions = store.Value.Sessions.Select(s => s with { State = SessionState.Held }).ToArray() };
+    process.Observations[row.Definition.Id] = new(ProcessPresence.Dead); process.Calls.Clear();
+    var keeper = new SessionKeeper(store, process);
+    await Assert.ThrowsAsync<InvalidOperationException>(async () => await keeper.ReopenAsync(row.Definition.Id));
+    Assert.Equal(SessionState.Held, keeper.Get(row.Definition.Id).State); Assert.Equal("observe:" + row.Definition.Id, Assert.Single(process.Calls));
+  }
+
+  [Theory] [InlineData(false)] [InlineData(true)]
+  public async Task ForgetHeldRetainsHistoryAndNeverDropsAProcessThatMayBeAlive(bool dead)
+  {
+    var store = new MemoryState<SessionLedger>(); var process = new FakeProcessKeeper(); var original = new SessionKeeper(store, process); var row = await original.CreateAsync(Definition());
+    await original.AppendOutputAsync(row.Definition.Id, "saved output"); process.Observations[row.Definition.Id] = new(ProcessPresence.Unknown);
+    var keeper = new SessionKeeper(store, process); await keeper.RecoverAsync();
+    if (dead)
+    {
+      process.Observations[row.Definition.Id] = new(ProcessPresence.Dead); await keeper.ForgetHeldAsync(row.Definition.Id);
+      Assert.Equal(SessionState.Exited, keeper.Get(row.Definition.Id).State); Assert.Equal("saved output", keeper.Get(row.Definition.Id).Replay);
+    }
+    else
+    {
+      await Assert.ThrowsAsync<InvalidOperationException>(async () => await keeper.ForgetHeldAsync(row.Definition.Id));
+      Assert.Equal(SessionState.Held, keeper.Get(row.Definition.Id).State);
+    }
+    Assert.DoesNotContain(process.Calls, call => call.StartsWith("quit:"));
+  }
+
   [Fact] public async Task AppRestartOnlyReattachesAndKeeperRestartAdoptsTheSameLease()
   {
     var store = new MemoryState<SessionLedger>(); var process = new FakeProcessKeeper(); var keeper = new SessionKeeper(store, process); var d = Definition();

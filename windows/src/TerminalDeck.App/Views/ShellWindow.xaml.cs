@@ -68,6 +68,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     Runtime.ReceiverOutcome += message => DispatcherQueue.TryEnqueueHandled(() => Model.Notice = message);
     // A phone started watching or controlling this PC's screen: said on the PC, with where to stop it.
     Runtime.PhoneScreenNotice += message => { if (message.Length > 0) DispatcherQueue.TryEnqueueHandled(() => Model.Notice = message); };
+    Runtime.Cloud.Changed += _ => DispatcherQueue.TryEnqueue(RefreshSidebarFooter);
     Runtime.Changed += () => DispatcherQueue.TryEnqueueHandled(() => { SyncSessions(); Projects?.Model.Refresh(); Agents?.Model.Refresh(); RefreshAccountChip(); if (Runtime.TaskProblem is { } problem) Model.Notice = problem; });
     Title = Brand.Name;
     BrandLabel.Text = Brand.Name;
@@ -244,7 +245,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     PageTitle.Text = Model.Title;
     if (windowState is not null) { RefreshProjectRows(); TrackPageTab(); }
     UpdateShellNotice(Model.Notice);
-    RefreshAccountChip();
+    RefreshAccountChip(); RefreshSidebarFooter();
     EmptySidebar.Visibility = Model.Sessions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     if (proofChatVisible) return;
     if (Model.Page == ShellPage.Settings) { ShowSettingsPanel(); return; }
@@ -271,7 +272,8 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     }
     if (!sessionPanes.TryGetValue(draft.Id, out var pane))
     {
-      pane = new SessionPane(draft, dataRoot, text => Model.Notice = text, () => _ = StopSessionAsync(draft), Runtime);
+      pane = new SessionPane(draft, dataRoot, text => Model.Notice = text, () => _ = StopSessionAsync(draft), Runtime)
+      { RestartRequested = () => StartAgainHereAsync(draft), CloseEndedRequested = () => CloseDraft(draft) };
       sessionPanes.Add(draft.Id, pane);
     }
     Grid.SetColumn(pane, 0);
@@ -368,7 +370,11 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
   }
   private void Sessions_Click(object sender, RoutedEventArgs e) => Model.Page = ShellPage.Sessions;
   private void Browser_Click(object sender, RoutedEventArgs e) => Model.Page = ShellPage.Browser;
-  private void Settings_Click(object sender, RoutedEventArgs e) => ShowSettingsPanel();
+  private async void Settings_Click(object sender, RoutedEventArgs e)
+  {
+    ShowSettingsPanel();
+    if (ReferenceEquals(sender, SettingsRoute) && DevicesButton.Visibility == Visibility.Visible && settingsPanel is not null) await settingsPanel.SelectAsync("profile");
+  }
   private void SessionList_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!syncingNavigation && SessionList.SelectedItem is SessionDraft draft) SelectSessionWindow(draft); }
   private void SplitSessions_Click(object sender, RoutedEventArgs e) => SplitWindows(false);
   private void SplitBrowser_Click(object sender, RoutedEventArgs e) => SplitWindows(true);
@@ -393,7 +399,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
       ? Runtime.Sessions.FirstOrDefault(row => row.Definition.Id == live.Id && row.Definition.Provider != "shell") : null;
     var accounts = Runtime.Accounts.List(selectedDraft?.Provider);
     Func<Task>? afterClose = null;
-    var stack = new StackPanel { Spacing = 16 };
+    var stack = new StackPanel { Spacing = 4, MinWidth = 260 };
     var feedback = new TextBlock { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
     feedback.SetResourceReference(TextBlock.ForegroundProperty, "DeckSecondaryInkBrush");
     feedback.RegisterPropertyChangedCallback(TextBlock.TextProperty, (_, _) => feedback.Visibility = string.IsNullOrEmpty(feedback.Text) ? Visibility.Collapsed : Visibility.Visible);
@@ -401,11 +407,12 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     foreach (var account in accounts)
     {
       var row = new StackPanel { Spacing = 6 };
-      row.Children.Add(new TextBlock { Text = account.Name + " · " + (account.SignedIn ? account.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey ? "API key" : "Signed in" : account.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey ? "Needs key" : account.Email is null ? "Not signed in" : "Needs sign-in · Sign in again"), TextWrapping = TextWrapping.Wrap });
+      var accountName = DeckMenu.AccountName(account.Name, account.Email);
+
       var isCurrent = account.SignedIn && current?.Definition.AccountId == account.Id;
-      var button = new Button { Content = !account.SignedIn ? "Sign in" : isCurrent ? "Current account" : current is not null ? "Switch this conversation" : "Choose app default in Who uses what", IsEnabled = !isCurrent };
+      var button = new Button { Content = accountName + (isCurrent ? "   ✓" : !account.SignedIn ? "   •" : ""), IsEnabled = !isCurrent, MinHeight = 30, FontSize = 13, Padding = new(9, 0, 9, 0), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left, Style = (Style)Application.Current.Resources["DeckSidebarActionStyle"] };
       Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(button, "terminal.account." + account.Id);
-      if (!account.SignedIn) button.Content = account.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey ? "Edit API key" : account.Email is null ? "Sign in" : "Sign in again";
+      ToolTipService.SetToolTip(button, !account.SignedIn ? account.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey ? "Add or repair this API key" : "Sign in to this account" : isCurrent ? "Current account" : "Switch this conversation");
       var repairKey = new Button { Content = "Edit API key", Visibility = Visibility.Collapsed };
       repairKey.Click += (_, _) => { afterClose = () => OpenApiAccountAsync(account.Id); accountSheet?.Hide(); };
       var switchConfirmed = false;
@@ -466,7 +473,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(add, "terminal.accounts.add");
     add.Click += (_, _) => { afterClose = () => OpenAddAccountAsync(selectedDraft?.Provider ?? "claude"); accountSheet?.Hide(); };
     stack.Children.Add(add);
-    var dialog = new ContentDialog { XamlRoot = hostRoot.XamlRoot, RequestedTheme = hostRoot.ActualTheme, Title = "Switch account", Content = new ScrollViewer { Content = stack, MaxHeight = 480, HorizontalScrollMode = ScrollMode.Disabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }, CloseButtonText = "Done" };
+    var dialog = new ContentDialog { XamlRoot = hostRoot.XamlRoot, RequestedTheme = hostRoot.ActualTheme, Title = "Accounts", Background = (Microsoft.UI.Xaml.Media.Brush)ShellTheme.Resource(hostRoot, "DeckCardBrush"), CornerRadius = new(12), Content = new ScrollViewer { Content = stack, MaxHeight = 480, HorizontalScrollMode = ScrollMode.Disabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }, CloseButtonText = "Done" };
     accountSheet = dialog;
     try { await dialog.ShowAsync(); } finally { if (ReferenceEquals(accountSheet, dialog)) accountSheet = null; }
     if (afterClose is not null)

@@ -1,4 +1,5 @@
 using System.Globalization;
+using TerminalDeck.Core;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -10,7 +11,7 @@ namespace TerminalDeck.App.Views.Settings;
 // Settings > Profile, first in the list (Mac, 15 Nov): the picture centred, name and e-mail; then Personal information,
 // Sign-in and Cloud; then the account's devices, one row each (a device's own page opens from its row). Names and
 // dates, never an id or a code.
-public sealed class ProfilePage : UserControl
+public sealed partial class ProfilePage : UserControl
 {
   private readonly CloudAccountClient account;
   private readonly Action<string> open;
@@ -20,11 +21,17 @@ public sealed class ProfilePage : UserControl
   private CloudProfile? read;
   private bool working;
   private string? pressProblem;
+  private readonly ProfileDeviceActions? deviceActions;
+  private bool allDevices;
+  private readonly Dictionary<string, CancellationTokenSource> pendingRemovals = new(StringComparer.Ordinal);
+  private readonly Dictionary<string, string> deviceProblems = new(StringComparer.Ordinal);
+  private string? editingDevice;
+  private string? savedDevice;
 
   /// `alsoRemove`: what else a device's "Remove" ends (its reach to this PC: one Remove means one thing, as on the Mac).
-  public ProfilePage(CloudAccountClient account, Action<string> open, Func<string, Task>? alsoRemove = null)
+  public ProfilePage(CloudAccountClient account, Action<string> open, Func<string, Task>? alsoRemove = null, ProfileDeviceActions? deviceActions = null)
   {
-    this.account = account; this.open = open; this.alsoRemove = alsoRemove;
+    this.account = account; this.open = open; this.alsoRemove = alsoRemove; this.deviceActions = deviceActions;
     AutomationProperties.SetAutomationId(this, "settings.profile");
     Content = AccountPages.Scroll(body);
     changed = _ => DispatcherQueue.TryEnqueueHandled(Render);
@@ -58,8 +65,9 @@ public sealed class ProfilePage : UserControl
       AutomationProperties.SetAutomationId(signIn, "settings.profile.signInButton");
       signIn.Click += async (_, _) => await PressAsync(async () => { if (account.Snapshot.Phase == CloudPhase.SigningIn) account.CancelSignIn(); else await account.BeginSignInAsync(); });
       var nobody = new StackPanel { Spacing = 4, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 0) };
-      nobody.Children.Add(new PersonPicture { Width = 96, Height = 96, HorizontalAlignment = HorizontalAlignment.Center });
-      nobody.Children.Add(new TextBlock { Text = signingIn ? CloudPageText.SigningInLine : "Not signed in", FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) });
+      nobody.Children.Add(new PersonPicture { Width = 72, Height = 72, HorizontalAlignment = HorizontalAlignment.Center });
+      nobody.Children.Add(new TextBlock { Text = signingIn ? CloudPageText.SigningInLine : Brand.Name + " account", FontSize = 17, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) });
+      nobody.Children.Add(new TextBlock { Text = "Sign in once and your sessions, memory and settings are on every device you use.", FontSize = 13, MaxWidth = 380, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center });
       nobody.Children.Add(signIn);
       body.Children.Add(nobody);
       if (pressProblem is { } failed) body.Children.Add(AccountPages.Problem(failed));
@@ -71,7 +79,7 @@ public sealed class ProfilePage : UserControl
     if (profile.Picture is { } address) picture.ProfilePicture = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(address);
     AutomationProperties.SetName(picture, "Picture of " + profile.Name);
     var who = new StackPanel { Spacing = 4, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 0) };
-    who.Children.Add(picture);
+    who.Children.Add(PhotoButton(picture, profile));
     who.Children.Add(new TextBlock { Text = profile.Name, FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, Margin = new Thickness(0, 8, 0, 0) });
     if (profile.Email is { } email && email != profile.Name)
     {
@@ -86,32 +94,35 @@ public sealed class ProfilePage : UserControl
       SettingsPanel.LinkRow("Cloud", null, SettingsPanel.IconTile("", "DeckProjectBlueBrush"), CloudPageText.Account(snapshot).CloudRow, () => open("cloud"))
     ]));
 
-    // A device that joined by itself, or whose identity changed: one row each, with its one button.
-    var page = CloudPageText.For(snapshot);
-    if (page.Notices is { Count: > 0 } notices) body.Children.Add(SettingsPanel.GroupRows(notices.Select(NoticeRow)));
-
-    // Devices: one row per device, this PC first; a row opens the device's own page.
-    var devices = snapshot.DeviceRows.OrderByDescending(d => d.ThisDevice).ThenByDescending(d => d.LastSeen ?? DateTimeOffset.MinValue).ToArray();
-    if (devices.Length > 0)
+    var devices = DeviceRows();
+    if (devices.Count > 0)
     {
       body.Children.Add(SettingsPanel.GroupTitle("Devices"));
-      body.Children.Add(SettingsPanel.GroupRows(devices.Select(device =>
-        SettingsPanel.LinkRow(device.Name, AccountPages.DeviceLine(device), AccountPages.DeviceGlyph(device), null, () => open(SettingsNavigation.DevicePrefix + device.DeviceId)))));
+      var rows = devices.Take(allDevices ? devices.Count : 8).Select(DeviceRow).ToList();
+      if (devices.Count > 8)
+      {
+        var more = QuietButton(allDevices ? "Show fewer" : $"Show {devices.Count - 8} more");
+        more.Click += (_, _) => { allDevices = !allDevices; Render(); };
+        rows.Add(SettingsPanel.SettingRow("", "", more));
+      }
+      var others = devices.Where(d => !d.ThisDevice).ToArray();
+      if (others.Length >= 2)
+      {
+        var allPending = others.All(d => pendingRemovals.ContainsKey(d.DeviceId));
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
+        var signOut = QuietButton(allPending ? $"Signing out {others.Length} others…" : "Sign out of all the others");
+        signOut.IsEnabled = !allPending;
+        signOut.Click += (_, _) => QueueRemoval(others);
+        actions.Children.Add(signOut);
+        if (allPending && !others.Any(d => sentRemovals.Contains(d.DeviceId)))
+        {
+          var undo = QuietButton("Undo"); undo.Click += (_, _) => CancelRemoval(others); actions.Children.Add(undo);
+        }
+        rows.Add(SettingsPanel.SettingRow("", "", actions));
+      }
+      body.Children.Add(SettingsPanel.GroupRows(rows));
     }
     if (pressProblem is { } problem) body.Children.Add(AccountPages.Problem(problem));
-  }
-
-  private FrameworkElement NoticeRow(CloudPageNotice notice)
-  {
-    var button = new Button { Content = notice.Button, IsEnabled = !working };
-    button.Click += async (_, _) => await PressAsync(() => notice.Action == CloudNoticeAction.Remove ? RemoveAsync(notice.DeviceId) : account.TrustAgainAsync(notice.DeviceId));
-    return SettingsPanel.SettingRow(notice.Text, "", button);
-  }
-
-  private async Task RemoveAsync(string deviceId)
-  {
-    await account.RemoveJoinedDeviceAsync(deviceId);
-    if (alsoRemove is not null) await alsoRemove(deviceId);
   }
 
   private async Task PressAsync(Func<Task> press)
@@ -119,83 +130,10 @@ public sealed class ProfilePage : UserControl
     if (working) return;
     working = true; pressProblem = null; Render();
     try { await press(); }
+    catch (CloudProfileRefusal refusal) { pressProblem = refusal.Words; }
     catch (CloudTrustRefusal refusal) { pressProblem = refusal.Words; }
     catch (Exception ex) when (ex is not OutOfMemoryException) { pressProblem = "Could not finish that change. Nothing was changed."; }
-    finally { working = false; read = null; Render(); _ = ReadAsync(); }
-  }
-}
-
-// Profile > Personal information: the name and e-mail as the site gives them; the rest on the website.
-public sealed class PersonalPage : UserControl
-{
-  private const string EditAddress = "https://terminaldeck.dev/account";
-  private readonly CloudAccountClient account;
-  private readonly StackPanel body = AccountPages.Body();
-  private CloudProfile? read;
-
-  public PersonalPage(CloudAccountClient account)
-  {
-    this.account = account;
-    AutomationProperties.SetAutomationId(this, "settings.profile.personal");
-    Content = AccountPages.Scroll(body);
-    Loaded += async (_, _) => { if (AccountPages.SignedIn(account.Snapshot)) { read = await account.ProfileAsync(); Render(); } };
-    Render();
-  }
-
-  private void Render()
-  {
-    body.Children.Clear();
-    var profile = read ?? CloudProfile.FromSnapshot(account.Snapshot);
-    var rows = new List<FrameworkElement> { SettingsPanel.SettingRow("Name", "", SettingsPanel.StateText(profile.Name)) };
-    if (profile.Email is { } email) rows.Add(SettingsPanel.SettingRow("E-mail", "", SettingsPanel.StateText(email)));
-    var more = SettingsPanel.LinkRow("More on the website", null, null, null, () => _ = Windows.System.Launcher.LaunchUriAsync(new Uri(EditAddress)));
-    AutomationProperties.SetAutomationId(more, "settings.profile.edit");
-    rows.Add(more);
-    body.Children.Add(SettingsPanel.GroupRows(rows));
-  }
-}
-
-// Profile > Sign-in: the ways he signs in ("Connected" at the right; the account and date behind the info button),
-// then Sign out as its own group: the only red text on the page.
-public sealed class SignInPage : UserControl
-{
-  private readonly CloudAccountClient account;
-  private readonly StackPanel body = AccountPages.Body();
-  private CloudProfile? read;
-  private bool working;
-
-  public SignInPage(CloudAccountClient account)
-  {
-    this.account = account;
-    AutomationProperties.SetAutomationId(this, "settings.profile.signIn");
-    Content = AccountPages.Scroll(body);
-    Loaded += async (_, _) => { if (AccountPages.SignedIn(account.Snapshot)) { read = await account.ProfileAsync(); Render(); } };
-    Render();
-  }
-
-  private void Render()
-  {
-    body.Children.Clear();
-    if (!AccountPages.SignedIn(account.Snapshot))
-    {
-      body.Children.Add(SettingsPanel.GroupRows([SettingsPanel.SettingRow("Not signed in", "", null)]));
-      return;
-    }
-    var profile = read ?? CloudProfile.FromSnapshot(account.Snapshot);
-    if (profile.Ways.Count > 0)
-      body.Children.Add(SettingsPanel.GroupRows(profile.Ways.Select(way => SettingsPanel.SettingRow(way.ProviderName, CloudProfile.WayDetails(way), SettingsPanel.StateText("Connected")))));
-    var signOut = AccountPages.RedButton(CloudPageText.SignOut);
-    signOut.IsEnabled = !working;
-    AutomationProperties.SetAutomationId(signOut, "settings.profile.signOut");
-    signOut.Click += async (_, _) =>
-    {
-      if (working || !await AccountPages.ConfirmSignOutAsync(this)) return;
-      working = true; Render();
-      try { await account.SignOutAsync(); }
-      catch (Exception ex) when (ex is not OutOfMemoryException) { }
-      finally { working = false; Render(); }
-    };
-    body.Children.Add(SettingsPanel.GroupRows([SettingsPanel.SettingRow("Sign out of this PC", CloudPageText.SignOutText, signOut)]));
+    finally { working = false; Render(); _ = ReadAsync(); }
   }
 }
 
@@ -212,13 +150,14 @@ internal static class AccountPages
   internal static string DeviceLine(CloudDeviceRow device)
   {
     if (device.ThisDevice) return "This PC";
+    if (device.Trust is { CanBeTrusted: true }) return "Waiting for you";
     if (device.LastSeen is not { } seen) return "Not seen yet";
     var now = DateTimeOffset.Now;
     if (now - seen < TimeSpan.FromMinutes(5)) return "Active now";
     var day = seen.ToLocalTime().Date;
     if (day == now.Date) return "Last seen today";
     if (day == now.Date.AddDays(-1)) return "Last seen yesterday";
-    return "Last seen " + Date(seen);
+    return "Last seen " + seen.ToLocalTime().ToString(seen.Year == now.Year ? "d MMM" : "d MMM yyyy", CultureInfo.CurrentCulture);
   }
 
   internal static string Date(DateTimeOffset at) => at.ToLocalTime().ToString("d MMM yyyy", CultureInfo.CurrentCulture);
@@ -226,9 +165,7 @@ internal static class AccountPages
   // The kind of device (its platform, then its model words): a desktop, a laptop, a PC, a phone.
   internal static FrameworkElement DeviceGlyph(CloudDeviceRow device)
   {
-    var icon = new DeckIcon { Glyph = DeviceKinds.Glyph(DeviceKinds.Of(device.Platform, device.Name)), FontSize = 20, Width = 28, Height = 28, VerticalAlignment = VerticalAlignment.Center };
-    icon.SetResourceReference(Control.ForegroundProperty, "DeckSecondaryInkBrush");
-    return icon;
+    return DevicePicture.Create(device.Platform, device.Name, device.ReportedModel);
   }
 
   internal static Button RedButton(string text)

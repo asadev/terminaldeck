@@ -6,8 +6,8 @@ namespace TerminalDeck.Core.Cloud;
 // Settings > Profile (Mac, 14 Nov): picture, name, e-mail and the ways he signs in, as the site's
 // GET https://api.terminaldeck.dev/profile/v1/me gives them. Names and dates only: a way's id is
 // kept only for the site's own remove call and never shown; no code, key or account id is shown.
-public sealed record CloudSignInWay(string ProviderName, string Account, DateTimeOffset? ConnectedSince);
-public sealed record CloudProfile(string Name, string? Email, Uri? Picture, IReadOnlyList<CloudSignInWay> Ways, DateTimeOffset? MemberSince)
+public sealed record CloudSignInWay(string ProviderName, string Account, DateTimeOffset? ConnectedSince, string? Id = null, bool CanRemove = false, string? Provider = null);
+public sealed record CloudProfile(string Name, string? Email, Uri? Picture, IReadOnlyList<CloudSignInWay> Ways, DateTimeOffset? MemberSince, string? Username = null, bool UsernameCanChange = false, string? PictureSource = null, IReadOnlyList<string>? Addable = null)
 {
   public static CloudProfile Read(byte[] json)
   {
@@ -22,9 +22,10 @@ public sealed record CloudProfile(string Name, string? Email, Uri? Picture, IRea
     var ways = new List<CloudSignInWay>();
     if (root.TryGetProperty("waysToSignIn", out var list) && list.ValueKind == JsonValueKind.Array)
       foreach (var way in list.EnumerateArray().Where(w => w.ValueKind == JsonValueKind.Object))
-        ways.Add(new(Text(way, "providerName") ?? ProviderName(Text(way, "provider")), Text(way, "account") ?? "", When(way, "connectedSince")));
+        ways.Add(new(Text(way, "providerName") ?? ProviderName(Text(way, "provider")), Text(way, "account") ?? "", When(way, "connectedSince"), Text(way, "id"), way.TryGetProperty("canRemove", out var removable) && removable.ValueKind == JsonValueKind.True, Text(way, "provider")));
     var email = Text(root, "email");
-    return new(Text(root, "name") ?? email ?? "Your account", email, picture, ways, When(root, "memberSince"));
+    return new(Text(root, "name") ?? email ?? "Your account", email, picture, ways, When(root, "memberSince"), Text(root, "username"), !root.TryGetProperty("usernameCanChange", out var editable) || editable.ValueKind == JsonValueKind.True, Text(root, "pictureSource"),
+      root.TryGetProperty("addable", out var addable) && addable.ValueKind == JsonValueKind.Array ? addable.EnumerateArray().Where(v => v.ValueKind == JsonValueKind.String).Select(v => v.GetString()!).ToArray() : []);
   }
 
   public static string ProviderName(string? provider) => provider switch
@@ -61,7 +62,17 @@ public sealed partial class CloudAccountClient
       if (!Load() || saved is not { } record) return null;
       record = await RefreshTokenAsync(record, ct);
       var body = await SendAsync(HttpMethod.Get, new Uri(configuration.Endpoints.Token, "/profile/v1/me"), [], Bearer(record.Session.AccessToken), ct);
-      return CloudProfile.Read(body);
+      var profile = CloudProfile.Read(body);
+      try
+      {
+        var headers = new Dictionary<string, string>();
+        if (configuration.PublishableKey.Length > 0) headers["apikey"] = configuration.PublishableKey;
+        using var settings = JsonDocument.Parse(await SendAsync(HttpMethod.Get, new Uri(configuration.Endpoints.Token, "/auth/v1/settings"), [], headers, ct));
+        if (settings.RootElement.TryGetProperty("external", out var external))
+          profile = profile with { Addable = new[] { "github", "google", "apple" }.Where(p => external.TryGetProperty(p, out var enabled) && enabled.ValueKind == JsonValueKind.True).ToArray() };
+      }
+      catch (Exception error) when (error is CloudFailure or HttpRequestException or JsonException) { }
+      return profile;
     }
     catch (Exception ex) when (ex is CloudFailure or HttpRequestException or TaskCanceledException or JsonException && !ct.IsCancellationRequested) { return null; }
     finally { work.Release(); }

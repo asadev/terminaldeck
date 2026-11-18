@@ -61,7 +61,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
       switch (control) { case "model": _ = ShowModelsAsync(); break; case "effort": ShowEffort(); break; case "permission": ShowPermissions(); break; }
     });
     var attach = box.Attach;
-    var addMenu = new MenuFlyout();
+    var addMenu = DeckMenu.CreateFor(this);
     var photos = new MenuFlyoutItem { Text = "Add photos…" }; photos.Click += async (_, _) => await PickImagesAsync(); addMenu.Items.Add(photos);
     var editPrompt = new MenuFlyoutItem { Text = "Edit full prompt…" }; editPrompt.Click += async (_, _) => await EditFullPromptAsync(); addMenu.Items.Add(editPrompt);
     attach.Flyout = addMenu;
@@ -177,8 +177,8 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     model.Content = modelChip;
     effort.Content = ChipText(ChatAppearance.EffortName(Model.EffectiveEffort));
     effort.Visibility = Model.Snapshot.Definition.Provider is "claude" or "codex" ? Visibility.Visible : Visibility.Collapsed;
-    account.Content = ChipText(Model.AccountName);
-    ToolTipService.SetToolTip(account, Model.Accounts.Any(a => a.Id == Model.Snapshot.Definition.AccountId) ? (Model.Accounts.FirstOrDefault(a => a.Id == Model.Snapshot.Definition.AccountId)?.Email is { } email ? email + " · " : "") + "Switch account and keep this conversation" : "This saved account is unavailable. Choose an available account or open Coding AIs.");
+    account.Content = ChipText(DeckMenu.AccountName(Model.AccountName));
+    ToolTipService.SetToolTip(account, Model.Accounts.Any(a => a.Id == Model.Snapshot.Definition.AccountId) ? "Switch account and keep this conversation" : "This saved account is unavailable. Choose an available account or open Coding AIs.");
     var unresolvedApproval = Model.Rows.Any(r => r.Kind == "approval" && r.Waiting);
     var canChange = !Model.Sending && !Model.ChangingControl && !unresolvedApproval && !Model.Snapshot.Ended && !Model.Snapshot.Busy && !Model.Snapshot.Messages.Any(m => m.State == ChatMessageState.Queued || ChatSessions.Unconfirmed(Model.Snapshot, m));
     permission.Content = ChipText(ChatPermissionModes.Label(Model.ShownPermission));
@@ -472,7 +472,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
   private async Task ShowModelsAsync()
   {
     if (Model.Snapshot.Busy || Model.Snapshot.Ended) return;
-    var menu = new MenuFlyout();
+    var menu = DeckMenu.CreateFor(this);
     void Populate(IReadOnlyList<TerminalDeck.Core.Accounts.ProviderModel> choices, bool loading)
     {
       menu.Items.Clear();
@@ -498,7 +498,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
   }
   private void ShowEffort()
   {
-    var menu = new MenuFlyout();
+    var menu = DeckMenu.CreateFor(this);
     foreach (var choice in TerminalDeck.Core.Accounts.ModelEfforts.For(Model.Snapshot.Definition.Provider, Model.AvailableModels.FirstOrDefault(m => m.Id == Model.SelectedModelId)))
     {
       var item = new ToggleMenuFlyoutItem { Text = choice == "auto" ? "Automatic" : ChatAppearance.EffortName(choice), IsChecked = choice == Model.Snapshot.Definition.Options.Effort || choice == "auto" && Model.Snapshot.Definition.Options.Effort.Length == 0 };
@@ -538,10 +538,10 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
       controlFeedback.Visibility = Visibility.Visible;
       return;
     }
-    var menu = new MenuFlyout();
+    var menu = DeckMenu.CreateFor(this);
     foreach (var choice in Model.Accounts)
     {
-      var item = new ToggleMenuFlyoutItem { Text = choice.Name + (choice.SignedIn ? "" : choice.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey ? " · Needs key" : " · Needs sign-in"), IsChecked = choice.Id == Model.Snapshot.Definition.AccountId };
+      var item = new ToggleMenuFlyoutItem { Text = DeckMenu.AccountName(choice.Name) + (choice.SignedIn ? "" : choice.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey ? " · Needs key" : " · Needs sign-in"), IsChecked = choice.Id == Model.Snapshot.Definition.AccountId };
       item.Click += async (_, _) =>
       {
         if (!choice.SignedIn)

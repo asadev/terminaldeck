@@ -45,7 +45,7 @@ public static class McpCatalogue
     foreach (var spec in TerminalDeck.Core.Remote.PhoneManagementTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Hooks.ProviderHooksTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Notifications.NotificationTools.Specs) result[spec.Id] = spec;
-    foreach (var spec in TerminalDeck.Core.Cloud.CloudTools.Specs.Where(s => s.Tier == McpTier.Read)) result[spec.Id] = spec;
+    foreach (var spec in TerminalDeck.Core.Cloud.CloudTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Cloud.CloudFolderTools.Specs.Concat(TerminalDeck.Core.Cloud.CloudArtifactsTools.Specs)) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Remote.ReachAccountTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Code.CodeBackupTools.Specs) result[spec.Id] = spec;
@@ -63,6 +63,8 @@ public static class McpCatalogue
     var action = arguments.TryGetProperty("action", out var a) ? a.GetString() : null;
     return spec.Id switch
     {
+      "cloud.profile" => action == "read" ? McpTier.Read : McpTier.Alter,
+      "cloud.devices" => action == "list" ? McpTier.Read : McpTier.Alter,
       "browser.privacy" => action == "list" ? McpTier.Read : McpTier.Alter,
       "terminal.providers" => action == "list" ? McpTier.Read : action == "start" ? McpTier.Act : McpTier.Alter,
       "computers.services" => action is "look" or "controls-read" or "usage" or "account-read" or "logins" or "host-read" or "github-read" or "clipboard-read" ? McpTier.Read : action is "account-switch" or "sign-in" or "sign-out" or "host-restart" or "host-stop" or "github-connect" or "github-cancel" or "github-disconnect" or "close" or "rename" or "controls-set" or "input" or "keys" or "send" ? McpTier.Alter : McpTier.Act,

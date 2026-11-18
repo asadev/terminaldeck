@@ -78,6 +78,7 @@ public sealed class SidebarSessionRow : Grid
         text.Style = TextStyle(onAccent ? "DeckSidebarSelectionInkBrush" : text.Tag as string == "SessionSubtitle" ? "DeckSecondaryInkBrush" : "DeckInkBrush");
       }
 
+      if (child is SessionTypeIcon typeIcon) typeIcon.OnAccent = onAccent;
       if (child is SessionStatusMark status) status.OnAccent = onAccent;
       // The type icon: the secondary text colour (SR-2), white on the blue selection.
       if (child is DeckIcon icon && icon.Tag as string == "SessionType") icon.Foreground = (Brush)ShellTheme.Resource(this, onAccent ? "DeckSidebarSelectionInkBrush" : "DeckSecondaryInkBrush");
