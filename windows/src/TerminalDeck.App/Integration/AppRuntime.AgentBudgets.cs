@@ -21,7 +21,7 @@ public sealed partial class AppRuntime
     Agents.Budgets = AgentBudgets;
     Agents.LaunchPreflight = plan =>
     {
-      if (plan.Efficiency?.AddonsOff != true && plan.Efficiency?.SerializeHeavyJobs != true) return;
+      if (plan.Efficiency?.AddonsOff != true && plan.Efficiency?.SerializeHeavyJobs != true && plan.Efficiency?.Completion is not ("park" or "stop")) return;
       if (!File.Exists(Path.Combine(AppContext.BaseDirectory, "tools-bridge", "TerminalDeck.ToolBridge.exe"))) throw new IOException("The app's own tools are unavailable in this installation.");
       if (plan.Efficiency?.AddonsOff == true)
       {

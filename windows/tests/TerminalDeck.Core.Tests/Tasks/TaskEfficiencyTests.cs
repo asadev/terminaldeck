@@ -90,6 +90,7 @@ public sealed class TaskEfficiencyTests
     var applied = KeeperAgentSessionGateway.Definition(plan with { ConversationId = conversation, Efficiency = new(AddonsOff: true) });
     Assert.True(applied.AddonsOff); Assert.True(applied.RequiresDeckTools); Assert.True(applied.ResumeWithPrompt); Assert.Equal(conversation, applied.ConversationId);
     Assert.Contains("new job", applied.InitialPrompt);
+    Assert.True(KeeperAgentSessionGateway.Definition(plan with { Efficiency = new(Completion: "park") }).RequiresDeckTools);
   }
 
   [Fact]

@@ -24,7 +24,7 @@ namespace TerminalDeck.Core.Cloud;
 //   arrive and are carried back unchanged; this PC never starts work from them.
 // - A connected task system, a CRM task link and a CRM task's read-only copy (version 2 records) are not part of this
 //   PC's app yet: they wait here, kept, and are never refused.
-// - Values this PC cannot hold (a Mac's estimate, result, model, approval, budget, a goal not on this PC) are kept here
+// - Values this PC cannot hold (a Mac's estimate, result, model, approval, a goal not on this PC) are kept here
 //   exactly as they came and travel back unchanged, so an edit here never overwrites them on the Macs.
 public sealed class CloudTasksOwner : ICloudRecordOwner, ICloudDeleteOwning
 {
@@ -49,7 +49,7 @@ public sealed class CloudTasksOwner : ICloudRecordOwner, ICloudDeleteOwning
   public const string LocalPrefix = "local:";
   /// Comments travel as the Mac's notes of this kind; every other kind of note arrives as task activity.
   public const string CommentKind = "reply";
-  private static readonly string[] CarriedOnly = ["estimateMinutes", "result", "effort", "model", "decisionRequired", "tokenBudget", "hops"];
+  private static readonly string[] CarriedOnly = ["estimateMinutes", "result", "effort", "model", "decisionRequired", "hops"];
 
   private sealed class Ledger
   {
@@ -120,6 +120,9 @@ public sealed class CloudTasksOwner : ICloudRecordOwner, ICloudDeleteOwning
     {
       Labels = (CloudRecordJson.Items(v) ?? []).Select(CloudRecordJson.Text).OfType<string>().Distinct(StringComparer.Ordinal).ToImmutableArray()
     }),
+    new("tokenBudget", t => TaskExtras.Of(t).TokenBudget is { } budget ? CloudJson.From((double)budget) : null, (v, t) =>
+      v is null or CloudJson.Null ? t with { Extras = TaskExtras.Of(t) with { TokenBudget = null } }
+      : v.AsInteger is >= 0 and <= 1_000_000_000 and var amount ? t with { Extras = TaskExtras.Of(t) with { TokenBudget = amount } } : t),
     new("startDate", t => Text(t.StartDate), (v, t) => t with { StartDate = TextIn(v) }),
     new("startTime", t => Text(t.StartTime), (v, t) => t with { StartTime = TextIn(v) }),
     new("dueDate", t => Text(t.DueDate), (v, t) => t with { DueDate = TextIn(v) }),
@@ -337,13 +340,15 @@ public sealed class CloudTasksOwner : ICloudRecordOwner, ICloudDeleteOwning
     // The safe direction travels: "needs your approval" arrives; "no approval needed" never removes approval here.
     if (CloudRecordJson.Bool(CloudRecordJson.Get(cloud, "decisionRequired")) != true && CloudRecordJson.Bool(CloudRecordJson.Get(mine, "decisionRequired")) == true)
       Hold("decisionRequired", ApprovalStays);
-    if (!CloudRecordMerge.MayApply(CloudMergeClass.ShrinkField, CloudRecordJson.Get(mine, "tokenBudget"), CloudRecordJson.Get(cloud, "tokenBudget")))
+    if (!CloudRecordJson.Nullish(CloudRecordJson.Get(cloud, "tokenBudget")) && CloudRecordJson.Get(cloud, "tokenBudget")?.AsInteger is not (>= 0 and <= 1_000_000_000))
+      Hold("tokenBudget", "The token budget set on another device is not a whole number this PC can use.");
+    else if (!CloudRecordMerge.MayApply(CloudMergeClass.ShrinkField, CloudRecordJson.Get(mine, "tokenBudget"), CloudRecordJson.Get(cloud, "tokenBudget")))
       Hold("tokenBudget", BudgetStays);
 
     // Exactly what this PC will hold after the write, so the write is never sent back as a change of its own.
     var task = Taken(next, existing ?? Fresh(id, CloudRecordJson.Text(CloudRecordJson.Get(next, "title")) ?? ""));
     var planned = CloudRecordAdapter.Travelling(Row(task, Merge(carried, next), observe: false, MetaAfter(next, task), deletes.IsOpen()), Kind.Table);
-    foreach (var field in new[] { "title", "instructions", "crmStatus", "priority", "labels", "dueDate", "dueTime", "startDate", "startTime", "taskType", "goalId", "projectRef", "place" })
+    foreach (var field in new[] { "title", "instructions", "crmStatus", "priority", "labels", "dueDate", "dueTime", "startDate", "startTime", "taskType", "goalId", "projectRef", "place", "tokenBudget" })
       if (CloudRecordJson.Has(cloud, field) && !held.ContainsKey(field) && !CloudRecordAdapter.Equal(Value(planned, field), Value(cloud, field)))
         held[field] = NotHeldHere;
     return new(planned, held);

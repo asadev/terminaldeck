@@ -48,7 +48,7 @@ public sealed class KeeperAgentSessionGateway(
     var definition = new SessionDefinition(plan.SessionId, plan.Provider, plan.Folder, plan.Title, plan.AccountId, plan.AccountHome,
       ConversationId: plan.ConversationId, InitialPrompt: prompt.Length == 0 ? null : prompt, Model: plan.Model.Length == 0 ? null : plan.Model, Effort: plan.Effort is "auto" or "" ? null : plan.Effort,
       Permission: plan.Permission switch { null => null, TerminalDeck.Core.Mcp.AiPermissionMode.AcceptEdits => "acceptEdits", { } mode => mode.ToString().ToLowerInvariant() });
-    definition = definition with { ResumeWithPrompt = plan.ConversationId is not null, AddonsOff = plan.Efficiency?.AddonsOff == true, RequiresDeckTools = plan.Efficiency?.AddonsOff == true || plan.Efficiency?.SerializeHeavyJobs == true };
+    definition = definition with { ResumeWithPrompt = plan.ConversationId is not null, AddonsOff = plan.Efficiency?.AddonsOff == true, RequiresDeckTools = plan.Efficiency?.AddonsOff == true || plan.Efficiency?.SerializeHeavyJobs == true || plan.Efficiency?.Completion is "park" or "stop" };
     definition.Validate(); return definition;
   }
 }
