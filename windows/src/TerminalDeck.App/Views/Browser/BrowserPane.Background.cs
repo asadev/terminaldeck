@@ -35,9 +35,14 @@ public sealed partial class BrowserPane
     if (element.XamlRoot is not { IsHostVisible: true } xamlRoot) return false;
     var host = AppWindow.GetFromWindowId(xamlRoot.ContentIslandEnvironment.AppWindowId);
     if (!host.IsVisible || host.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized }) return false;
+    // A retained pane can keep its XamlRoot and last measured size after its
+    // workspace tab is removed. Only a chain reaching this root is on screen.
     for (DependencyObject? node = element; node is not null; node = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(node))
+    {
       if (node is FrameworkElement { Visibility: Visibility.Collapsed }) return false;
-    return element.ActualWidth > 0 && element.ActualHeight > 0;
+      if (ReferenceEquals(node, xamlRoot.Content)) return element.ActualWidth > 0 && element.ActualHeight > 0;
+    }
+    return false;
   }
   private void TrackBrowserRoot(FrameworkElement panel)
   {

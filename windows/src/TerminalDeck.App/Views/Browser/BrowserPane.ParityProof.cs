@@ -47,7 +47,8 @@ public sealed partial class BrowserPane
       Stage("bookmarks"); var bookmark = await Core.AddBookmarkAsync(tab.Profile.Id, fixture.Url, "Fixture bookmark");
       Check("bookmark round trip", Core.Bookmarks(tab.Profile.Id).Any(b => b.Id == bookmark.Id)); await Core.ShowBookmarkBarAsync(tab.Profile.Id, true);
       Stage("background"); var other = await Core.OpenAsync(fixture.Url + "next"); ObserveShellPages(); ShellSelected?.Invoke(other.Id);
-      await Wait(() => parkedPages.ContainsKey(tab.Id));
+      Stage("background-other-drawn"); await Wait(() => pageSlots.TryGetValue(other.Id, out var otherSlot) && IsDrawn(otherSlot));
+      Stage("background-original-parked"); await Wait(() => parkedPages.ContainsKey(tab.Id));
       var state = await Core.PerformAsync(tab.Id, BrowserPageAction.Read, JsonSerializer.SerializeToElement(new { selector = "h1" }));
       Check("hidden tab read", state.GetRawText().Contains("Browser parity fixture", StringComparison.Ordinal));
       await Core.PerformAsync(tab.Id, BrowserPageAction.Step, JsonSerializer.SerializeToElement(new { verb = "type", selector = "#ordinary", value = "Background typed text" }));
@@ -108,7 +109,22 @@ public sealed partial class BrowserPane
       SessionChoices = priorChoices;
       Stage("complete");
     }
-    catch (Exception ex) when (ex is not OutOfMemoryException) { errors.Add(ex.ToString()); }
+    catch (Exception ex) when (ex is not OutOfMemoryException)
+    {
+      errors.Add(ex.ToString());
+      try
+      {
+        var state = new { selected = Core.Read().SelectedTabId, parked = parkedPages.Keys.ToArray(), slots = pageSlots.Select(pair => new { id = pair.Key, drawn = IsDrawn(pair.Value), loaded = pair.Value.IsLoaded, width = pair.Value.ActualWidth, height = pair.Value.ActualHeight, root = pair.Value.XamlRoot is not null, parent = VisualTreeHelper.GetParent(pair.Value)?.GetType().Name }).ToArray() };
+        await File.WriteAllTextAsync(Path.Combine(output, "failure-state.json"), JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }));
+        if (XamlRoot?.Content is FrameworkElement frame)
+        {
+          var visible = tabs.FirstOrDefault(candidate => pageSlots.TryGetValue(candidate.Id, out var slot) && IsDrawn(slot));
+          if (visible is not null) await ProofFrameAsync(frame, visible, Path.Combine(output, "failure-frame.png")).WaitAsync(TimeSpan.FromSeconds(10));
+          else await File.WriteAllBytesAsync(Path.Combine(output, "failure-frame.png"), await RenderPngAsync(frame, (int)frame.ActualWidth, (int)frame.ActualHeight).WaitAsync(TimeSpan.FromSeconds(10)));
+        }
+      }
+      catch (Exception captureError) when (captureError is not OutOfMemoryException) { errors.Add("Failure frame: " + captureError); }
+    }
     finally
     {
       await File.WriteAllTextAsync(Path.Combine(output, "result.json"), JsonSerializer.Serialize(new { at = DateTimeOffset.UtcNow, checks, errors }, new JsonSerializerOptions { WriteIndented = true }));
