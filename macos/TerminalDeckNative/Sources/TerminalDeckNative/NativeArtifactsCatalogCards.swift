@@ -112,7 +112,9 @@ struct NativeArtifactsCatalogActions: View {
             }
         }.disabled(row.artifact.onDisk == nil || model.pendingAction != nil || row.cloudPath != nil)
         Divider()
-        Button(row.cloudPath != nil ? "Remove from all Macs" : "Delete from list", role: .destructive) { model.requestDelete(row) }.disabled(model.pendingAction != nil)
+        if NativeCloudOffers.showsArtifact(cloudOnly: row.cloudPath != nil) {
+            Button(row.cloudPath != nil ? "Remove from all Macs" : "Delete from list", role: .destructive) { model.requestDelete(row) }.disabled(model.pendingAction != nil)
+        }
     }
 }
 
@@ -121,6 +123,8 @@ struct NativeArtifactsCatalogPreview: View {
     let model: NativeArtifactsCatalogModel
     @Environment(\.dismiss) private var dismiss
     var body: some View {
+        Group {
+            if NativeCloudOffers.showsArtifact(cloudOnly: row.cloudPath != nil) {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
@@ -158,5 +162,7 @@ struct NativeArtifactsCatalogPreview: View {
                     .menuIndicator(.hidden).help("Artifact actions")
             }.padding(16)
         }.frame(width: 760, height: 560).background(NativeCatalogTokens.card)
+            }
+        }
     }
 }

@@ -199,7 +199,9 @@ final class NativeReachAccount {
     }
 
     func toolEntries() throws -> [(BackendMCPTool, BackendNativeMCPServer.Handler)] {
-        try BackendReachAccountTools.registrations(status: {
+        guard NativeCloudOffers.shows(.phoneAndWebReach) else { return [] }
+        return try BackendReachAccountTools.registrations(status: {
+            guard await MainActor.run(body: { NativeCloudOffers.shows(.phoneAndWebReach) }) else { return nil }
             guard let coordinator = await MainActor.run(body: { NativeReachAccount.shared.coordinator }) else { return nil }
             return await coordinator.status()
         })

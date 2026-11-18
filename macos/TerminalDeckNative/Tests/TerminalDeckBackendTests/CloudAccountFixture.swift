@@ -58,6 +58,12 @@ actor CloudAccountFixtureServer: BackendCloudAccountHTTP {
     let issuer = "https://issuer.example.invalid/auth/v1"
     var challenge = ""
     var used = false
+    var subscriptionCalls = 0
+    var subscriptionResponse: BackendCloudAccountResponse? = .init(status: 404, body: Data())
+    func setSubscription(_ answer: CloudSubscription?, status: Int = 200) throws {
+        subscriptionResponse = .init(status: status, body: try answer.map { try CloudWire.canonical($0) } ?? Data())
+    }
+    func subscriptionOffline() { subscriptionResponse = nil }
     var calls = 0
     var refreshes = 0
     var logouts = 0
@@ -94,6 +100,12 @@ actor CloudAccountFixtureServer: BackendCloudAccountHTTP {
     }
     func send(_ input: BackendCloudAccountRequest) async throws -> BackendCloudAccountResponse {
         guard input.url.host?.hasSuffix("example.invalid") == true else { throw CloudFailure.unsafeConfiguration }
+        if input.url.path == "/v1/subscription" {
+            subscriptionCalls += 1
+            guard input.method == "GET", input.headers["Authorization"]?.hasPrefix("Bearer ") == true else { throw CloudFailure.invalidRequest }
+            guard let subscriptionResponse else { throw URLError(.notConnectedToInternet) }
+            return subscriptionResponse
+        }
         calls += 1
         if input.url.path == "/v1/auth/exchange" {
             let request = try CloudWire.decode(CloudHandoffExchange.self, from: input.body)

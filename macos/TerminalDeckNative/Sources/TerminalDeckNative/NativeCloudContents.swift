@@ -354,6 +354,8 @@ struct NativeCloudContentsPage: View {
     var live = true
     var body: some View {
         Group {
+            if NativeCloudOffers.shows(.fileManager) {
+        Group {
             if let contents = model.model {
                 NativeCloudContentsBrowser(model: model, contents: contents)
             } else if model.signedIn {
@@ -377,6 +379,8 @@ struct NativeCloudContentsPage: View {
         // Mac tidy: the Code shelf's number (projects) is read once on opening the page, as the Code page reads it.
         .onAppear { if live { model.start(); model.code.load(refresh: false) } }
         .onDisappear { if live { model.stop() } }
+            }
+        }
     }
 }
 

@@ -7,6 +7,8 @@ struct NativeJoinRemoteDialog: View {
     let close: () -> Void
 
     var body: some View {
+        Group {
+            if NativeCloudOffers.shows(.pairing) {
         VStack(alignment: .leading, spacing: 12) {
             Text(DevicesPage.title).font(.system(size: 20, weight: .semibold))
             Text(DevicesPage.joinBySigningIn).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -18,5 +20,7 @@ struct NativeJoinRemoteDialog: View {
         }
         .padding(24).frame(width: 460)
         .sessionOnExitCommand { close() }
+            }
+        }
     }
 }

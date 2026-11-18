@@ -376,6 +376,10 @@ public final class DeckMemorySessionCenter: @unchecked Sendable {
     /// M2 FLOW (or anyone who found the CLI's own record) can tell the centre where a session's transcript is.
     public func noteTranscript(sessionID: String, path: String) { _ = update(sessionID) { $0.transcriptPath = path } }
 
+    /// The existing CLI turn-end receipt (Claude Stop hook; Codex/Gemini's working-to-quiet edge).
+    /// Consumers still read the answer from the session's own record, never from the screen or hook text.
+    public func lastTurnEndedAt(sessionID: String) -> Double? { load(sessionID)?.lastTurnAt }
+
     /// Whose memory a running session belongs to (the same stamp the turn-end signal carries). Plain when unknown.
     public func owner(sessionID: String) -> DeckMemorySessionOwner { load(sessionID)?.owner ?? .plain }
 

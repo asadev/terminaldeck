@@ -223,10 +223,16 @@ struct ReachGuestTests {
         private let lock = NSLock()
         private var _protocols: [String] = []
         private var _hello: NativeRPCValue?
+        private var _frames: [NativeRPCValue] = []
+        var welcomeText = FakeRelay.welcome
+        private let response: @Sendable (NativeRPCValue) async -> [NativeRPCValue]
         /// One sealed channel per connection (a redial is a new handshake, never fed to the last one's transport).
         private var transports: [ObjectIdentifier: BackendSealedTransport] = [:]
         private var listener: NWListener?
-        init(allowed: Data) { self.allowed = allowed }
+        init(allowed: Data, response: @escaping @Sendable (NativeRPCValue) async -> [NativeRPCValue] = { _ in [] }) {
+            self.allowed = allowed; self.response = response
+        }
+        var frames: [NativeRPCValue] { lock.withLock { _frames } }
         var protocols: [String] { lock.withLock { _protocols } }
         var hello: NativeRPCValue? { lock.withLock { _hello } }
         /// As the session host sends it: `token` is always there (null for a device that already holds its access).
@@ -275,8 +281,13 @@ struct ReachGuestTests {
             let key = ObjectIdentifier(connection)
             if let transport = lock.withLock({ transports[key] }) {
                 guard let clear = try? await transport.receive(data), let value = try? NativeRPCValue.parseJSON(clear) else { return }
-                lock.withLock { _hello = value }
-                if let sealed = try? await transport.send(Data(Self.welcome.utf8)) { send(sealed, connection) }
+                lock.withLock { _frames.append(value); if value["t"].string == "hello" { _hello = value } }
+                let replies: [NativeRPCValue]
+                if value["t"].string == "hello" { replies = [(try? NativeRPCValue.parseJSON(Data(welcomeText.utf8)))].compactMap { $0 } }
+                else { replies = await response(value) }
+                for reply in replies {
+                    if let sealed = try? await transport.send(reply.encodedJSON()) { send(sealed, connection) }
+                }
                 return
             }
             guard let answer = try? BackendSealedHost.respondRelayFrame(identity: host, frame: data, approvedKeys: [allowed]) else { connection.cancel(); return }

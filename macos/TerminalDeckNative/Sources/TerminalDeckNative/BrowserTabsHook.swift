@@ -12,6 +12,7 @@ struct BrowserTabInfo: Identifiable, Equatable {
     let title: String
     let favicon: NSImage?
     let loading: Bool
+    var needsAttention: Bool = false
 }
 
 @MainActor

@@ -51,9 +51,8 @@ struct NativeChatLimitsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if loading { ProgressView("Reading selected account limits…").padding(.horizontal, 16).padding(.top, 12) }
-            SessionChatUsagePanel(report: state.map { UsageReport.decode($0["report"].foundation) } ?? nil, provider: state?["report"]["account"]["provider"].string ?? model.reportedChatProvider ?? "")
+            SessionChatUsagePanel(report: state.map { UsageReport.decode($0["report"].foundation) } ?? nil, provider: state?["report"]["account"]["provider"].string ?? model.reportedChatProvider ?? "", checking: loading, refresh: { load(refresh: true) })
             VStack(alignment: .leading, spacing: 8) {
-                Button("Read limits") { load(refresh: true) }.disabled(loading)
                 if !model.recoveryState["retry"].isNullish {
                     Button("Retry last interrupted prompt") {
                         Task { do { _ = try await model.limitsTool("retry"); outcome = "Retry requested." } catch { outcome = error.localizedDescription } }

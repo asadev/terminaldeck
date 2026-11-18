@@ -225,7 +225,7 @@ struct CloudManagerPageTests {
         // A place with nothing in it shows no number; the left list is as wide as the Settings list.
         #expect(NativeCloudPlaces.shownCount(0) == nil && NativeCloudPlaces.shownCount(nil) == nil)
         #expect(NativeCloudPlaces.shownCount(9) == "9")
-        #expect(NativeCloudContentsBrowser.sidebarWidth == 215)
+        #expect(NativeCloudContentsBrowser.sidebarWidth == 232)
         // CM-5: marked rows put their one action where the bin buttons are; a mixed or normal selection keeps the bins.
         if case .bringBack(let rows) = NativeCloudTopBar.markedAction(selected: 2, missing: [1, 2], local: [Int]()) { #expect(rows == [1, 2]) }
         else { Issue.record("two Not on this Mac rows: Bring back") }

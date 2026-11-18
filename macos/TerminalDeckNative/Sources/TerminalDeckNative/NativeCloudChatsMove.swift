@@ -62,7 +62,9 @@ extension NativeCloudChats {
                 input.tabKey = request.sessionId
                 await uploader.owned(request.sessionId)
                 let meta = try await hooks.create(input)
-                await MainActor.run { AppModel.shared.select(meta.id) }
+                await MainActor.run {
+                    NativeSessionNames.shared.rename(tabId: meta.id, typed: request.name)
+                }
                 return meta.id
             },
             changed: { entry in
@@ -94,12 +96,13 @@ extension NativeCloudChats {
     // MARK: The page's button and the tool
 
     func switchHere(ref: String) {
+        guard NativeCloudOffers.shows(.sessionMove) else { return }
         guard let mover else { return }
-        moveNotes[ref] = nil
+        moveNotes[ref] = BackendCloudSessionMoveWords.preparing
         Task {
             let line = await mover.switchHere(ref: ref)
             let started = await mover.entry(ref: ref).map { !$0.finished } ?? false
-            if !started { moveNotes[ref] = line }
+            moveNotes[ref] = started ? nil : line
         }
     }
     func cancelMove(ref: String) {
@@ -107,23 +110,25 @@ extension NativeCloudChats {
         Task { _ = await mover.cancel(ref: ref) }
     }
     /// The page's one line for this session (nil: the plain "Runs on <machine>").
-    func moveLine(ref: String, sessionId: String?) -> (line: String, moving: Bool)? {
+    func moveLine(ref: String, sessionId: String?) -> (line: String, moving: Bool, canCancel: Bool)? {
         let entry = moves[ref] ?? sessionId.flatMap { id in moves.values.filter { $0.sessionId == id || $0.sessionId + "~left" == id }.max { $0.startedAt < $1.startedAt } }
-        if let note = moveNotes[ref], entry.map({ $0.finished }) ?? true { return (note, false) }
+        if let note = moveNotes[ref], entry.map({ $0.finished }) ?? true { return (note, note == BackendCloudSessionMoveWords.preparing, false) }
         guard let entry, let line = entry.line, !line.isEmpty else { return nil }
         // A finished line is shown once, for a while (then the page is back to its plain line).
         if entry.finished, Self.now() - (entry.lineAt ?? 0) > 6 * 3_600_000 { return nil }
-        return (line, entry.role == .taker && entry.step == .asked)
+        return (line, entry.role == .taker && !entry.finished, entry.role == .taker && entry.step == .asked && !entry.cancelAsked)
     }
 
     /// The tool's lookup: a session of another machine by its name (or its ref); nil when none or several match.
     func findOther(_ wanted: String) -> String? {
+        guard NativeCloudOffers.shows(.sessionMove) else { return nil }
         if others.contains(where: { $0.ref == wanted }) { return wanted }
         let named = others.filter { ($0.name ?? "").localizedCaseInsensitiveCompare(wanted) == .orderedSame }
         return named.count == 1 ? named[0].ref : nil
     }
     static func toolEntries() throws -> [(BackendMCPTool, BackendNativeMCPServer.Handler)] {
-        try BackendCloudSessionMoveTools.registrations(find: { wanted in await MainActor.run { NativeCloudChats.shared.findOther(wanted) } },
+        guard NativeCloudOffers.shows(.sessionMove) else { return [] }
+        return try BackendCloudSessionMoveTools.registrations(find: { wanted in await MainActor.run { NativeCloudChats.shared.findOther(wanted) } },
                                                        move: { await MainActor.run { NativeCloudChats.shared.mover } })
     }
 

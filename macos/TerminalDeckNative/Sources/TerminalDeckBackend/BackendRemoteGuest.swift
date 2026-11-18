@@ -74,6 +74,8 @@ public actor BackendRemoteGuest {
         let timeout: Task<Void, Never>
     }
     private var pending: [String: Pending] = [:]
+    private var chatRequests: [String: (id: UUID, task: Task<NativeRPCValue, Error>)] = [:]
+    private var chatWaiting = 0
     // MARK: The direct link (contract §11, the phones' client side)
     enum LinkStage: Equatable { case none, awaiting, answering, moved }
     private(set) var stage = LinkStage.none
@@ -196,7 +198,13 @@ public actor BackendRemoteGuest {
             }
             await onWelcome(platform)
             try await announceWindows(); try await announceSessions()
-            for (id, size) in attachments { _ = try? await attach(id, cols: size.cols, rows: size.rows) }
+            let kept = attachments
+            Task { [weak self] in
+                for (id, size) in kept {
+                    guard let self, await self.generation == epoch else { return }
+                    _ = try? await self.attach(id, cols: size.cols, rows: size.rows)
+                }
+            }
             // A beat every 10 s, the link given up after 30 s without an answer (Macky study, learning 9).
             heartbeat?.cancel(); heartbeat = Task { [weak self] in
                 while !Task.isCancelled { try? await Task.sleep(for: .seconds(10)); guard !Task.isCancelled else { return }; await self?.beat(epoch) }
@@ -205,6 +213,7 @@ public actor BackendRemoteGuest {
         case "sessions": sessions = value["sessions"].elements ?? []; machineRef = Self.machineHeader(value) ?? machineRef; await announce()
         case "created": if let row = BackendRemoteProtocol.remoteSession(value["session"]) { sessions.removeAll { $0["id"] == row["id"] }; sessions.append(row); await announce() }
         case "closed": sessions.removeAll { $0["id"] == value["id"] }; attachments[value["id"].string ?? ""] = nil; await announce()
+        case "attached": replaying.insert(value["id"].string ?? "")
         case "output": await onOutput(value["id"].string!, value["data"].string!, replaying.contains(value["id"].string!))
         case "status", "exit":
             let session = value["id"].string!; replaying.remove(session)
@@ -294,7 +303,7 @@ public actor BackendRemoteGuest {
             try await send(type: "window.result", fields: [.init("id", value["id"]), .init("ok", .bool(answer.ok)), .init("body", .string(answer.body))])
         } catch { try? await refuseWindow(value["id"], message: error.localizedDescription) }
     }
-    public func request(type: String, fields: [NativeRPCValue.Field], capability: String, replies: Set<String>,
+    public func request(type: String, fields: [NativeRPCValue.Field], capability: String? = nil, replies: Set<String>,
                         correlation: String = "rid", requestID: String = UUID().uuidString.lowercased(), timeoutMilliseconds: Int = 30000) async throws -> NativeRPCValue {
         try Task.checkCancellation()
         guard pending.count < 64, pending[requestID] == nil else { throw NativeRPCError(code: "machine-pending", message: "Too many remote requests are pending") }
@@ -309,13 +318,36 @@ public actor BackendRemoteGuest {
             }
         } onCancel: { Task { await self.fail(requestID, error: CancellationError()) } }
     }
+    /// Older hosts answer options by chat id only. Serialize that chat's reads/changes so the header and tools
+    /// cannot steal each other's answer or fail just because they opened together.
+    func chatOptionsRequest(type: String, fields: [NativeRPCValue.Field], chat: String) async throws -> NativeRPCValue {
+        guard chatWaiting < 64 else { throw NativeRPCError(code: "machine-pending", message: "Too many chat choices are waiting") }
+        chatWaiting += 1
+        let previous = chatRequests[chat]?.task, ticket = UUID()
+        let task = Task {
+            _ = try? await previous?.value
+            try Task.checkCancellation()
+            return try await self.request(type: type, fields: fields, capability: "chats", replies: ["chats.options"], correlation: "id", requestID: chat)
+        }
+        chatRequests[chat] = (ticket, task)
+        defer {
+            chatWaiting -= 1
+            if chatRequests[chat]?.id == ticket { chatRequests[chat] = nil }
+        }
+        return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
+
     public func attach(_ session: String, cols: Int, rows: Int) async throws -> Bool {
         guard sessions.contains(where: { $0["id"].string == session }) else { throw NativeRPCError(code: "unknown-session", message: "That remote session is not in the host's list") }
-        attachments[session] = (cols, rows); replaying.insert(session)
-        try await send(type: "attach", fields: [.init("id", .string(session)), .init("cols", .number(Double(cols))), .init("rows", .number(Double(rows)))]); return true
+        attachments[session] = (cols, rows)
+        // Wait for the same attached receipt a phone uses. Input queued behind this call cannot outrun an attach.
+        _ = try await request(type: "attach", fields: [.init("cols", .number(Double(cols))), .init("rows", .number(Double(rows))),
+            .init("rid", .string(session))], replies: ["attached"], correlation: "id", requestID: session)
+        return true
     }
     /// Sessions this Mac shows live from that machine now (a reach link idle with none is let go).
     public var attachedCount: Int { attachments.count }
+    public func isAttached(_ session: String) -> Bool { attachments[session] != nil }
     /// The `machine` header: 32 lowercase hex, else ignored.
     static func machineHeader(_ value: NativeRPCValue) -> String? {
         guard let ref = value["machine"].string, ref.utf8.count == 32, ref.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { return nil }
@@ -324,13 +356,17 @@ public actor BackendRemoteGuest {
     public func detach(_ session: String) async throws { attachments[session] = nil; replaying.remove(session); try await send(type: "detach", fields: [.init("id", .string(session))]) }
     public func input(_ session: String, data: String) async throws {
         guard attachments[session] != nil, data.utf8.count <= 1048576 else { throw NativeRPCError.invalidArguments("The remote session is not attached or the paste is too large") }
-        for chunk in BackendRemoteProtocol.chunkInput(data) { try await send(type: "input", fields: [.init("id", .string(session)), .init("data", .string(chunk))]) }
+        for chunk in BackendRemoteProtocol.chunkInput(data) { try await send(type: "input", fields: [.init("id", .string(session)), .init("rid", .string(session)), .init("data", .string(chunk))]) }
     }
-    public func resize(_ session: String, cols: Int, rows: Int) async throws { try await send(type: "resize", fields: [.init("id", .string(session)), .init("cols", .number(Double(cols))), .init("rows", .number(Double(rows)))]) }
+    public func resize(_ session: String, cols: Int, rows: Int) async throws {
+        guard attachments[session] != nil else { throw NativeRPCError.invalidArguments("The remote session is not attached") }
+        attachments[session] = (cols, rows)
+        try await send(type: "resize", fields: [.init("id", .string(session)), .init("rid", .string(session)), .init("cols", .number(Double(cols))), .init("rows", .number(Double(rows)))]) }
     private func refuseWindow(_ id: NativeRPCValue, message: String) async throws { try await send(type: "window.result", fields: [.init("id", id), .init("ok", .bool(false)), .init("body", .string(NativeRPCValue.object([.init("message", .string(message))]).compact))]) }
     /// The waiting request a host frame names by its own correlation field (`rid`, or `id` for tunnels).
     static func requestNamed(by frame: NativeRPCValue, in pending: [String: String]) -> String? {
-        pending.first { key, field in frame[field].string == key }?.key
+        if let rid = frame["rid"].string { return pending[rid] != nil ? rid : nil }
+        return pending.first { key, field in frame[field].string == key }?.key
     }
     private func expire(_ id: String) { fail(id, error: NativeRPCError(code: "machine-timeout", message: "That machine did not answer the request in time")) }
     private func fail(_ id: String, error: Error) { guard let value = pending.removeValue(forKey: id) else { return }; value.timeout.cancel(); value.continuation.resume(throwing: error) }

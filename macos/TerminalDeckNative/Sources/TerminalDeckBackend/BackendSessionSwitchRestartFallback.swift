@@ -134,7 +134,7 @@ public actor BackendSessionSwitchRestartFallback {
     public static func restartParts(manager: BackendPTYManager, lifecycle: BackendSessionLifecycleCoordinator, store: NativeStateStore,
                                     planner: BackendSessionRestorePlanner, sharedHistory: BackendSessionSwitchSharedHistory?,
                                     find: @escaping @Sendable (String) async throws -> BackendAccountProfile?,
-                                    apiCredentialAvailable: @escaping @Sendable (BackendAPIAccountRecord) -> Bool = { BackendAPIAccountKeychain.contains($0) },
+                                    apiCredentialAvailable: (@Sendable (BackendAPIAccountRecord) -> Bool)? = nil,
                                     configuration: BackendAccountConfiguration? = nil,
                                     emit: @escaping @Sendable (BackendSessionLifecycleEvent) -> Void)
         -> (plan: Plan, restart: Restart, handoverPlan: @Sendable (String, String) async throws -> BackendSessionSwitchPlan?, handover: Restart) {

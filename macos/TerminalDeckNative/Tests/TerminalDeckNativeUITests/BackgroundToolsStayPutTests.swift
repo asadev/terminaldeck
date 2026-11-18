@@ -231,8 +231,8 @@ final class BackgroundToolsStayPutTests: XCTestCase {
         let state = await page.requestMediaPlaybackState()
         XCTAssertNotEqual(state, .playing)
         XCTAssertFalse(tab.shownToPerson, "an AI's background page was never his")
-        XCTAssertNotNil(run.parkIdle[tab.id], "the quiet timer runs: after 60 s with no tool call the parking window goes")
-        XCTAssertEqual(NativeSafariRuntime.parkIdleSeconds, 60)
+        XCTAssertNotNil(tab.automation.parkingWindow, "the rendering host lasts until the tab closes")
+        XCTAssertEqual(page.configuration.preferences.inactiveSchedulingPolicy, .none)
         let (window, _) = personsWindow(showing: page)
         defer { window.close() }
         XCTAssertNil(tab.automation.parkingWindow, "his window took the page; the parking window is gone")

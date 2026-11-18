@@ -11,6 +11,8 @@ struct NativeMacReachSettings: View {
         _model = State(initialValue: model ?? (fixture ? NativeMacReach.fixture(registration: .notRegistered) : NativeMacReach.shared))
     }
     var body: some View {
+        Group {
+            if NativeCloudOffers.shows(.phoneAndWebReach) {
         Section("Access after lock or restart") {
             if model.registration != .enabled {
                 Text("Reach your Mac before sign-in").font(.headline)
@@ -54,6 +56,8 @@ struct NativeMacReachSettings: View {
         .task { if !fixture { await model.refresh() } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             if !fixture { Task { await model.refresh() } }
+        }
+            }
         }
     }
     @State private var issue: String?

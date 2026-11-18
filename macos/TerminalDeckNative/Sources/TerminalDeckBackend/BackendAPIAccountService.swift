@@ -196,7 +196,12 @@ extension BackendAPIAccountService: BackendCloudKeysAPIOwner {
         }
     }
     public func cloudKey(_ record: BackendAPIAccountRecord) async throws -> String? {
-        do { return try BackendAPIAccountKeychain.cloudRead(record) } catch { throw CloudFailure.secretsLocked }
+        do { return try BackendAPIAccountKeychain.cloudRead(record) }
+        catch let availability as BackendAPIAccountKeychain.Availability {
+            // These reasons are fixed words; a key, endpoint, account name or system error never enters the log.
+            throw CloudSecretsPlainFailure(availability.detail)
+        }
+        catch { throw CloudFailure.secretsLocked }
     }
     private func cloudExecutables() -> [URL] {
         [Bundle.main.executableURL, configuration.helperExecutable,

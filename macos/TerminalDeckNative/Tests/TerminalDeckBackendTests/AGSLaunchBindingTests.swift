@@ -32,6 +32,21 @@ private struct AGSBindingCipher: BackendAccountVaultCipher {
     func decrypt(_ blob: Data) throws -> String { String(decoding: blob.map { $0 ^ 0xa5 }, as: UTF8.self) }
 }
 final class AGSLaunchBindingTests: XCTestCase, @unchecked Sendable {
+    func testRememberedEffortComesFromTheActualPrivateLaunchNotAnInjectedDefault() throws {
+        let directory = URL(fileURLWithPath: "/fixture/private-launch")
+        let help = "--effort --settings --config"
+        let high = try BackendAGSLaunch.plan(.init(effort: "high"), privateDirectory: directory, installedHelp: help, knownServers: [])
+        XCTAssertEqual(high.appliedEffort(provider: "claude"), "high")
+        let oldCLI = try BackendAGSLaunch.plan(.init(effort: "xhigh"), privateDirectory: directory, installedHelp: "--settings", knownServers: [])
+        XCTAssertNil(oldCLI.appliedEffort(provider: "claude"))
+        for fast in [nil, true] as [Bool?] {
+            let ultra = try BackendAGSLaunch.plan(.init(effort: "ultracode", fastMode: fast), privateDirectory: directory, installedHelp: help, knownServers: [])
+            XCTAssertEqual(ultra.appliedEffort(provider: "claude"), "ultracode")
+        }
+        let codex = try BackendAGSLaunch.plan(.init(provider: "codex", effort: "medium"), privateDirectory: directory, installedHelp: help, knownServers: [])
+        XCTAssertEqual(codex.appliedEffort(provider: "codex"), "medium")
+    }
+
     func testHelpIsCachedAndRecheckDoesNotRunTheCLI() async throws {
         try await BackendFoundationTestsAccountsWithFixture { fixture in
             let account = try await fixture.create("work", provider: "codex")

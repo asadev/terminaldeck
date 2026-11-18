@@ -93,6 +93,7 @@ final class NativeArtifactsCatalogModel {
     /// another Mac), shown only once their project is on this Mac (until then they wait in the store).
     var allRows: [Row] { rows + cloudRows }
     var cloudRows: [Row] {
+        guard NativeCloudOffers.shows(.artifactCloudActions) else { return [] }
         let cloud = NativeCloudArtifacts.shared
         guard let store = cloud.owner?.store, !isFixture else { return [] }
         return Self.cloudRows(cloud.items, store: store, projects: Set(NativePROJLabels.shared.projects.map(\.id)), local: rows,
@@ -375,16 +376,20 @@ final class NativeArtifactsCatalogModel {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.writeObjects([url as NSURL])
     }
-    func showPreview(_ row: Row) { selected = row; presented = .file(row) }
+    func showPreview(_ row: Row) {
+        guard NativeCloudOffers.showsArtifact(cloudOnly: row.cloudPath != nil) else { return }
+        selected = row; presented = .file(row)
+    }
     func openSource(_ row: Row) { selected = row; presented = .source(row) }
     func send(_ row: Row, to target: String) { action("artifacts:send", row: row, extra: ["target": target]) }
-    func requestDelete(_ row: Row) { pendingDelete = row }
+    func requestDelete(_ row: Row) { if NativeCloudOffers.showsArtifact(cloudOnly: row.cloudPath != nil) { pendingDelete = row } }
     /// Lane L3 slice 2: Delete from list also removes its copy from his other Macs (into the Bin on each for 30 days).
     /// An artifact that came from the Cloud has no place in this Mac's list: only its copy is removed.
     func deleteFromList(_ row: Row) {
+        guard NativeCloudOffers.showsArtifact(cloudOnly: row.cloudPath != nil) else { return }
         let copy = cloudCopy(row)
         if row.cloudPath == nil { action("artifacts:hide", row: row) }
-        guard let copy, !isFixture else { return }
+        guard NativeCloudOffers.shows(.artifactCloudActions), let copy, !isFixture else { return }
         Task {
             let done = await NativeCloudArtifacts.shared.remove(path: copy)
             if row.cloudPath != nil {

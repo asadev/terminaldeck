@@ -29,6 +29,7 @@ final class NativeCloudSyncChoices {
     func isOn(_ kind: CloudSyncKind) -> Bool { choices.isOn(kind) }
     /// His press. Saved first; nothing is deleted on any device, either way.
     func set(_ kind: CloudSyncKind, on: Bool) {
+        guard NativeCloudOffers.shows(.syncSwitches) else { return }
         guard kind.exists, choices.isOn(kind) != on else { return }
         let next = choices.setting(kind, on: on)
         if let dataRoot { try? next.save(Self.file(dataRoot: dataRoot)) }
@@ -57,6 +58,8 @@ struct NativeCloudSyncChoicesSection: View {
     var useCloud: Binding<Bool>? = nil
     var counts: BackendCloudPageCounts? = NativeCloudPageCounts.shared.counts
     var body: some View {
+        Group {
+            if NativeCloudOffers.shows(.syncSwitches) {
         DeckSettingsGroup(CloudSyncChoices.title) {
             if let useCloud {
                 DeckSettingsToggleRow(NativeCloudSettings.useCloudToggle, info: NativeCloudSettings.useCloudNote, isOn: useCloud)
@@ -67,6 +70,8 @@ struct NativeCloudSyncChoicesSection: View {
                     NativeCloudSheetGuard.shared.pagePress { model.set(kind, on: on) }
                 }))
                 .disabled(!cloudOn)
+            }
+        }
             }
         }
     }

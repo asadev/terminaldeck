@@ -14,7 +14,7 @@ struct NativeSessionHeader: View {
 
     var body: some View {
         let header = TerminalHeader.make(info: session.info, railTitle: railItem?.title,
-                                         status: session.status ?? TerminalStatus.parse(railItem?.status), ended: session.ended)
+                                         status: session.movingHere ? .working : session.status ?? TerminalStatus.parse(railItem?.status), ended: session.ended && !session.movingHere)
         // The bar's frame is shared with the New session page (`NativeSessionBarFrame`): a change here changes it there.
         NativeSessionBarFrame {
             // A pop-out window's bar marks the title with the status dot (PopoutWindow titleMark);
@@ -25,15 +25,22 @@ struct NativeSessionHeader: View {
         } title: {
             NativeSessionTitle(title: sharedTitle(fallback: header.title), rename: renamer)
         } place: {
+            // 18 Nov (item 23): WHERE it runs, never the folder's bare name again: the project's picture and name, or a
+            // folder glyph and the path from the home folder ("~/Deck Dev").
             if !header.folderPath.isEmpty {
-                NativeFolderChip(path: header.folderPath)
+                NativeSessionWhere(path: header.folderPath, project: project)
             }
+            // 18 Nov (items 31, 34): a session on another device has the same bar; only its device's glyph and name
+            // are added here.
             if let machine = machineName {
                 if !header.folderPath.isEmpty { ChipSeparator() }
-                Text("on \(machine)")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                NativeDeviceMark(name: machine, kind: deviceKind(machine))
+                if let row = NativeCloudChats.shared.remoteRow(tabId: session.sessionId) {
+                    NativeCloudMoveLine(state: NativeCloudMoveLine.state(row: row, machine: machine,
+                        move: NativeCloudChats.shared.moveLine(ref: row.ref, sessionId: row.sessionId)),
+                        onSwitch: { NativeCloudChats.shared.switchHere(ref: row.ref) },
+                        onCancel: { NativeCloudChats.shared.cancelMove(ref: row.ref) }, inBar: true)
+                }
             }
             switch session.target {
             case .local(let id):
@@ -48,7 +55,7 @@ struct NativeSessionHeader: View {
                         .onDisappear { NativeCloudChats.shared.arrivals[id] = nil }
                 }
             case .machine:
-                NativeMachineAccountChip(session: session)
+                NativeMachineAccountChip(session: session).disabled(session.movingHere)
             case .server:
                 if !header.folderPath.isEmpty { ChipSeparator() }
                 NativeServerAccountChip(session: session)
@@ -57,8 +64,10 @@ struct NativeSessionHeader: View {
             // Model, effort and fast mode are read off a terminal's screen. A chat session keeps them under its box and
             // only its usage (plan limits, context window) up here, where it always was.
             if !session.isChat {
+                // Above the spacer's priority, so the pills are folded only when they truly do not fit.
                 NativeSessionControls(session: session)
-                    .layoutPriority(0)
+                    .disabled(session.movingHere)
+                    .layoutPriority(0.5)
             } else {
                 if NativeSessionFeatures.shared.value.usageOn {
                     NativeUsageBar(usage: session.usageState, provider: session.info?.provider ?? "claude", tight: false)
@@ -94,6 +103,7 @@ struct NativeSessionHeader: View {
         .background(NativeWindowReader { window in
             inMainWindow = window == nil || window === AppModel.shared.web.webView.window
         })
+        .overlay(alignment: .bottom) { if session.movingHere { DeckMovingLine() } }
         .overlay(alignment: .bottomTrailing) {
             NativeSessionControlsNotice(state: session.controlsState)
                 .padding(.trailing, 12)
@@ -122,12 +132,32 @@ struct NativeSessionHeader: View {
     }
 
     private func sharedTitle(fallback: String) -> String {
+        if session.movingHere, let name = NativeCloudChats.shared.remoteRow(tabId: session.sessionId)?.name, !name.isEmpty { return name }
         guard case .local = session.target else { return fallback }
         if let railItem { return SIDEBARSessionLine.title(railItem, store: SIDEBARProjectStore.shared) }
         return SIDEBARSessionLine.title(given: NativeSessionNames.shared.names[session.sessionId],
             own: SIDEBARProjectStore.shared.sessionTitles[session.sessionId] ?? session.info?.title,
             rail: fallback, folder: session.info?.cwd,
             retained: NativeSessionRailContinuity.shared.title(session.sessionId))
+    }
+
+    /// The registered project this session belongs to (the side panel's own rule), nil for an independent session or
+    /// one that runs elsewhere.
+    private var project: PROJProject? {
+        guard case .local = session.target else { return nil }
+        let store = SIDEBARProjectStore.shared
+        let registry = store.projects.isEmpty ? PROJProjects.defaults : store.projects
+        let saved = store.sessionProjects[session.sessionId]
+        let resolved = PROJProjects.resolve(projectID: saved?.projectID, folder: saved?.cwd ?? session.info?.cwd, projects: registry)
+        guard resolved != PROJProjects.independentID else { return nil }
+        return registry.first { $0.id == resolved }
+    }
+
+    /// The other device's picture: a server is a server; a machine by its reported type once one exists (SEAM,
+    /// LOGIC-HANDOFF R1), until then by what its name says.
+    private func deviceKind(_ name: String) -> DeckDeviceKind {
+        if case .server = session.target { return .server }
+        return DeckDeviceKind.resolve(reported: nil, name: name)
     }
 
     /// Which computer the session runs on, when it is not this one (`on <name>`).
@@ -210,22 +240,28 @@ struct NativeSessionTitle: View {
                 .sessionFocused($focused)
                 .onSubmit { finish(save: true) }
                 .onExitCommand { finish(save: false) }
-                .textFieldStyle(.roundedBorder)
+                // 18 Nov: the field sits exactly where the name was (same font, same 28 height); only an accent hairline
+                // appears around it, outside the layout. The bordered field pushed line two up (recording 1, 7:55).
+                .textFieldStyle(.plain)
                 .font(scale)
-                .frame(minWidth: 120, maxWidth: 280)
+                .frame(minWidth: 120, maxWidth: 280, minHeight: 28, maxHeight: 28)
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 1).padding(.horizontal, -5))
                 .accessibilityLabel("New name for \(title)")
                 .onChange(of: focused) { _, now in if !now { finish(save: true) } }
                 .onAppear { focused = true }
         } else if rename != nil {
             NativeSessionButton(action: begin) {
+                // 18 Nov: the name takes its own width. Asking for all of it squeezed the session's controls into the
+                // sliders glyph whenever the name was not being edited (recording 1, 7:45 against 7:55).
                 Text(title)
                     .font(scale)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                    .frame(minHeight: 28, alignment: .leading)
                     .contentShape(.rect)
             }
-                .buttonStyle(SIDEBARRowStyle())
+                .buttonStyle(NativeSessionTitleStyle())
                 .help("\(title) — click or F2 to rename")
                 .contextMenu { NativeSessionButton("Rename", action: begin) }
                 .focusable()
@@ -253,6 +289,31 @@ struct NativeSessionTitle: View {
     }
 }
 
+/// The session's name as a button that keeps its own width. The side panel's row style, which it wore before, asks
+/// for the full width; in the bar that starved the session's controls, so the model and effort were folded into the
+/// sliders glyph whenever the name was not being edited (recording 1, 7:45 against 7:55). Same hover tint, drawn
+/// 4 pt wider than the words without taking room.
+private struct NativeSessionTitleStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        TitleBody(configuration: configuration)
+    }
+
+    private struct TitleBody: View {
+        let configuration: ButtonStyleConfiguration
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(Color.primary)
+                .padding(.horizontal, 4)
+                .background(configuration.isPressed || hovering ? DeckTokens.cardHover : Color.clear,
+                            in: RoundedRectangle(cornerRadius: DeckTokens.Metrics.rowRadius))
+                .padding(.horizontal, -4)
+                .onHover { hovering = $0 }
+        }
+    }
+}
+
 /// `FolderTitle`: the folder the session was started in — not a menu, because a
 /// session keeps its folder for its whole life.
 struct NativeFolderChip: View {
@@ -266,5 +327,36 @@ struct NativeFolderChip: View {
             .lineLimit(1)
             .truncationMode(.middle)
             .help(SessionFolder.help(path))
+    }
+}
+
+/// Line two's first part: WHERE the session runs (Asad, 18 Nov: "it is not showing as folder location. It is just
+/// showing same as name ... it should show slash deck dev. So we know that this is running in this folder ... Or if it
+/// is a project name, then it is fine"). A project: its picture and its name. No project: a folder glyph and the path
+/// with the home folder as "~". The full path is the tooltip either way.
+struct NativeSessionWhere: View {
+    let path: String
+    var project: PROJProject? = nil
+
+    /// "/Users/asad/Deck Dev" as "~/Deck Dev"; a path outside the home folder as it is.
+    static func shownPath(_ path: String) -> String { (path as NSString).abbreviatingWithTildeInPath }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if let project {
+                ProjectLogoView(project: project, name: project.name, size: 14, onAccent: false)
+                Text(project.name)
+            } else {
+                Image(systemName: "folder").font(.system(size: 11))
+                Text(Self.shownPath(path))
+            }
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .help(SessionFolder.help(path))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(project.map { "Project \($0.name)" } ?? "Folder \(Self.shownPath(path))")
     }
 }

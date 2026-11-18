@@ -1187,7 +1187,7 @@ public enum BackendCloudSessionsRead {
         public let on: Bool?
         public let listed: Bool?
     }
-    public struct Row: Decodable, Sendable, Equatable, Identifiable {
+    public struct Row: Codable, Sendable, Equatable, Identifiable {
         public let ref: String
         public let sessionId: String?
         public let name: String?

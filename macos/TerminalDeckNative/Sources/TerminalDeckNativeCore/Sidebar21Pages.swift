@@ -37,11 +37,11 @@ public enum Sidebar21Pages {
         // by `unique`; its old id opens SHELLRoutes.overviewStandIn.
     ]
     public static func catalogue(_ state: SidebarState?) -> [Sidebar21Page] {
-        standard
+        standard.filter { CloudSubscriptionOffers.shared.showsCommand($0.id) }
     }
     /// Owner, 14 Nov review: the Cloud page exists only where this copy can use Cloud.
     public static func catalogue(_ state: SidebarState?, cloud: Bool) -> [Sidebar21Page] {
-        cloud ? standard : standard.filter { $0.id != cloudID }
+        (cloud ? standard : standard.filter { $0.id != cloudID }).filter { CloudSubscriptionOffers.shared.showsCommand($0.id) }
     }
     public static func unique(_ ids: [String], pages: [Sidebar21Page]) -> [String] {
         let allowed = Set(pages.map(\.id)); var seen = Set<String>()

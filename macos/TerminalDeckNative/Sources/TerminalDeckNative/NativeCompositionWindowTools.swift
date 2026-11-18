@@ -12,6 +12,8 @@ extension NativeCompositionProduction {
     func installWindowTools() async {
         do { try await installWindowToolsThrowing() }
         catch { NSLog("[native graph] window tools were not installed: %@", error.localizedDescription) }
+        do { try await installOvernightReviewTools() }
+        catch { NSLog("[native graph] review tools were not installed: %@", error.localizedDescription) }
         do { try await installButtonTools() }
         catch { NSLog("[native graph] native button tools were not installed: %@", error.localizedDescription) }
         do { try await installAccessToolsThrowing() }

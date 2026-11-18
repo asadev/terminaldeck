@@ -198,37 +198,29 @@ struct NativeLocalAccountChip: View {
         .help(names ? AccountChipRules.chipHelp(switching: switching, named: true, chosenName: chosenName, identityDetail: identity.detail,
                                                 switchedInPlace: info?.switchedInPlace == true)
                     : (unnamed.detail ?? ""))
-        .popover(isPresented: $open, arrowEdge: .bottom) {
-            // 15 Nov (Asad: "api accounts are not coming dropdown for coding ai"): the New session page's own menu
-            // (`NewSessionAccountMenu`) fed by the New session page's own lists (`HootSharedLists`, the call that page
-            // and Hoot read), so every account of every AI shows, API-key accounts included, by its name only, the AI's
-            // mark once in the group title, a check for the one this session runs as, an orange dot only where one
-            // needs him; then Add account. The old list kept only logins whose sign-in read as "signed in", which an
-            // API key never does. Picking one still switches this session (or, from a shell, opens a new session).
+        .deckMenu(isPresented: $open) {
+            // 15 Nov (Asad: "api accounts are not coming dropdown for coding ai"): the New session page's own lists
+            // (`HootSharedLists`, the call that page and Hoot read), so every account of every AI shows, API-key accounts
+            // included, by its name only, the AI's mark once in the group title, a check for the one this session runs
+            // as, an orange dot only where one needs him; then Add account. Picking one still switches this session (or,
+            // from a shell, opens a new session). 18 Nov: drawn in the app's own menu (DeckMenu), never an address.
             let shownCurrent = names ? currentId : nil
             let groups = SessionAccountMenu.groups(lists.menuGroups, sessionAgent: sessionAgent)
             let chosenAI = groups.first { $0.accounts.contains { $0.id == shownCurrent } }?.provider ?? sessionAgent ?? "claude"
             VStack(alignment: .leading, spacing: 0) {
-                if info?.provider == "shell" {
-                    Self.shellAccountInstructions
-                }
-                if lists.value == nil {
-                    HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Checking your accounts…") }
-                        .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.top, 6)
-                }
-                if let error { Text(error).font(.callout).foregroundStyle(.secondary).padding(8) }
-                NewSessionAccountMenu(groups: groups, chosenProvider: chosenAI, chosenAccount: shownCurrent,
-                                      pick: { provider, accountId in
-                                          guard let accountId, let account = groups.first(where: { $0.provider == provider })?
-                                              .accounts.first(where: { $0.id == accountId }) else { return }
-                                          choose(account, currentId: shownCurrent, switching: switching, blocked: blocked,
-                                                 from: names ? identity.label : unnamed.label)
-                                      },
-                                      addAccount: { NativeAccountSwitcher.addAccount(provider: sessionAgent) },
-                                      close: { open = false })
-                    .accessibilityIdentifier("session.account.menu")
+                if info?.provider == "shell" { DeckMenuNote(Self.shellAccountHelp) }
+                if lists.value == nil { DeckMenuNote("Checking your accounts…") }
+                if let error { DeckMenuNote(error) }
+                SessionAccountDeckMenu(groups: groups, chosenProvider: chosenAI, chosenAccount: shownCurrent,
+                                       pick: { provider, accountId in
+                                           guard let accountId, let account = groups.first(where: { $0.provider == provider })?
+                                               .accounts.first(where: { $0.id == accountId }) else { return }
+                                           choose(account, currentId: shownCurrent, switching: switching, blocked: blocked,
+                                                  from: names ? identity.label : unnamed.label)
+                                       },
+                                       addAccount: { NativeAccountSwitcher.addAccount(provider: sessionAgent) })
             }
-            .frame(minWidth: 260, maxWidth: 420, alignment: .leading)
+            .accessibilityIdentifier("session.account.menu")
             // Read fresh each time it opens (a key added a moment ago shows).
             .task { lists.load() }
         }
@@ -353,20 +345,18 @@ struct NativeMachineAccountChip: View {
         }
         .buttonStyle(.plain)
         .help(current == nil ? "" : named ? "Account: \(identity.label)." : "\(identity.label).")
-        .popover(isPresented: $open, arrowEdge: .bottom) {
-            // 15 Nov (DESIGN-FIXES H-5): the New session page's menu, names only; no Add account (that machine's
-            // accounts are added on that machine). Another AI's login, or a pick while one is running, does nothing.
+        .deckMenu(isPresented: $open) {
+            // 15 Nov (DESIGN-FIXES H-5): names only; no Add account (that machine's accounts are added on that
+            // machine). Another AI's login, or a pick while one is running, does nothing. 18 Nov: the app's own menu.
             let groups = SessionAccountMenu.machineGroups(accounts)
-            NewSessionAccountMenu(groups: groups, chosenProvider: current?.provider ?? "claude", chosenAccount: current?.id,
-                                  pick: { _, accountId in
-                                      guard let accountId, let account = accounts.first(where: { $0.id == accountId }) else { return }
-                                      let foreign = current?.provider != nil && account.provider != nil && account.provider != current?.provider
-                                      guard accountId != current?.id, !foreign, !busy else { return }
-                                      pick(accountId)
-                                  },
-                                  addAccount: nil,
-                                  close: { open = false })
-                .frame(minWidth: 260, alignment: .leading)
+            SessionAccountDeckMenu(groups: groups, chosenProvider: current?.provider ?? "claude", chosenAccount: current?.id,
+                                   pick: { _, accountId in
+                                       guard let accountId, let account = accounts.first(where: { $0.id == accountId }) else { return }
+                                       let foreign = current?.provider != nil && account.provider != nil && account.provider != current?.provider
+                                       guard accountId != current?.id, !foreign, !busy else { return }
+                                       pick(accountId)
+                                   },
+                                   addAccount: nil)
         }
     }
 
@@ -393,7 +383,7 @@ struct NativeMachineAccountChip: View {
                 return
             }
             if let next = answer.session, next != sessionId {
-                AppModel.shared.select("machine \(machineId) \(next)")
+                NativeMachineSessionRoute.open(tabId: MachinesRules.tabId(machineId: machineId, sessionId: next))
             }
             await read()
         }
@@ -438,38 +428,21 @@ struct NativeServerAccountChip: View {
         }
         .buttonStyle(.plain)
         .help(words.title)
-        .popover(isPresented: $open, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 2) {
-                MenuHead(text: AccountChipRules.menuHead, note: ("What picking a login does here", ServerSignIn.note))
-                if let state = signIn.menuState(serverName) {
-                    Text(state).font(.callout).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.vertical, 4)
-                }
-                ForEach(Array(signIn.logins.enumerated()), id: \.offset) { _, login in
-                    Button {
-                        open = false
-                        if case .server(let serverId, _) = session.target {
-                            NativeAccountSwitcher.shared.openServerShell(from: session.sessionId, serverId: serverId, agentId: login.agentId)
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            NativeCodingAIProviderMark(provider: login.agentId, size: 13)
-                            Text("New terminal running \(CodingAICatalog.label(login.agentId))\(login.account.map { " — \($0)" } ?? "")")
-                        }
-                        .padding(.horizontal, 8).padding(.vertical, 4).frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                }
-                Button {
-                    open = false
-                    NativeAccountSwitcher.manageAccounts()
-                } label: {
-                    Text("Manage sign-ins in Settings").padding(.horizontal, 8).padding(.vertical, 4)
-                        .frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
-                }
-                .buttonStyle(.plain)
+        .deckMenu(isPresented: $open) {
+            // What picking a login does here sits behind the title's tooltip (18 Nov: no sentence in the menu).
+            DeckMenuSection(AccountChipRules.menuHead).help(ServerSignIn.note)
+            if let state = signIn.menuState(serverName) { DeckMenuNote(state) }
+            ForEach(Array(signIn.logins.enumerated()), id: \.offset) { _, login in
+                DeckMenuRow("New terminal running \(CodingAICatalog.label(login.agentId))", detail: login.account.map(DeckAccountWords.shown),
+                            action: {
+                                if case .server(let serverId, _) = session.target {
+                                    NativeAccountSwitcher.shared.openServerShell(from: session.sessionId, serverId: serverId, agentId: login.agentId)
+                                }
+                            },
+                            icon: { NativeCodingAIProviderMark(provider: login.agentId, size: 13).frame(width: DeckMenuMetrics.icon, height: DeckMenuMetrics.icon) })
             }
-            .padding(6)
-            .frame(minWidth: 280, maxWidth: 420, alignment: .leading)
+            DeckMenuDivider()
+            DeckMenuRow("Manage sign-ins in Settings", symbol: "gearshape") { NativeAccountSwitcher.manageAccounts() }
         }
     }
 
@@ -490,6 +463,53 @@ struct NativeServerAccountChip: View {
         } catch {
             signIn = .cannot("This app could not ask that server.")
         }
+    }
+}
+
+/// "Names and dates, never ids or e-mail addresses where a name will do" (review of 18 Nov, item 15: "we don't need
+/// to show the email over here"): an account with no chosen name is shown by the part of its address before the "@",
+/// as the header's chip already is. Used by the account menus and the usage panel.
+enum DeckAccountWords {
+    static func shown(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.contains(" "), let at = trimmed.firstIndex(of: "@"), at > trimmed.startIndex else { return trimmed }
+        return String(trimmed[..<at])
+    }
+}
+
+/// The header's account menu, in the app's own menu (DeckMenu): one quiet title per AI with its mark, the accounts by
+/// name, an accent check on the one the session runs as, an orange dot only where one needs him, Add account last.
+struct SessionAccountDeckMenu: View {
+    let groups: [NewSessionAccountGroup]
+    let chosenProvider: String
+    let chosenAccount: String?
+    var pick: (_ provider: String, _ account: String?) -> Void
+    /// nil: no Add account row (a paired machine's menu: its accounts are added there).
+    var addAccount: (() -> Void)?
+
+    var body: some View {
+        ForEach(groups) { group in
+            DeckMenuSection(title: group.name) { NativeCodingAIProviderMark(provider: group.provider, size: 11) }
+            ForEach(group.accounts) { account in
+                DeckMenuRow(DeckAccountWords.shown(account.name),
+                            detail: sharesName(account, in: group) ? account.email.map(DeckAccountWords.shown) : nil,
+                            checked: group.provider == chosenProvider && account.id == chosenAccount,
+                            action: { pick(group.provider, account.id) },
+                            trailing: {
+                                if account.needsHim, let words = account.stateWords {
+                                    Circle().fill(DeckTokens.warn).frame(width: 7, height: 7).help(words).accessibilityLabel(words)
+                                }
+                            })
+            }
+        }
+        if let addAccount {
+            DeckMenuDivider()
+            DeckMenuRow("Add account", symbol: "plus", action: addAccount)
+        }
+    }
+
+    private func sharesName(_ account: NativeLandingModel.Account, in group: NewSessionAccountGroup) -> Bool {
+        group.accounts.filter { DeckAccountWords.shown($0.name).caseInsensitiveCompare(DeckAccountWords.shown(account.name)) == .orderedSame }.count > 1
     }
 }
 
@@ -550,8 +570,8 @@ struct NativeAccountSwitchNote: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .frame(maxWidth: 360, alignment: .leading)
-        .background(.regularMaterial, in: .rect(cornerRadius: 7))
-        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.separator, lineWidth: 0.5))
+        .background(DeckMenuColours.surface, in: .rect(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(DeckMenuColours.border, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.updatesFrequently)

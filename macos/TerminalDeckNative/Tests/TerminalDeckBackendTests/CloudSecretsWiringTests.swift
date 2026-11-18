@@ -18,7 +18,7 @@ struct CloudSecretsWiringTests {
     /// `standing` is this Mac's own stores as lane V's lean local-store check reports them: the fixture answers the
     /// page's question and refuses the unlock's check the way `recoverAfterVerifiedCloudUnlock()` does.
     private func made(stores: [any CloudSecretsLogicalStore] = [WiringStore(sourceId: "api", domain: .apiKey)],
-                      standing: WiringStanding = WiringStanding()) async throws -> Wired {
+                      standing: WiringStanding = WiringStanding(), log: CloudSecretsLog = .none) async throws -> Wired {
         let server = CloudSecretsFixtureServer(), client = try await CloudSecretsFixtureClient(server: server)
         let outbox = WiringOutbox(), changes = WiringCounter(), restores = WiringCounter()
         let graph = try BackendCloudSecretsGraph(recovery: client.coordinator, content: client.content, policy: client.policy,
@@ -32,7 +32,7 @@ struct CloudSecretsWiringTests {
                 case .cannotCheck(let owners): throw BackendCloudRecoveryCannotCheck(owners: owners)
                 case .notConverted(let owners): throw BackendCloudRecoveryNotConverted(owners: owners)
                 }
-            }, localStanding: { standing.get() }, changed: { changes.add() })
+            }, localStanding: { standing.get() }, changed: { changes.add() }, log: log)
         return Wired(graph: graph, client: client, outbox: outbox, changes: changes, restores: restores)
     }
     /// An account whose ports seal the graph, as the app's assembly does.
@@ -358,6 +358,39 @@ struct CloudSecretsWiringTests {
         #expect(!stillNamed)
         #expect(BackendCloudSecretsWords.state(cleared) == BackendCloudSecretsWords.on)
     }
+    @Test func oneUnreadableKindDoesNotBlameOrBlockTheOtherEightAndRetriesOnlyTheMissingRegistration() async throws {
+        let failing = WiringFlag(), lines = WiringSeen()
+        failing.set(true)
+        let healthy = BackendCloudSecretsLean.sources.filter { $0.key != "api" }.sorted { $0.key < $1.key }
+        let captures = Dictionary(uniqueKeysWithValues: healthy.map { ($0.key, WiringCounter()) })
+        let stores: [any CloudSecretsLogicalStore] = [WiringFailingStore(sourceId: "api", domain: .apiKey, failing: failing)]
+            + healthy.map {
+                WiringCountingStore(sourceId: $0.key, domain: $0.value, captures: captures[$0.key]!) as any CloudSecretsLogicalStore
+            }
+        let w = try await made(stores: stores, log: CloudSecretsLog { lines.add($0) })
+        await w.graph.perform(.setup)
+        await w.graph.syncNow()
+        await w.graph.syncNow()
+        #expect(Set(await w.outbox.joined) == Set(BackendCloudSecretsLean.sources.keys).subtracting(["api"]))
+        // Each healthy owner was read for registration, then captured on both syncs despite the unreadable API kind.
+        #expect(captures.values.allSatisfy { $0.count() >= 3 })
+        let failed = await w.graph.page()
+        #expect(failed.gapKinds == ["API keys"])
+        #expect(failed.gaps.filter { $0.hasPrefix("Not saved to Cloud from this Mac:") }.count == 1)
+        let failures = lines.all().filter { $0.contains("saving API keys did not finish") }
+        #expect(failures.count == 1)
+        #expect(lines.all().allSatisfy(CloudSecretsLog.safe))
+        failing.set(false)
+        await w.graph.syncNow()
+        let joined = await w.outbox.joined
+        #expect(joined.count == 9)
+        #expect(Set(joined).count == 9)
+        let recovered = await w.graph.page()
+        #expect(recovered.gapKinds.isEmpty)
+        #expect(!recovered.gaps.contains { $0.hasPrefix("Not saved to Cloud from this Mac:") })
+        #expect(lines.all().filter { $0.contains("saving API keys works again") }.count == 1)
+    }
+
     @Test func whatIsNotSavedIsNamedAndTheSignOutGuardReadsSavedPasswordsOwnFacts() async throws {
         let w = try await made()
         // Every source of this version that did not join is named in one plain sentence, on the page and in the tool.
@@ -454,6 +487,17 @@ private struct WiringStore: CloudSecretsLogicalStore {
     func verify(_ record: CloudSecretRecord, outcome: CloudApplyStatus) async throws -> Bool { true }
 }
 
+private struct WiringCountingStore: CloudSecretsLogicalStore {
+    let sourceId: String
+    let inventoryRow = "I13"
+    let domain: CloudSecretsDomain
+    let captures: WiringCounter
+    func capture() async throws -> [CloudSecretRecord] { captures.add(); return [] }
+    func validate(_ record: CloudSecretRecord) async throws {}
+    func merge(_ record: CloudSecretRecord) async throws -> CloudApplyStatus { .alreadyPresent }
+    func verify(_ record: CloudSecretRecord, outcome: CloudApplyStatus) async throws -> Bool { true }
+}
+
 /// A source whose capture fails while `failing` is set (review B-M2).
 private struct WiringFailingStore: CloudSecretsLogicalStore {
     let sourceId: String
@@ -518,6 +562,8 @@ private actor WiringOutbox: CloudOutboxPort {
     func contextReady(projectId: String) async throws -> CloudContextReady { throw CloudFailure.unavailable }
     func register(adapter: any CloudDomainAdapter) async throws {
         guard let secret = adapter as? CloudSecretsLogicalAdapter else { throw CloudFailure.unsupportedFormat }
+        // The real engine reads inventory before claiming a source's domain. This can fail for one store.
+        _ = try await adapter.sourceInventory()
         // As the sync core does: a second adapter for the same source is refused.
         guard !joined.contains(secret.sourceId) else { throw CloudFailure.idReused }
         joined.append(secret.sourceId)

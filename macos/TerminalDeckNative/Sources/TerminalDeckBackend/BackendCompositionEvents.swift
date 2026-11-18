@@ -38,7 +38,7 @@ public final class BackendCompositionEvents: @unchecked Sendable {
                 targetAccounts[oldID] = nil
                 try await registry.publish("session:switched", arguments: [.string(oldID), BackendCompositionSuppliers.sessionWire(meta), .string(note)])
             case .held(let rows):
-                try await registry.publish("sessions:held", arguments: [.array(rows.map(\.wireValue))])
+                try await registry.publish("sessions:held", arguments: [.array(BackendSessionRestoreCoordinator.reopenableHeld(rows).map(\.wireValue))])
             case .status(let id, let status, _):
                 try await registry.publish("session:status", arguments: [.string(id), .string(status.rawValue)])
                 await owners.0?.noteStatus(sessionID: id, status: status.rawValue)

@@ -973,7 +973,7 @@ final class NativeSimulatorModel {
             let rail = projects.flatMap(\.sessions).map { (id: $0.id, title: $0.title) }
             let servers = projects.filter { $0.id.hasPrefix("server:") }
                 .map { (name: $0.title, shells: $0.sessions.map { (tabId: $0.id, title: $0.title) }) }
-            sessions = AgentSessions.read(here, names: AgentSessions.railNames(rail), machines: machines, servers: servers)
+            sessions = AgentSessions.read(here, names: AgentSessions.railNames(rail), machines: NativeCloudOffers.shows(.remoteMachineChoices) ? machines : nil, servers: servers)
             sessionsAvailable = true
         } catch {
             sessionsAvailable = false

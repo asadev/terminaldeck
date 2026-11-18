@@ -31,6 +31,7 @@ import TerminalDeckNativeCore
     /// Shows one display of another Mac in its own window (or brings that window forward). Only for the person's own
     /// press (Open in Devices): the window never comes forward on its own (NativeFront).
     func open(machine: String, name: String, display: String, displays: [OtherMacDisplay]) {
+        guard NativeCloudOffers.shows(.remoteMachineChoices) else { return }
         let key = machine + "|" + display
         NativeFront.whenPersonActs("remote-mac:" + key) { [weak self] in
             guard let self else { return }
@@ -122,6 +123,8 @@ struct NativeOtherMacsCard: View {
     }
 
     var body: some View {
+        Group {
+            if NativeCloudOffers.shows(.remoteMachineChoices) {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Other Macs").font(.system(size: 15, weight: .semibold))
@@ -169,6 +172,8 @@ struct NativeOtherMacsCard: View {
                 .padding(.vertical, 4)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("otherMacs.\(mac.id)")
+            }
+        }
             }
         }
     }
@@ -330,6 +335,8 @@ struct NativeRemoteMacViewer: View {
     @Bindable var model: RemoteMacViewerModel
 
     var body: some View {
+        Group {
+            if NativeCloudOffers.shows(.remoteMachineChoices) {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Circle().fill(model.state == "live" ? Color.green : Color.orange).frame(width: 8, height: 8)
@@ -379,6 +386,8 @@ struct NativeRemoteMacViewer: View {
             }
         }
         .ignoresSafeArea(edges: .top)
+            }
+        }
     }
 }
 

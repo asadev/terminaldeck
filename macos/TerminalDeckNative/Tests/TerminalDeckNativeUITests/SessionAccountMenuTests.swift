@@ -64,7 +64,10 @@ import TerminalDeckNativeCore
         XCTAssertFalse(source.contains("AccountRowLine"), "the old rows (dot, mark and e-mail on every row) are gone")
         XCTAssertFalse(source.contains("readyRows("), "never only the logins that read as signed in")
         XCTAssertFalse(source.contains("Text(email)"), "no e-mail line under each row")
-        XCTAssertEqual(source.components(separatedBy: "NewSessionAccountMenu(").count - 1, 2, "the session's and a paired machine's menu")
+        // 18 Nov (review items 8, 17): the same lists and the same picks, drawn in the app's own menu (DeckMenu) instead of
+        // the New session page's rows inside Apple's popover.
+        XCTAssertEqual(source.components(separatedBy: "SessionAccountDeckMenu(").count - 1, 2, "the session's and a paired machine's menu")
+        XCTAssertFalse(source.contains(".popover("), "no stock popover on the session's account chips")
     }
 
     func testThePairedMachineMenuIsNamesOnlyByAI() {

@@ -74,10 +74,16 @@ public actor BackendHOSTDeferredSwitch {
     init(operations: Operations, changed: @escaping @Sendable (Event) -> Void) { self.operations = operations; self.changed = changed }
 
     public func request(sessionID: String, targetID: String, status: BackendSessionStatus, deferUntilIdle: Bool) async throws -> Row {
-        guard !stopped, pending[sessionID] == nil, work[sessionID] == nil, entrants.insert(sessionID).inserted else {
+        guard !stopped, work[sessionID] == nil, entrants.insert(sessionID).inserted else {
             throw BackendSessionFailure.unsupported("This session is already changing account, or the app is closing. Try again in a moment.")
         }
         defer { _ = entrants.remove(sessionID) }
+        guard pending[sessionID] == nil || pending[sessionID]?.row.phase == .queued || pending[sessionID]?.row.phase == .awaitingReread else {
+            throw BackendSessionFailure.unsupported("This session is applying an account change. Try again in a moment.")
+        }
+        if deferUntilIdle, status == .working, pending[sessionID]?.applied == true {
+            throw BackendSessionFailure.unsupported("The earlier account change is waiting for the agent to read it. Choose Switch now to replace it.")
+        }
         await attachObservers()
         guard let meta = operations.sessions().first(where: { $0.id == sessionID && $0.exitCode == nil }),
               let pid = operations.pid(sessionID) else { throw BackendSessionFailure.missingSession }
@@ -96,15 +102,25 @@ public actor BackendHOSTDeferredSwitch {
         if let directory = seat.storeDirectory { try validateDirectory(directory) }
         let sequence = await operations.sequence(), phase: Row.Phase = deferUntilIdle && status == .working ? .queued : .applying
         guard !stopped, operations.pid(sessionID) == pid else { throw BackendSessionFailure.closed }
-        let row = Row(sessionID: sessionID, pid: pid, targetID: target.id, targetName: target.name, previousID: previous,
+        // Credential evidence may have arrived during the reads above; use the pending state now.
+        let previousChange = pending[sessionID]
+        let row = Row(sessionID: sessionID, pid: pid, targetID: target.id, targetName: target.name, previousID: previousChange?.row.previousID ?? previous,
             phase: phase, requestedAt: Date(), afterSequence: sequence)
-        pending[sessionID] = Pending(token: UUID(), row: row, target: target, seat: seat, directory: seat.storeDirectory)
+        pending[sessionID] = Pending(token: UUID(), row: row, target: target, seat: seat, directory: seat.storeDirectory,
+            nudge: previousChange?.nudge)
         changed(.pending(row))
         if phase == .queued { return row }
         refusals[sessionID] = nil
         if let done = await launchWork(sessionID) { return done }
         // 13 Oct: a refused switch said "Switched to …" and then quietly went back. It says why instead.
-        if let why = refusals.removeValue(forKey: sessionID) { throw BackendSessionFailure.unsupported(why) }
+        if let why = refusals.removeValue(forKey: sessionID) {
+            // A failed later pick leaves the earlier, already-served login waiting for its proof.
+            if let previousChange, operations.pid(sessionID) == previousChange.row.pid, pending[sessionID] == nil {
+                pending[sessionID] = previousChange
+                changed(.pending(previousChange.row))
+            }
+            throw BackendSessionFailure.unsupported(why)
+        }
         return row
     }
     public func noteStatus(sessionID: String, status: BackendSessionStatus) async {
@@ -188,7 +204,7 @@ public actor BackendHOSTDeferredSwitch {
         case .switched(let nudged, let path, _):
             let nudge = nudged == .created ? path.flatMap { nudgeIdentity($0, directory: value.directory) } : nil
             guard var actual = pending[id], actual.token == token, operations.pid(id) == actual.row.pid else { clearNudge(nudge); return nil }
-            actual.applied = true; actual.nudge = nudge; actual.row.phase = actual.cancelRequested ? .cancelling : .awaitingReread
+            actual.applied = true; actual.nudge = nudge ?? actual.nudge; actual.row.phase = actual.cancelRequested ? .cancelling : .awaitingReread
             pending[id] = actual
             if actual.cancelRequested {
                 do { try await revert(actual) } catch { changed(.failed(sessionID: id, message: "The account change could not yet be reverted. It remains pending.")) }

@@ -243,11 +243,13 @@ final class SettingsWindowTests: XCTestCase {
     }
 
     /// Item 6: one left edge for every device row's name and one right edge for every state.
-    /// 15 Nov: every device row is the kit's link row (one 28 pt picture column, one chevron column).
+    /// 18 Nov: every device row is `NativeDeviceRow` (one 28 pt picture column, one "…" column); the group's hairlines
+    /// start at the names' left edge.
     func testDeviceRowsShareTheirEdges() throws {
         let page = try source("NativeDevicesSettings.swift")
-        XCTAssertTrue(page.contains(".frame(width: DeckSettingsLook.deviceGlyph, height: DeckSettingsLook.deviceGlyph)"))
-        XCTAssertTrue(page.contains("DeckSettingsLinkRow(title: row.name"))
+        XCTAssertTrue(page.contains("NativeDeviceGlyph(model: NativeDeviceModel.of(row), size: DeckSettingsLook.deviceGlyph)"))
+        XCTAssertTrue(page.contains("DeckSettingsGroup(title, separatorInset: NativeDeviceRow.textInset)"))
+        XCTAssertEqual(NativeDeviceRow.textInset, DeckSettingsLook.rowPadding + DeckSettingsLook.deviceGlyph + 10)
     }
 
     // MARK: Devices: one place
@@ -355,8 +357,10 @@ final class SettingsWindowTests: XCTestCase {
         let body = String(bar[start.upperBound..<end.lowerBound])
         XCTAssertTrue(body.contains("SidebarProfileButton("))
         XCTAssertTrue(body.contains("Image(systemName: \"gearshape\")"))
-        XCTAssertFalse(body.contains("Label(\"Settings\", systemImage"), "no word Settings")
-        XCTAssertFalse(body.contains("Text(\"Settings\")"), "no word Settings")
+        // 18 Nov (Asad, review item 14: "until somebody do not sign in, here it can stay and settings icon"): with nobody
+        // signed in the bar is only the gear WITH its word; signed in it stays his picture, his name and the bare gear.
+        XCTAssertFalse(body.contains("Label(\"Settings\", systemImage"), "no stock label")
+        XCTAssertEqual(body.components(separatedBy: "Text(\"Settings\")").count - 1, 1, "the word Settings only where nobody is signed in")
         XCTAssertFalse(body.contains("laptopcomputer.and.iphone"), "no devices icon")
         XCTAssertTrue(body.contains("NativeSettingsNavigation.profileID"))
         XCTAssertTrue(body.contains("\"Sign in\""))

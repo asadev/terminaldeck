@@ -72,7 +72,7 @@ public actor BackendSessionLifecycleRPC {
             return try await deferred.arm(sessionID: sessionID, accountID: accountID)
         case "session:switch-cancel": try await deferred.cancel(sessionID: try id(0)); return .null
         case "session:switch-armed": return .array(try await deferred.list().map(\.wireValue))
-        case "sessions:held": return .array(try await store.heldSessions().map(\.wireValue))
+        case "sessions:held": return .array(BackendSessionRestoreCoordinator.reopenableHeld(try await store.heldSessions()).map(\.wireValue))
         case "session:held-retry":
             return try await Self.retryHeld(restore: restore, args: args)
         case "session:held-forget": return .array(try await restore.forgetHeld(id(0)).map(\.wireValue))

@@ -126,7 +126,7 @@ private actor HeldActionStarter: BackendRestoreSessionStarting {
         try await renderVisibleReason(firstPanel, id: visibleRow.id, reason: visibleRow.statusText, dark: false,
             name: historyRemoved ? "history-initial" : "login-initial", press: true)
         await actions.waitForRestartFixture()
-        XCTAssertNil(actions.problem)
+        XCTAssertTrue(actions.problem?.contains("Add it again with its original name") == true)
         XCTAssertEqual(model.tabs?.activeID, currentID)
         XCTAssertEqual(model.visibleTabs?.activeID, currentID)
         XCTAssertEqual(model.currentScreen?.id, currentID)
@@ -142,7 +142,7 @@ private actor HeldActionStarter: BackendRestoreSessionStarting {
         XCTAssertFalse(model.tabs?.tabs.contains { $0.id.hasPrefix("held:") } ?? true)
         let failed = try await state.heldSessions()
         XCTAssertEqual(failed.first?.saved, saved)
-        XCTAssertTrue(failed.first?.reason.contains("Add it again with its original name in Settings › Coding AIs, then press Retry.") == true)
+        XCTAssertTrue(failed.first?.reason.contains("Add it again with its original name in Settings › Coding AIs, then press Reopen.") == true)
         let before = await starter.inputs
         XCTAssertTrue(before.isEmpty)
         let savedRows = await state.getOpenSessions()
@@ -151,7 +151,7 @@ private actor HeldActionStarter: BackendRestoreSessionStarting {
         XCTAssertEqual(readded.id, removed.id)
         let secondPanel = try await visiblePanel()
         let retryRow = try XCTUnwrap(secondPanel.heldRows.first)
-        XCTAssertTrue(retryRow.statusText.contains("then press Retry"))
+        XCTAssertTrue(retryRow.statusText.contains("then press Reopen"))
         for dark in [false, true] {
             try await renderVisibleReason(secondPanel, id: retryRow.id, reason: retryRow.statusText, dark: dark,
                 name: historyRemoved ? "history" : "login", press: dark)
@@ -196,10 +196,9 @@ private actor HeldActionStarter: BackendRestoreSessionStarting {
         host.layoutSubtreeIfNeeded()
         let nodes = accessibilityNodes(host)
         let button = try XCTUnwrap(nodes.first { string($0, "accessibilityIdentifier") == "restart-held-retry-" + id }, "The production panel must render Retry")
-        XCTAssertTrue(nodes.contains {
-            string($0, "accessibilityIdentifier") == "restart-held-reason-" + id &&
-                [string($0, "accessibilityLabel"), string($0, "accessibilityValue")].compactMap { $0 }.contains(reason)
-        }, "The reason must be visible text, not a tooltip on a hidden row")
+        // 18 Nov (Asad, review item 10; DESIGN-shell §2): a not-reopened session is ONE quiet line. Its reason is the
+        // row's own explanation (the tooltip, and the help VoiceOver reads), no longer two more lines of text.
+        XCTAssertEqual(string(button, "accessibilityHelp"), reason, "The reason must be on the row itself")
         let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: bitmap)
         let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))

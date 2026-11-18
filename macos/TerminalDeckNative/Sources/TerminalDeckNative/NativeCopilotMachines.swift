@@ -33,7 +33,8 @@ final class NativeCopilotMachinesModel {
 
     /// The chosen machine, or nil when it has gone (the page then goes back to this one, id "").
     func machine(_ id: String) -> CopilotMachineRow? {
-        machines.first { $0.id == id }
+        guard id.isEmpty || NativeCloudOffers.shows(.remoteMachineChoices) else { return nil }
+        return machines.first { $0.id == id }
     }
 }
 
@@ -44,6 +45,8 @@ struct NativeCopilotMachines: View {
     private let model = NativeCopilotMachinesModel.shared
 
     var body: some View {
+        Group {
+            if NativeCloudOffers.shows(.remoteMachineChoices) {
         Group {
             if model.machines.count >= 2 {
                 HStack(spacing: 6) {
@@ -79,6 +82,8 @@ struct NativeCopilotMachines: View {
         .onChange(of: model.machines) { _, rows in
             if !chosen.isEmpty, !rows.contains(where: { $0.id == chosen }) { chosen = "" }
         }
+            }
+        }
     }
 }
 
@@ -89,6 +94,8 @@ struct NativeRemoteCopilot: View {
     @State private var model = NativeRemoteCopilotModel()
 
     var body: some View {
+        Group {
+            if NativeCloudOffers.shows(.remoteMachineChoices) {
         Group {
             switch machine.reach {
             case .unreachable:
@@ -118,6 +125,8 @@ struct NativeRemoteCopilot: View {
             if old.id != new.id || old.open != new.open { model.attach(new) }
         }
         .onDisappear { model.detach() }
+            }
+        }
     }
 
     private var conversation: some View {

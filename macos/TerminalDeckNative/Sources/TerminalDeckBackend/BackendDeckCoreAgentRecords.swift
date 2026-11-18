@@ -12,6 +12,7 @@ public struct BackendDeckCoreAgentRecord: Sendable {
     public let fromByte: Double
     /// {id, role ("user" | "agent"), at, text, truncated}, oldest first, from `fromByte` on.
     public let messages: [NativeRPCValue]
+    public var completedAt: Double? = nil
 
     /// The same fields as a Claude transcript match, so every caller reads it alike.
     public var match: NativeRPCValue {
@@ -102,7 +103,10 @@ public enum BackendDeckCoreAgentRecords {
               let target = try? await locate(id) else { return nil }
         let canonical = NativeTranscriptPaths.canonical(target.path)
         guard target.roots.contains(where: { NativeTranscriptPaths.isDescendant(canonical, of: NativeTranscriptPaths.canonical($0)) }) else { return nil }
-        let bytes = ((try? FileManager.default.attributesOfItem(atPath: canonical))?[.size] as? NSNumber)?.doubleValue ?? 0
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: canonical),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber else { return nil }
+        let bytes = size.doubleValue
         let fromByte = provider == "gemini" ? 0 : max(0, bytes - Double(max(0, windowBytes)))
         guard windowBytes > 0 else { return .init(provider: provider, target: target, bytes: bytes, fromByte: fromByte, messages: []) }
         let source = DeckMemoryFlowRecordTarget(path: target.path, roots: target.roots, provider: provider, conversation: id)
@@ -117,6 +121,6 @@ public enum BackendDeckCoreAgentRecords {
             return .object([.init("id", .string(piece.key)), .init("role", .string(role)), .init("at", .number((piece.at?.timeIntervalSince1970 ?? 0) * 1_000)),
                 .init("text", .string(piece.text)), .init("truncated", .bool(false))])
         }
-        return .init(provider: provider, target: target, bytes: bytes, fromByte: fromByte, messages: messages)
+        return .init(provider: provider, target: target, bytes: bytes, fromByte: fromByte, messages: messages, completedAt: read.completedAt.map { $0.timeIntervalSince1970 * 1_000 })
     }
 }

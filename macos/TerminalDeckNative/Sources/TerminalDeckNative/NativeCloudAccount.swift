@@ -57,6 +57,7 @@ final class NativeCloudAccount {
     /// The status line's "Sync now": one full pass (fetch what the Cloud holds, then send what this Mac holds), the
     /// same as Settings → Cloud's. Pressed again while it runs, nothing new starts (here, and in the account's gate).
     func syncNow() {
+        guard snapshot.subscription.offers(.syncSwitches) else { return }
         guard let service, !syncingNow, snapshot.phase == .signedIn else { return }
         syncingNow = true
         Task {
@@ -83,9 +84,17 @@ final class NativeCloudAccount {
     /// Mac's own sign-in), plus the ways the live site can add now. nil until read, or when it could not be read: the
     /// page then shows what the saved sign-in knows, never an error.
     struct AccountProfile: Equatable, Sendable {
-        struct Way: Equatable, Sendable { let provider: String; let providerName: String; let account: String? }
+        struct Way: Equatable, Sendable {
+            let provider: String; let providerName: String; let account: String?
+            /// The service's handle for removing this way (`DELETE /me/ways/<id>`); never shown. nil = it gave none.
+            var id: String? = nil
+            /// The service says this way may be removed now (never the last one); nil = it did not say.
+            var canRemove: Bool? = nil
+        }
         var name: String?
         var username: String?
+        /// The service says the username may be changed now (not while it is in the address of his Store listings).
+        var usernameCanChange = true
         var email: String?
         var picture: URL?
         var ways: [Way]
@@ -107,11 +116,15 @@ final class NativeCloudAccount {
         }
         let ways = (object["waysToSignIn"] as? [[String: Any]] ?? []).compactMap { way -> AccountProfile.Way? in
             guard let provider = (way["provider"] as? String)?.lowercased(), !provider.isEmpty else { return nil }
-            return .init(provider: provider, providerName: way["providerName"] as? String ?? "", account: way["account"] as? String)
+            let id = (way["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .init(provider: provider, providerName: way["providerName"] as? String ?? "", account: way["account"] as? String,
+                         id: id?.isEmpty == false ? id : nil, canRemove: way["canRemove"] as? Bool)
         }
         let picture = text("picture").flatMap(URL.init(string:)).flatMap { $0.scheme == "https" && $0.host == "api.terminaldeck.dev" ? $0 : nil }
-        return AccountProfile(name: text("name"), username: text("username"), email: text("email"), picture: picture, ways: ways,
-                              pictureSource: picture == nil ? nil : text("pictureSource")?.lowercased())
+        var profile = AccountProfile(name: text("name"), username: text("username"), email: text("email"), picture: picture, ways: ways,
+                                     pictureSource: picture == nil ? nil : text("pictureSource")?.lowercased())
+        profile.usernameCanChange = object["usernameCanChange"] as? Bool ?? true
+        return profile
     }
     /// From the sign-in service's settings (`external.<provider> == true`), the known ways switched on.
     nonisolated static func switchedOnWays(_ data: Data) -> [String] {
@@ -239,6 +252,59 @@ final class NativeCloudAccount {
         case .unreachable: accountProfile = before; profileProblem = Self.nameUnsaved
         }
         return false
+    }
+
+    // MARK: Username and ways to sign in, in place (owner, 18 Nov, items 26 and 28: "Just give everything here and
+    // editable directly from here, not from website"; "Sign-ins should be able to control here, not just look at them")
+    // The gateway's existing calls with this Mac's own sign-in: `PATCH /profile/v1/me` with `username`,
+    // `DELETE /profile/v1/me/ways/<id>`. Both answer the new profile; a refusal is the service's own sentence.
+
+    nonisolated static let usernameLimit = 40
+    nonisolated static let usernameUnsaved = "Could not save your username. Check your connection."
+    nonisolated static let wayUnremoved = "Could not disconnect it. Check your connection."
+    nonisolated static func wayURL(_ id: String) -> URL {
+        profileURL.appendingPathComponent("ways").appendingPathComponent(id)
+    }
+    /// What goes to the account as a username: no "@" in front, no spaces around, at most 40 characters (the service
+    /// lower-cases and checks the rest and answers its own sentence).
+    nonisolated static func cleanedUsername(_ typed: String) -> String {
+        var text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        while text.hasPrefix("@") { text.removeFirst() }
+        return String(text.prefix(usernameLimit))
+    }
+    /// Enter or clicking away on his username. Answers nil when the account took it (or nothing changed), else the ONE
+    /// sentence to show: the service's own ("That username is taken.") or the no-connection line. The page keeps the
+    /// old username until the account answers (the service cleans what was typed, so it is never shown ahead).
+    func saveProfileUsername(_ typed: String) async -> String? {
+        guard let before = accountProfile, !profileSaving else { return Self.usernameUnsaved }
+        let username = Self.cleanedUsername(typed)
+        guard username != (before.username ?? "") else { return nil }
+        let owner = service
+        profileEdits &+= 1; profileProblem = nil; profileSaving = true
+        defer { profileSaving = false }
+        let body = try? JSONSerialization.data(withJSONObject: ["username": username])
+        let answer = await profileCall("PATCH", Self.profileURL, body: body, type: "application/json")
+        guard service === owner else { return Self.usernameUnsaved }
+        switch answer {
+        case .profile(let profile): took(profile, over: before); return nil
+        case .refused(let message): return message
+        case .unreachable: return Self.usernameUnsaved
+        }
+    }
+    /// "Disconnect" on a way to sign in (after its 5-second Undo): the account removes it. nil = removed, else the one
+    /// sentence to show (the service refuses the last way: "This is your only way to sign in …").
+    func removeSignInWay(_ id: String) async -> String? {
+        guard let before = accountProfile, !profileSaving, !id.isEmpty else { return Self.wayUnremoved }
+        let owner = service
+        profileEdits &+= 1; profileSaving = true
+        defer { profileSaving = false }
+        let answer = await profileCall("DELETE", Self.wayURL(id), body: nil, type: nil)
+        guard service === owner else { return Self.wayUnremoved }
+        switch answer {
+        case .profile(let profile): took(profile, over: before); return nil
+        case .refused(let message): return message
+        case .unreachable: return Self.wayUnremoved
+        }
     }
 
     /// A picture he chose (file) or dropped (file or picture data): cropped to the middle square, drawn upright at
@@ -370,7 +436,7 @@ final class NativeCloudAccount {
             lastRenewRequest = now
             Task { await service.renewIfDue() }
         }
-        return snapshot.visible(at: 0)
+        return snapshot.subscription.offers(.settingsCloud, existing: snapshot.visible(at: 0))
     }
     init() {}
     func arm(_ activate: @escaping @MainActor () async -> BackendCloudAccount?, dormant: Bool = false) { activation = activate; armedDormant = dormant }
@@ -386,6 +452,7 @@ final class NativeCloudAccount {
         if let wake { NSWorkspace.shared.notificationCenter.removeObserver(wake) }; wake = nil
         path?.cancel(); path = nil
         stopDeviceWatch()
+        NativeCloudDisplayGate.shared.subscription(.init())
         NativeCloudDisplayGate.shared.set(false)
     }
     /// How often the device list is asked while signed in: about once a minute with the Cloud page open, every five
@@ -422,6 +489,7 @@ final class NativeCloudAccount {
     }
     /// Asks the account whether its device list changed, at most once per `minimumGap`. Never while signed out.
     func checkDevices(minimumGap: UInt64) {
+        guard snapshot.subscription.offers(.devices) else { return }
         guard let service, snapshot.phase == .signedIn || snapshot.phase == .paused else { return }
         let now = monotonic()
         guard lastDeviceCheck == 0 || now &- lastDeviceCheck >= minimumGap else { return }
@@ -437,6 +505,9 @@ final class NativeCloudAccount {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(15))
                 guard !Task.isCancelled, let self else { return }
+                if let service, snapshot.phase != .signedOut, snapshot.phase != .signingIn {
+                    await service.refreshSubscriptionIfDue()
+                }
                 if Self.deviceCheckDue(phase: snapshot.phase, pageOpen: pageOpen, sinceLast: monotonic() &- lastDeviceCheck) {
                     checkDevices(minimumGap: 0)
                 }
@@ -533,7 +604,8 @@ final class NativeCloudAccount {
                 }
                 // Page-names 3: a published snapshot carries a current read of this Mac's progress.
                 if !progressRead { progressRead = true }
-                NativeCloudDisplayGate.shared.set(visible)
+                NativeCloudDisplayGate.shared.subscription(value.subscription)
+                NativeCloudDisplayGate.shared.set(snapshot.visible(at: 0))
                 // R1: a trust sheet closes when the device list it was drawn from changes.
                 NativeCloudTrustSheets.shared.deviceListChanged(value.trust)
                 // Profile edit in place: the side panel's name and picture are the account's from the first status on.
@@ -770,6 +842,7 @@ final class NativeCloudAccount {
         return true
     }
     func change(_ action: String) {
+        guard action == "signout" || action == "refresh" || snapshot.subscription.offers(.syncSwitches) else { return }
         guard let service else { return }
         busy = true; notice = nil
         Task {
@@ -913,7 +986,7 @@ final class NativeCloudAccount {
         return false
     }
     #if DEBUG
-    func fixture(_ snapshot: CloudAccountSnapshot) { self.snapshot = snapshot; NativeCloudDisplayGate.shared.set(visible) }
+    func fixture(_ snapshot: CloudAccountSnapshot) { self.snapshot = snapshot; NativeCloudDisplayGate.shared.subscription(snapshot.subscription); NativeCloudDisplayGate.shared.set(snapshot.visible(at: 0)) }
     /// A model of a fixture's own: its state only, without opening the app-wide Cloud page gate.
     func fixtureSnapshot(_ snapshot: CloudAccountSnapshot, memoryIncluded: Bool? = nil) { self.snapshot = snapshot; self.memoryIncluded = memoryIncluded }
     func fixtureUser(_ user: CloudUserIdentity?) { signedInUser = user }
@@ -929,11 +1002,16 @@ final class NativeCloudDisplayGate: @unchecked Sendable {
     private let lock = NSLock()
     private var allowed = false
     private var offered = false
-    func get() -> Bool { lock.withLock { allowed } }
+    private var payment: CloudSubscriptionSnapshot = .init()
+    func subscription(_ value: CloudSubscriptionSnapshot) { lock.withLock { payment = value }; CloudSubscriptionOffers.shared.update(value) }
+    func offers(_ place: CloudPaidPlace) -> Bool { lock.withLock { payment.offers(place) } }
+    var showsSubscription: Bool { lock.withLock { payment.showsSubscription } }
+    var accountShows: Bool { lock.withLock { allowed || offered } }
+    func get() -> Bool { lock.withLock { payment.offers(.settingsCloud, existing: allowed) } }
     func set(_ value: Bool) { lock.withLock { allowed = value } }
     /// This copy of the app can sign in at all (`NativeCloudApplication.canSignIn`): the Settings section is listed
     /// with its Sign in button. Setting it constructs nothing.
     func offer(_ value: Bool) { lock.withLock { offered = value } }
     /// The "Cloud" Settings section is listed: an open Cloud page, or a copy that offers sign-in.
-    var shows: Bool { lock.withLock { allowed || offered } }
+    var shows: Bool { lock.withLock { payment.offers(.sidebarCloud, existing: allowed || offered) } }
 }

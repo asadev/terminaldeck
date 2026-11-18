@@ -484,9 +484,7 @@ struct NativeBrowserSuggestions: View {
             }
         }
         .padding(.vertical, 4)
-        .background(.regularMaterial, in: .rect(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
-        .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+        .browserMenuCard() // solid, like the toolbar's other cards (owner, 18 Nov: "not this much transparent")
     }
 }
 

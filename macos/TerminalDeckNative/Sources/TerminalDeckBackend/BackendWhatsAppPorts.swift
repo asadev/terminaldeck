@@ -105,6 +105,16 @@ public struct WhatsAppAttachment: Equatable, Sendable {
     public init(data: Data, mimeType: String, fileName: String?) { self.data = data; self.mimeType = mimeType; self.fileName = fileName }
 }
 
+/// A known terminal AI's own readable record and its existing turn-end receipt. Nil means use the shell fallback.
+public struct WhatsAppTerminalRecord: Equatable, Sendable {
+    public let answer: String?
+    public let answeredAt: Double?
+    public let endedAt: Double?
+    public init(answer: String?, answeredAt: Double?, endedAt: Double?) {
+        self.answer = answer; self.answeredAt = answeredAt; self.endedAt = endedAt
+    }
+}
+
 public protocol WhatsAppReceiverPort: Sendable {
     /// The session for this receiver now. For Hoot and an agent: their ONE lasting conversation named
     /// `conversationName`, made on first use and kept (keyed by `agentID`). For a session: itself; nil when it ended.
@@ -117,6 +127,7 @@ public protocol WhatsAppReceiverPort: Sendable {
     func type(_ target: WhatsAppTarget, text: String) async throws
     /// A terminal's screen text now (its last lines).
     func screen(_ target: WhatsAppTarget) async -> String?
+    func terminalRecord(_ target: WhatsAppTarget) async -> WhatsAppTerminalRecord?
     func isOpen(_ target: WhatsAppTarget) async -> Bool
     /// Whether a tool call carrying `sessionID` comes from this target (its own id, or for Hoot's lasting conversation
     /// the AI process behind it): how a tool knows "the turn came from that same WhatsApp agent".
@@ -129,6 +140,7 @@ public protocol WhatsAppReceiverPort: Sendable {
 }
 
 public extension WhatsAppReceiverPort {
+    func terminalRecord(_ target: WhatsAppTarget) async -> WhatsAppTerminalRecord? { nil }
     func cloudSessionID(_ sessionID: String) async -> String? { nil }
     func leaving(cloudSessionID: String) async -> Bool { false }
 }

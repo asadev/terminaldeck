@@ -83,14 +83,14 @@ public struct UsageWindowReading: Equatable, Sendable, Identifiable {
         guard let r = raw as? [String: Any], let id = TerminalJSON.text(r["id"]),
               let source = r["source"] as? String, sources.contains(source) else { return nil }
         let used: Double? = {
-            guard let u = r["used"] as? [String: Any], u["state"] as? String == "reported",
+            guard let u = r["used"] as? [String: Any], (u["kind"] ?? u["state"]) as? String == "reported",
                   let f = TerminalJSON.number(u["fraction"]), f >= 0 else { return nil }
             return f
         }()
         let resets: Reset = {
             guard let x = r["resets"] as? [String: Any] else { return .notReported }
-            if x["state"] as? String == "at", let at = TerminalJSON.number(x["at"]), at > 0 { return .at(at) }
-            if x["state"] as? String == "described",
+            if (x["kind"] ?? x["state"]) as? String == "at", let at = TerminalJSON.number(x["at"]), at > 0 { return .at(at) }
+            if (x["kind"] ?? x["state"]) as? String == "described",
                let text = (x["text"] as? String)?.trimmingCharacters(in: .whitespaces), !text.isEmpty { return .described(text) }
             return .notReported
         }()
@@ -151,6 +151,26 @@ public struct UsageReport: Equatable, Sendable {
                            account: r["account"] is [String: Any] ? account(r["account"]) : nil)
     }
 
+    /// A missing number is explained once in the panel, instead of repeated rows saying the same thing.
+    public var numberedReadings: [UsageWindowReading] { readings.filter { $0.used != nil } }
+    public var missingNumbersNote: String? {
+        readings.contains(where: { $0.used == nil }) ? "The provider has not supplied numbers for every limit." : nil
+    }
+
+    /// Native pushes carry one report; older engine connections carry id, report.
+    public static func update(_ arguments: [Any], sessionID: String) -> UsageReport? {
+        let raw = arguments.count > 1 && arguments.first as? String == sessionID ? arguments[1] : arguments.first
+        guard let report = decode(raw), report.sessionId == sessionID else { return nil }
+        return report
+    }
+
+    /// A usage panel names the saved account, never an identity fetched from sign-in.
+    public var accountLabel: String? {
+        guard let name = reportedAccount?.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !name.isEmpty, !name.contains("@") else { return nil }
+        return name
+    }
+
     static func account(_ raw: Any?) -> UsageAccountRef {
         let r = raw as? [String: Any] ?? [:]
         let provider = (r["provider"] as? String).flatMap { ["claude", "codex", "gemini", "shell"].contains($0) || $0.hasPrefix("custom:") ? $0 : nil }
@@ -159,7 +179,7 @@ public struct UsageReport: Equatable, Sendable {
 
     /// `reportedAccount`: whose limits these are, when the report names someone.
     public var reportedAccount: UsageAccountRef? {
-        let ref = readings.first?.account ?? account
+        let ref = readings.map(\.account).first(where: { $0.id != nil || $0.name != nil }) ?? account
         guard let ref, ref.id != nil || ref.name != nil else { return nil }
         return ref
     }

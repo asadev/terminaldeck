@@ -155,7 +155,7 @@ struct NativeCloudStatusWatch: View {
         }
     }
     var body: some View {
-        if NativeCloudDisplayGate.shared.shows || account.snapshot.phase != .signedOut {
+        if NativeCloudOffers.shows(.syncSwitches), NativeCloudDisplayGate.shared.shows || account.snapshot.phase != .signedOut {
             let kind = model.current().kind
             Color.clear.frame(width: 0, height: 0).accessibilityHidden(true).allowsHitTesting(false)
                 .onAppear { account.lineShown(true); model.noted(kind) }
@@ -172,33 +172,54 @@ struct NativeCloudStatusWatch: View {
     }
 }
 
-/// The line as Settings › Cloud shows it at its top (15 Nov): the same state in the same words, with the page's own
-/// Sync now and Pause beside it (`buttons`). A press on the words opens the side panel's Cloud page (or the Bin), as
-/// the line did.
+/// The line as Settings › Cloud shows it at its top (15 Nov), calm since 18 Nov (owner: "It is still showing the yellow
+/// one. Why? ... See all of this"; DESIGN-settings 5): ONE row, a coloured dot and the state in plain words in ordinary
+/// ink (never orange text, never "Something needs you: …"), the page's own button beside it (`buttons`). When there is
+/// more to read, a small chevron follows the words and a press on them opens the details in place, under the row.
 struct NativeCloudSettingsStatusRow<Buttons: View>: View {
     let line: BackendCloudStatusLine
+    /// The row's words; nil = the line's own text.
+    var words: String? = nil
+    /// nil = nothing more to read; else whether the details under the row are open now.
+    var detailsOpen: Bool? = nil
+    var toggleDetails: () -> Void = {}
     let open: () -> Void
     @ViewBuilder let buttons: () -> Buttons
+    static var dotSize: CGFloat { 8 }
+
     var body: some View {
-        // Owner, 15 Nov (DESIGN.md section 3): one row, a coloured dot and the state in its words, the one button.
         HStack(spacing: DeckTokens.Spacing.s8) {
-            Button(action: open) {
-                HStack(spacing: DeckTokens.Spacing.s8) {
-                    Circle().fill(SidebarCloudStatusLine.tint(line.kind)).frame(width: 8, height: 8).accessibilityHidden(true)
-                    Text(line.text).font(DeckSettingsLook.rowTitle).lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                        .foregroundStyle([.needsYou, .problem].contains(line.kind) ? DeckTokens.warn : Color.primary)
-                }
-                .contentShape(.rect)
+            if detailsOpen != nil {
+                Button(action: toggleDetails) { label.contentShape(.rect) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(words ?? line.text)
+                    .accessibilityHint(detailsOpen == true ? "Hides the details" : "Shows the details")
+            } else if line.opensBin {
+                // "N removed by an AI tonight · Bin": the words still open the Bin.
+                Button(action: open) { label.contentShape(.rect) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(words ?? line.text)
+                    .accessibilityHint("Opens the Bin")
+            } else {
+                label.accessibilityElement(children: .combine)
             }
-            .buttonStyle(.plain)
-            .help(line.text)
-            .accessibilityLabel(line.text)
-            .accessibilityHint(line.opensBin ? "Opens the Bin" : "Opens Cloud")
             Spacer(minLength: 8)
             buttons()
         }
         .padding(.horizontal, DeckSettingsLook.rowPadding)
         .frame(maxWidth: .infinity, minHeight: DeckSettingsLook.rowHeight, alignment: .leading)
+    }
+
+    private var label: some View {
+        HStack(spacing: DeckTokens.Spacing.s8) {
+            Circle().fill(SidebarCloudStatusLine.tint(line.kind)).frame(width: Self.dotSize, height: Self.dotSize).accessibilityHidden(true)
+            Text(words ?? line.text).font(DeckSettingsLook.rowTitle).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                .foregroundStyle(Color.primary)
+            if let detailsOpen {
+                Image(systemName: detailsOpen ? "chevron.up" : "chevron.down").font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor)).accessibilityHidden(true)
+            }
+        }
     }
 }
 
@@ -209,7 +230,7 @@ struct SidebarCloudStatus: View {
     var model = NativeCloudStatusLineModel.shared
     let open: () -> Void
     var body: some View {
-        if NativeCloudDisplayGate.shared.shows || account.snapshot.phase != .signedOut {
+        if NativeCloudOffers.shows(.syncSwitches), NativeCloudDisplayGate.shared.shows || account.snapshot.phase != .signedOut {
             let line = model.current()
             SidebarCloudStatusLine(line: line, syncing: account.syncingNow, open: {
                 if line.opensBin { NativeCloudContentsModel.shared.chooseShelf(kind: nil) }
@@ -271,7 +292,7 @@ struct NativeCloudStatusShortLive: View {
     var model = NativeCloudStatusLineModel.shared
     let open: () -> Void
     var body: some View {
-        if NativeCloudDisplayGate.shared.shows || account.snapshot.phase != .signedOut {
+        if NativeCloudOffers.shows(.syncSwitches), NativeCloudDisplayGate.shared.shows || account.snapshot.phase != .signedOut {
             NativeCloudStatusShort(line: model.current(), open: {
                 if model.current().opensBin { NativeCloudContentsModel.shared.chooseShelf(kind: nil) }
                 open()

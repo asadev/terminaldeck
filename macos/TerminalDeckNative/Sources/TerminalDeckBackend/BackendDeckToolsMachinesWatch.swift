@@ -12,7 +12,13 @@ public actor BackendDeckToolsMachinesWatch {
         func send(source: Terminal, data: ArraySlice<UInt8>) {}
         func text() -> String { (0..<terminal.getDims().rows).compactMap { terminal.getLine(row: $0)?.translateToString(trimRight: true) }.joined(separator: "\n") }
     }
-    private struct Screen { let shadow: Shadow; var cols: Int; var rows: Int; var live: Bool; var lastOutput: Double?; var touched: Double }
+    private struct Screen {
+        let shadow: Shadow
+        var cols: Int; var rows: Int; var live: Bool; var lastOutput: Double?; var touched: Double
+        var chatEvents: [HootChatEvent] = []
+        var chatText: String?
+        var problem: String?
+    }
     private struct Conversation: Sendable { var run: String?; var messages: [NativeRPCValue] = []; var state: NativeRPCValue = .null; var changed: Double? }
     private final class Result: @unchecked Sendable {
         private let lock = NSLock()
@@ -47,7 +53,7 @@ public actor BackendDeckToolsMachinesWatch {
     }
     public func start(registry: NativeChannelRegistry) async throws {
         guard subscriptions.isEmpty else { return }
-        for channel in ["machines:output", "machines:hoot:chat", "machines:hoot:state"] {
+        for channel in ["machines:output", "machines:hoot:chat", "machines:hoot:state", "machines:chats:events"] {
             subscriptions.append(try await registry.subscribe(channel, ownerID: "deck-tools-machine-watch") { [weak self] event in await self?.pushed(event.channel, event.arguments.first ?? .missing) })
         }
     }
@@ -75,8 +81,32 @@ public actor BackendDeckToolsMachinesWatch {
     }
     public func pushed(_ channel: String, _ value: NativeRPCValue) {
         guard let machine = value["machineId"].string, !machine.isEmpty else { return }
+        if channel == "machines:chats:events" {
+            let frame = value["frame"]
+            guard frame["t"].string == "chats.events", let session = frame["id"].string,
+                  var screen = screens[key(machine, session)] else { return }
+            let incoming = (frame["events"].elements ?? []).compactMap { try? HootChatEvent(wire: $0) }
+            let known = Set(screen.chatEvents.map(\.id))
+            if frame["older"].bool == true { screen.chatEvents = incoming.filter { !known.contains($0.id) } + screen.chatEvents }
+            else if frame["reset"].bool == false { screen.chatEvents += incoming.filter { !known.contains($0.id) } }
+            else { screen.chatEvents = incoming }
+            screen.chatEvents = Array(screen.chatEvents.suffix(600))
+            screen.chatText = HootChatProjection.rows(screen.chatEvents)
+                .filter { [.user, .message, .textDelta, .error].contains($0.kind) }
+                .compactMap { row in row.value["text"].string.map { (row.kind == .user ? "You: " : "AI: ") + $0 } }.joined(separator: "\n\n")
+            screen.lastOutput = now(); screen.touched = screen.lastOutput!
+            screens[key(machine, session)] = screen
+            return
+        }
         if channel == "machines:output" {
             guard let session = value["sessionId"].string, let bytes = value["data"].string, var screen = screens[key(machine, session)] else { return }
+            if let problem = value["problem"].string {
+                screen.problem = problem; screens[key(machine, session)] = screen; return
+            }
+            if value["reset"].bool == true {
+                screen.problem = nil
+                screen.shadow.terminal.feed(byteArray: Array("\u{1b}c".utf8))
+            }
             screen.shadow.terminal.feed(byteArray: Array(bytes.utf8)); screen.lastOutput = now(); screen.touched = screen.lastOutput!; screens[key(machine, session)] = screen; return
         }
         var into = held[machine] ?? Conversation()
@@ -102,7 +132,8 @@ public actor BackendDeckToolsMachinesWatch {
         let id = key(machine, session)
         guard var screen = screens[id] else { return .null }
         screen.touched = now(); screens[id] = screen
-        return BackendDeckToolsMachinesShared.object(["text": .string(screen.shadow.text()), "live": .bool(screen.live), "cols": .number(Double(screen.cols)), "rows": .number(Double(screen.rows)), "lastOutputAt": screen.lastOutput.map(NativeRPCValue.number) ?? .null])
+        let value = BackendDeckToolsMachinesShared.object(["text": .string(screen.chatText ?? screen.shadow.text()), "live": .bool(screen.live), "cols": .number(Double(screen.cols)), "rows": .number(Double(screen.rows)), "lastOutputAt": screen.lastOutput.map(NativeRPCValue.number) ?? .null])
+        return screen.problem.map { value.setting("problem", .string($0)) } ?? value
     }
     public func attached(_ machine: String, _ session: String) -> Bool { screens[key(machine, session)]?.live == true }
     public func conversation(_ machine: String) -> NativeRPCValue {

@@ -13,7 +13,7 @@ private struct RestoreAccountMissing: LocalizedError {
         if BackendAPIAccountRecord.isAPIAccountID(id) {
             return "this tab's original API account is no longer available. Its conversation is kept. A new account with the same name cannot reopen it."
         }
-        return "this tab's account or conversation history account was removed. Add it again with its original name in Settings › Coding AIs, then press Retry."
+        return "this tab's account or conversation history account was removed. Add it again with its original name in Settings › Coding AIs, then press Reopen."
     }
 }
 
@@ -150,7 +150,7 @@ public actor BackendSessionRestorePlanner {
                 configs[index] = try await configDirectory(session)
             } catch {
                 decisions.append(BackendSessionRestoreDecision(session: session, outcome: .failed, reason: error.localizedDescription,
-                    recoveryAction: error is RestoreAccountMissing ? "retry" : nil))
+                    recoveryAction: (error as? RestoreAccountMissing).map { BackendAPIAccountRecord.isAPIAccountID($0.id) ? "unavailable" : "retry" }))
             }
         }
         var latest: [String: Int] = [:]
@@ -273,6 +273,7 @@ public actor BackendSessionRestoreCoordinator {
     private let emit: @Sendable (BackendSessionLifecycleEvent) -> Void
     private var restoring = false
     private var launchClaims = Set<String>()
+    private var heldRetries = Set<String>()
     private var hostedClaims: @Sendable () -> [BackendSessionMeta] = { [] }
     public func setHostedClaims(_ claims: @escaping @Sendable () -> [BackendSessionMeta]) { hostedClaims = claims }
     /// Capture before stopping the helper: its final exit packets can erase the live rows and ledger.
@@ -316,7 +317,8 @@ public actor BackendSessionRestoreCoordinator {
         guard !restoring else { throw BackendSessionFailure.invalidInput("Session restoration is already running.") }
         restoring = true; defer { restoring = false }
         guard await store.getPreferences()["restoreSessions"].bool != false else { return Result(started: [], decisions: []) }
-        let live = hostedClaims()
+        let live = await starter.liveSessions() + hostedClaims()
+        try await releaseAlreadyOpenHeld(in: live)
         // 10 Nov (Asad: "a restart brings back exactly the tabs that were open at quit"): first the tabs that were not
         // open at the last quit leave the list (they were closed long ago, held for days, or never used).
         let (dropped, copy) = try await dropTabsNotOpen(live: live)
@@ -522,10 +524,30 @@ public actor BackendSessionRestoreCoordinator {
         return await starter.liveSessions().first { $0.exitCode == nil && $0.provider == saved.provider && $0.agentSessionId == conversation && Self.sameTab(saved.raw, in: [$0]) }
     }
     static func raced(_ error: Error) -> Bool { error.localizedDescription.contains("changed during launch") }
+    /// Keep the archived launch data, but do not offer Reopen while its original API identity is absent.
+    /// A new account with the same display name has a different identity and cannot repair that launch.
+    public static func reopenableHeld(_ rows: [NativeHeldSession]) -> [NativeHeldSession] {
+        rows.filter { $0.recoveryAction != "unavailable" }
+    }
+    /// A helper can reattach a tab after it was held. Its old recovery row must not invite a second launch.
+    private func releaseAlreadyOpenHeld(in live: [BackendSessionMeta]) async throws {
+        for held in try await store.heldSessions() where Self.sameTab(held.saved, in: live) {
+            _ = try await store.releaseHeldSession(held.key)
+        }
+    }
     public func retryHeld(_ key: String) async throws -> [NativeHeldSession] {
-        guard let held = try await store.heldSessions().first(where: { $0.key == key }) else { return try await store.heldSessions() }
+        guard heldRetries.insert(key).inserted else {
+            throw BackendSessionFailure.invalidInput("This saved session is already reopening. Wait for that attempt to finish.")
+        }
+        defer { heldRetries.remove(key) }
+        let live = await starter.liveSessions() + hostedClaims()
+        try await releaseAlreadyOpenHeld(in: live)
+        guard let held = try await store.heldSessions().first(where: { $0.key == key }) else {
+            let remaining = try await store.heldSessions(); emit(.held(remaining)); return remaining
+        }
         let saved = try BackendSessionSaved(held.saved)
-        let plan = await planner.plan([saved], exact: true, claimedLive: await starter.liveSessions())
+        let planned = await planner.plan([saved], exact: true, claimedLive: live)
+        let plan = await recoverLostConversations(planned, running: live)
         guard let decision = plan.first else { throw BackendSessionFailure.invalidInput("The held session could not be planned.") }
         if (decision.outcome == .skip && !decision.pick) || decision.outcome == .failed {
             try await store.failHeldSession(key, reason: decision.reason, pick: decision.pick, recoveryAction: decision.recoveryAction)

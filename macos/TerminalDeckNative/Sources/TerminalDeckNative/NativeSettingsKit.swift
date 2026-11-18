@@ -73,6 +73,11 @@ enum NativeSettingsNavigation {
     static let personalID = "profile.personal"
     static let signInID = "profile.sign-in"
     static let cloudID = "cloud"
+    /// "Terminal Deck Cloud": the small page behind Profile's plan row. Drawn only while the paywall is on for the
+    /// account; never a row of the list and never found by search.
+    static let planID = "profile.plan"
+    /// The old page "Older and browser sign-ins" (gone 18 Nov: every sign-in is in the ONE Devices list). The id stays
+    /// so an old link still opens the list.
     static let olderDevicesID = "devices.older"
     /// A device's own page: "device:" + the device row's id.
     static let devicePrefix = "device:"
@@ -109,14 +114,19 @@ enum NativeSettingsNavigation {
             .init(id: cloudID, title: "Cloud", symbol: "cloud.fill", tint: .blue, group: -1,
                   description: gate.get() ? "Sync, files, saved passwords and space." : "Sign in to keep your work on all your devices."),
             .init(id: devicesID, title: "Devices", symbol: "laptopcomputer.and.iphone", tint: .indigo, group: -1,
-                  description: "Your devices, and whether they may open this Mac."),
-            .init(id: olderDevicesID, title: "Older and browser sign-ins", symbol: "clock.arrow.circlepath", tint: .gray, group: -1,
-                  description: "Browsers and devices not seen for 30 days."),
-        ]
+                  description: "Your computers, phones and browser sign-ins, and whether they may open this Mac."),
+        ].filter { item in
+            switch item.id {
+            case cloudID: return gate.offers(.settingsCloud)
+            case devicesID: return gate.offers(.devices)
+            default: return true
+            }
+        } + (NativeCloudDisplayGate.shared.showsSubscription ? [Item(id: planID, title: NativeCloudPlanWords.title,
+            symbol: NativeCloudPlanWords.symbol, tint: .blue, group: -1, description: "Plan, paid until and storage.")] : [])
     }
     static var items: [Item] {
         let gate = NativeCloudDisplayGate.shared
-        guard gate.shows else { return [devices] + baseItems }
+        guard gate.accountShows else { return (gate.offers(.devices) ? [devices] : []) + baseItems }
         // Owner, 14 Nov: Profile is the top row (its own group). Settings still opens on General (`opening`).
         let profile = Item(id: profileID, title: "Profile", symbol: "person.crop.circle", tint: .blue, group: -1,
                            description: "Your account: picture, name, e-mail, sign-in, Cloud and devices.")
@@ -155,11 +165,11 @@ enum NativeSettingsNavigation {
     /// A page's facts: a list row, a page inside Profile, or a page that left the window (its name only).
     static func item(_ id: String) -> Item? {
         let id = canonical(id)
-        return items.first { $0.id == id } ?? (NativeCloudDisplayGate.shared.shows ? profilePages.first { $0.id == id } : nil)
-            ?? (id == olderDevicesID ? profilePages.first { $0.id == id } : nil)
+        return items.first { $0.id == id } ?? (NativeCloudDisplayGate.shared.accountShows ? profilePages.first { $0.id == id } : nil)
     }
     /// The name a page's top bar shows (a device's page names its device itself).
     static func title(_ id: String) -> String {
+        if id == planID { return NativeCloudPlanWords.title }
         if let gone = retired.first(where: { $0.id == id }) { return gone.title }
         return item(id)?.title ?? id
     }
@@ -167,16 +177,16 @@ enum NativeSettingsNavigation {
     static func listRow(_ id: String) -> String {
         let id = canonical(id)
         if let parent = innerPageParent(id) { return parent }
-        guard NativeCloudDisplayGate.shared.shows else {
-            return id == olderDevicesID || deviceRow(id) != nil ? devicesID : id
+        guard NativeCloudDisplayGate.shared.accountShows else {
+            return deviceRow(id) != nil ? devicesID : id
         }
-        if id == personalID || id == signInID || id == cloudID || id == devicesID || id == olderDevicesID || deviceRow(id) != nil {
+        if id == personalID || id == signInID || id == cloudID || id == planID || id == devicesID || deviceRow(id) != nil {
             return profileID
         }
         return id
     }
     /// A page drawn only here (never by the web page): kept on show when the web page re-reports its list.
-    static func nativeOnly(_ id: String) -> Bool { item(id) != nil || deviceRow(id) != nil || innerPageParent(id) != nil }
+    static func nativeOnly(_ id: String) -> Bool { item(id) != nil || id == planID || deviceRow(id) != nil || innerPageParent(id) != nil }
     /// Hoot's own section moved to the Hoot page; its ids stay valid as links that open that page.
     static func isHoot(_ id: String) -> Bool { id == "copilot" || id == "hoot" }
     /// What the sidebar selects: no id, or a Hoot id, shows General.
@@ -201,8 +211,13 @@ enum NativeSettingsNavigation {
     /// The page a link or an old id shows. Pages that left the window open General (Browser's settings open in their
     /// own window before this is asked: `AppModel.showSettings`); Devices opens Profile, where the devices are listed.
     static func canonical(_ id: String) -> String {
-        let shows = NativeCloudDisplayGate.shared.shows
-        if !shows && (id == cloudID || id == profileID || id == personalID || id == signInID) { return "general" }
+        let gate = NativeCloudDisplayGate.shared
+        if (id == cloudID && !gate.offers(.settingsCloud)) || ((id == devicesID || id == olderDevicesID || deviceRow(id) != nil) && !gate.offers(.devices)) { return "general" }
+        if id == CloudSubscriptionPage.id { return gate.showsSubscription ? planID : "general" }
+        if id == planID && !gate.showsSubscription { return "general" }
+        let shows = gate.accountShows
+        if !shows && (id == cloudID || id == profileID || id == personalID || id == signInID || id == planID) { return "general" }
+        if id == olderDevicesID { return shows ? profileID : devicesID }
         if shows && id == devicesID { return profileID }
         return switch id {
         case "power": "general"
@@ -216,7 +231,7 @@ enum NativeSettingsNavigation {
     static func matching(_ query: String) -> [Item] {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return items }
-        let inside = NativeCloudDisplayGate.shared.shows ? profilePages.filter { $0.id != devicesID } : []
+        let inside = NativeCloudDisplayGate.shared.accountShows ? profilePages.filter { $0.id != devicesID } : []
         return (items + inside).filter { ($0.title + " " + $0.description).localizedCaseInsensitiveContains(text) }
     }
 }

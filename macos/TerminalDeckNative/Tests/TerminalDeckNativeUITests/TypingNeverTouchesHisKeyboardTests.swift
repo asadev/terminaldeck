@@ -489,7 +489,7 @@ final class TypingNeverTouchesHisKeyboardTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(editors(host).first).string, "hi")
     }
 
-    // MARK: MAC-NEXT-15: what a tool's page asks never reaches his window or keyboard
+    // MARK: Page questions wait in their tab without taking his window or keyboard
 
     static let askingPage = """
     <!doctype html><meta charset=utf-8><body style="margin:0">
@@ -536,8 +536,7 @@ final class TypingNeverTouchesHisKeyboardTests: XCTestCase {
         page.mouseDown(with: delivered)
     }
 
-    /// 1. A page's alert, confirm and prompt while a tool drives it: answered for the tool, reported to it, nothing over
-    /// his window, his keyboard where it was. A page he is not using gets no sheet either; the page he uses still asks him.
+    /// Questions raised by a tool remain pending, with his keyboard where it was.
     func testAPagesDialogsNeverTakeHisKeyboard() async throws {
         for placement in ["beside his session", "parked off screen"] {
             let tabs = NativeBrowserTabs.shared, run = runtime()
@@ -548,25 +547,35 @@ final class TypingNeverTouchesHisKeyboardTests: XCTestCase {
             defer { window.close() }
             let (terminalView, bytes, _) = makeTerminal(in: window, frame: NSRect(x: 0, y: 0, width: 480, height: 400))
             XCTAssertTrue(window.makeFirstResponder(terminalView))
-            let keys = AppKeys(deliverTo: window)
-            defer { keys.stop() }
             run.ownTabID = tab.id
             let answer = await step(BrowserDriverEngine(host: run), ["verb": "click", "selector": "#d"])
-            XCTAssertNil(answer["error"], "\(placement): \(answer)")
-            let asked = ((answer["value"] as? [String: Any])?["pageAsked"] as? [[String: Any]]) ?? []
-            XCTAssertEqual(asked.map { $0["kind"] as? String }, ["alert", "confirm", "prompt"], "\(placement): the AI is told what the page asked")
-            XCTAssertEqual(asked.map { $0["message"] as? String }, ["a page alert", "a page confirm", "a page prompt"])
-            XCTAssertEqual(asked.first?["answer"] as? String, "dismissed")
-            let result = await js(page, "JSON.stringify(window.r)") as? String
-            XCTAssertEqual(result, "[false,null]", "\(placement): confirm and prompt were cancelled for the tool")
-            await drain(page)
-            XCTAssertNil(window.attachedSheet, "\(placement): nothing over his window")
-            XCTAssertTrue(window.firstResponder === terminalView, "\(placement): his keyboard stayed in his session")
-            XCTAssertEqual(bytes.bytes.count, 0); XCTAssertEqual(keys.seen, [])
+            let waiting = String(describing: answer).lowercased()
+            XCTAssertTrue(waiting.contains("waiting for the person"), "\(answer)")
+            XCTAssertEqual(tab.pageRequests.questions.first?.kind, "alert")
+            XCTAssertNil(window.attachedSheet)
+            XCTAssertTrue(window.firstResponder === terminalView)
+            XCTAssertEqual(bytes.bytes.count, 0)
         }
+    }
 
-        // MAC-NEXT-15b: no tool at all, a page beside his session, his keyboard in his terminal. Its question is HELD:
-        // no sheet over his work, not cancelled; it shows when he comes back to the page, and his answer reaches it.
+    // MARK: Late questions also wait; starting another tool never cancels them
+
+    /// Late questions from a never-shown page still need the person.
+    func testANeverShownPagesLateQuestionIsHeldAndReported() async throws {
+        let tabs = NativeBrowserTabs.shared, run = runtime()
+        let tab = tabs.create(isolated: true, show: false)
+        defer { tabs.close(tab.id) }
+        let page = try await loadAsking(tab)
+        _ = await js(page, "setTimeout(function () { alert('Saved!') }, 0)")
+        for _ in 0..<300 where tab.pageRequests.questions.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(tab.pageRequests.questions.first?.kind, "alert")
+        XCTAssertTrue(tab.automation.dialogs.isEmpty)
+        XCTAssertEqual(run.takePageNotes(tab.id).last?["answer"] as? String, "waiting for the person")
+        XCTAssertFalse(tab.shownToPerson)
+    }
+
+    /// A subsequent tool reports waiting and leaves the original question alone.
+    func testAToolStartingToDriveDoesNotCancelAHeldQuestion() async throws {
         let tabs = NativeBrowserTabs.shared, run = runtime()
         let tab = tabs.create(isolated: true, show: false)
         defer { tabs.close(tab.id) }
@@ -575,108 +584,20 @@ final class TypingNeverTouchesHisKeyboardTests: XCTestCase {
         defer { window.close() }
         let (terminalView, _, _) = makeTerminal(in: window, frame: NSRect(x: 0, y: 0, width: 480, height: 400))
         XCTAssertTrue(window.makeFirstResponder(terminalView))
-        NativeBrowserPageDelegate.holdPollMilliseconds = 20
-        defer { NativeBrowserPageDelegate.holdPollMilliseconds = 200 }
-        // A tool only READS it meanwhile: reading never makes his page a tool's (point 2).
-        run.ownTabID = tab.id
-        for verb in ["browser_read", "browser_screenshot"] {
-            let answer = await BrowserDriverEngine(host: run).answer(BrowserDriverCommand.decode([["id": verb, "verb": verb, "args": [:] as [String: Any]]])!)
-            XCTAssertNil(answer["error"], "\(verb): \(answer)")
-        }
-        XCTAssertFalse(tab.automation.toolDriving, "a read or a screenshot is not a tool driving his page")
-        _ = await js(page, "window.q = 'waiting'; setTimeout(function () { window.q = confirm('his own question') }, 0)")
-        try await Task.sleep(for: .milliseconds(300))
-        XCTAssertNil(window.attachedSheet, "nothing over his work while he is elsewhere")
-        XCTAssertTrue(window.firstResponder === terminalView, "his keyboard stayed in his session")
-        let notAnswered = tab.automation.dialogs.filter { $0.kind == "confirm" }
-        XCTAssertEqual(notAnswered.count, 0, "held, not answered: nothing of his is cancelled")
-        // He comes back to the page: his question is there for him.
-        try hisClick(on: page, in: window)
-        var sheet: NSWindow?
-        for _ in 0..<300 where sheet == nil { sheet = window.attachedSheet; if sheet == nil { try await Task.sleep(for: .milliseconds(10)) } }
-        let shown = try XCTUnwrap(sheet, "the held question shows when he is back on the page")
-        window.endSheet(shown, returnCode: .alertFirstButtonReturn)
-        var his: Bool?
-        for _ in 0..<300 where his != true { his = await js(page, "window.q") as? Bool; if his != true { try await Task.sleep(for: .milliseconds(10)) } }
-        XCTAssertEqual(his, true, "his OK reached the page")
-        XCTAssertEqual(tab.automation.dialogs.last?.by, "person")
-
-        // On the page already: shown at once, as before tonight.
-        _ = await js(page, "setTimeout(function () { window.q2 = confirm('again') }, 0)")
-        sheet = nil
-        for _ in 0..<300 where sheet == nil { sheet = window.attachedSheet; if sheet == nil { try await Task.sleep(for: .milliseconds(10)) } }
-        window.endSheet(try XCTUnwrap(sheet, "his page asks him straight away"), returnCode: .alertSecondButtonReturn)
-    }
-
-    // MARK: MAC-NEXT-15c: an AI's background page never holds a question; a tool's step releases a held one
-
-    /// A page an AI opened in the background and he was never shown fires its dialogs long after the AI's last step
-    /// (no tool is driving it now): answered at once (alert dismissed, confirm and prompt cancelled), never held, and
-    /// reported to the AI with its next step.
-    func testANeverShownPagesLateQuestionIsAnsweredAtOnceAndReported() async throws {
-        let tabs = NativeBrowserTabs.shared, run = runtime()
-        let tab = tabs.create(isolated: true, show: false)
-        defer { tabs.close(tab.id) }
-        let page = try await loadAsking(tab)
-        run.parkIfHidden(tab.id) // off screen, where an AI's background page runs (timers at full speed); not a touch
-        XCTAssertFalse(tab.shownToPerson, "never in one of his windows")
-        XCTAssertFalse(tab.automation.toolDriving, "no tool step now: as if the AI's last action was long ago")
-        _ = await js(page, "window.q = 'waiting'; setTimeout(function () { alert('Saved!'); window.q = confirm('Still there?'); window.p = prompt('Name?', 'x') }, 0)")
-        var answered: [Any]?
-        for _ in 0..<300 {
-            answered = await js(page, "typeof window.q === 'boolean' ? [window.q, window.p === null] : null") as? [Any]
-            if answered != nil { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        XCTAssertEqual(answered?.first as? Bool, false, "the confirm was cancelled at once, not held for him")
-        XCTAssertEqual(answered?.last as? Bool, true, "the prompt was cancelled at once")
-        let records = tab.automation.dialogs.filter { ["alert", "confirm", "prompt"].contains($0.kind) }
-        XCTAssertEqual(records.map(\.kind), ["alert", "confirm", "prompt"])
-        XCTAssertTrue(records.allSatisfy { $0.by == NativeBrowserPageDelegate.byNeverShown }, "\(records.map(\.by))")
-        // The AI hears what its page asked, with its next step.
-        run.ownTabID = tab.id
-        let answer = await step(BrowserDriverEngine(host: run), ["verb": "click", "selector": "#u"])
-        XCTAssertNil(answer["error"], "\(answer)")
-        let asked = ((answer["value"] as? [String: Any])?["pageAsked"] as? [[String: Any]]) ?? []
-        XCTAssertEqual(asked.map { $0["message"] as? String }, ["Saved!", "Still there?", "Name?"], "\(answer)")
-        XCTAssertFalse(tab.shownToPerson, "the tool's step never showed it to him")
-    }
-
-    /// His own (shown) page holds its question while he is elsewhere (15b, unchanged); when a tool starts a step on
-    /// that page, the held question is answered for the tool first, so the step is not blocked behind it.
-    func testAToolStartingToDriveReleasesAHeldQuestion() async throws {
-        let tabs = NativeBrowserTabs.shared, run = runtime()
-        let tab = tabs.create(isolated: true, show: false)
-        defer { tabs.close(tab.id) }
-        let page = try await loadAsking(tab)
-        let window = hisWindow(page: page)
-        defer { window.close() }
-        let (terminalView, _, _) = makeTerminal(in: window, frame: NSRect(x: 0, y: 0, width: 480, height: 400))
-        XCTAssertTrue(window.makeFirstResponder(terminalView))
-        NativeBrowserPageDelegate.holdPollMilliseconds = 20
-        defer { NativeBrowserPageDelegate.holdPollMilliseconds = 200 }
-        XCTAssertTrue(tab.shownToPerson, "his page: in one of his windows")
-        _ = await js(page, "window.q = 'waiting'; setTimeout(function () { window.q = confirm('his question') }, 0)")
-        try await Task.sleep(for: .milliseconds(300))
-        XCTAssertNil(window.attachedSheet, "nothing over his work while he is elsewhere")
-        XCTAssertEqual(tab.automation.dialogs.filter { $0.kind == "confirm" }.count, 0, "still held for him (15b)")
-        // A tool starts a step on the page: the held question is answered for it, and the step goes through.
+        _ = await js(page, "setTimeout(function () { confirm('his question') }, 0)")
+        for _ in 0..<300 where tab.pageRequests.questions.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         run.ownTabID = tab.id
         let started = ProcessInfo.processInfo.systemUptime
         let answer = await step(BrowserDriverEngine(host: run), ["verb": "click", "selector": "#u"])
-        XCTAssertNil(answer["error"], "the tool's step was not blocked: \(answer)")
-        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 10, "not held until the script timeout")
-        let q = await js(page, "window.q") as? Bool
-        XCTAssertEqual(q, false, "the held confirm was cancelled for the tool")
-        XCTAssertEqual(tab.automation.dialogs.last?.by, NativeBrowserPageDelegate.byToolLater)
-        let asked = ((answer["value"] as? [String: Any])?["pageAsked"] as? [[String: Any]]) ?? []
-        XCTAssertEqual(asked.map { $0["message"] as? String }, ["his question"], "the AI is told: \(answer)")
-        await drain(page)
-        XCTAssertNil(window.attachedSheet, "nothing was shown over his window")
-        XCTAssertTrue(window.firstResponder === terminalView, "his keyboard stayed in his session")
+        XCTAssertTrue(String(describing: answer).lowercased().contains("waiting for the person"))
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 10)
+        XCTAssertEqual(tab.pageRequests.questions.first?.kind, "confirm")
+        XCTAssertTrue(tab.automation.dialogs.isEmpty)
+        XCTAssertNil(window.attachedSheet)
+        XCTAssertTrue(window.firstResponder === terminalView)
     }
 
-    /// 2. A tool's click on a file field never opens the Mac's file chooser: the tool is told to use the upload step.
+    /// A tool's file-field click waits quietly for the person to review the chooser.
     func testAToolsClickNeverOpensTheFileChooser() async throws {
         let tabs = NativeBrowserTabs.shared, run = runtime()
         let tab = tabs.create(isolated: true, show: false)
@@ -688,9 +609,7 @@ final class TypingNeverTouchesHisKeyboardTests: XCTestCase {
         XCTAssertTrue(window.makeFirstResponder(terminalView))
         run.ownTabID = tab.id
         let answer = await step(BrowserDriverEngine(host: run), ["verb": "click", "selector": "#f"])
-        let refusal = answer["error"] as? String ?? ""
-        XCTAssertTrue(refusal.contains("file chooser") && refusal.contains("upload"), "the tool is refused and pointed at the upload step: \(answer)")
-        await drain(page)
+        XCTAssertTrue(String(describing: answer).lowercased().contains("waiting for the person"), "\(answer)")
         XCTAssertNil(window.attachedSheet, "no chooser over his window")
         XCTAssertTrue(window.firstResponder === terminalView)
     }

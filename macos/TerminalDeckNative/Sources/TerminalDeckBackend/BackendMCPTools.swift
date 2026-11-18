@@ -233,7 +233,7 @@ public actor BackendNativeMCPServer: BackendMCPToolEndpoint {
             do { try await refresh() }
             catch { removeTools(ownerID: owner); throw error }
         }
-        return tools.values.map(\.spec).sorted { $0.id < $1.id }
+        return tools.values.map(\.spec).filter { CloudSubscriptionOffers.shared.showsTool($0.id) }.sorted { $0.id < $1.id }
     }
     public func start() async throws -> BackendMCPEndpointDescription {
         if let listening = description() { return listening }
@@ -335,7 +335,7 @@ public actor BackendNativeMCPServer: BackendMCPToolEndpoint {
             return result(.object([.init("tools", .array(allowed.sorted { $0.id < $1.id }.map(\.wireValue)))]))
         case "tools/call":
             let name = envelope["params"]["name"].string ?? ""
-            guard BackendMCPToolNames.permits(name, granted: entry.grant.allowedTools), let canonical = aliases[name], let tool = tools[canonical] else {
+            guard BackendMCPToolNames.permits(name, granted: entry.grant.allowedTools), let canonical = aliases[name], let tool = tools[canonical], CloudSubscriptionOffers.shared.showsTool(tool.spec.id) else {
                 return result(BackendMCPToolReply.failure("No tool called \(name).").wireValue)
             }
             guard let sessionID = entry.sessionID, entry.grant.allowedTiers.contains(tool.spec.tier) else {

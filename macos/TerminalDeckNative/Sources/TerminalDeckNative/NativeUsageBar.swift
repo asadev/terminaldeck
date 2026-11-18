@@ -58,14 +58,12 @@ final class NativeUsageState {
                 self.acceptChatContext(args.count > 1 ? args[1] : nil)
             })
             subscriptions.append(EngineBridge.shared.on("usage:update") { [weak self] args in
-                guard let self, args.first as? String == id, let next = UsageReport.decode(args.count > 1 ? args[1] : nil) else { return }
-                if next != self.report { self.report = next }
-                self.readAccount()
+                guard let self, let next = UsageReport.update(args, sessionID: id) else { return }
+                self.acceptReport(next)
             })
             watchCall = Task { [weak self] in
                 let next = UsageReport.decode(try? await EngineBridge.shared.invoke("usage:watch", [id]))
-                if let next { self?.report = next }
-                self?.readAccount()
+                if let next { self?.acceptReport(next) }
             }
         case .machine:
             Task { [weak self] in
@@ -164,32 +162,30 @@ final class NativeUsageState {
         return try? await EngineBridge.shared.invoke("machines:usage:read", [machineId, sessionId, want, force])
     }
 
-    /// The login as the account chip states it (`useAccountIdentity` + `accountIdentity`).
-    private func readAccount() {
-        guard let account = report?.reportedAccount else {
-            accountLabel = nil
-            return
+    private func acceptReport(_ next: UsageReport) {
+        if next.account != report?.account || !next.numberedReadings.isEmpty {
+            blocked = nil
+            noLimits = false
+            failed = false
+            detail = nil
         }
-        let name = account.name ?? ""
-        guard case .local = target, let id = account.id else {
-            accountLabel = name.isEmpty ? nil : name
-            return
-        }
-        Task { [weak self] in
-            let raw = try? await EngineBridge.shared.invoke("profiles:signin", [id, ["refresh": false]])
-            let signIn = raw.map { CodingAIAccountsParse.signIn(CodingAIJSON($0)) }
-            let label = AccountChipRules.identity((id, name, nil), signIn).label.trimmingCharacters(in: .whitespaces)
-            let shown = label.isEmpty ? nil : label
-            if self?.accountLabel != shown { self?.accountLabel = shown }
-        }
+        if next != report { report = next }
+        readAccount()
     }
+
+    private func readAccount() {
+        accountLabel = report?.accountLabel
+    }
+
 }
 
 // MARK: - The bar (`UsageBar`)
 
 /// First in the session's controls: the context window as a strip (only while the
-/// figure is fresh) and the plan limits behind a ring. Hovering either opens its
-/// panel; a press holds it open; opening the plan panel asks for fresh figures.
+/// figure is fresh) and the plan limits behind a ring. A press opens either one's panel (the app's own menu surface);
+/// opening the plan panel asks for fresh figures. Review of 18 Nov (items 15, 22): a clean ring with no pill behind
+/// it, no address in the panel, a thin bar per limit with "% used" and "Resets in …", "No reading yet" where a number
+/// is missing, and one Refresh.
 struct NativeUsageBar: View {
     let usage: NativeUsageState
     let provider: String?
@@ -209,73 +205,59 @@ struct NativeUsageBar: View {
     }
 
     private func bar(now: Double) -> some View {
-        let readouts = (usage.report?.readings ?? []).map { UsageReadout.of($0, now: now) }
+        let readouts = (usage.report?.numberedReadings ?? []).map { UsageReadout.of($0, now: now) }
         let worst = UsageBarRules.worst(readouts)
         let agent = provider.map(TerminalAgent.name)
-        let whose = [agent, usage.accountLabel].compactMap { $0 }.joined(separator: " · ")
+        // Names, never addresses (item 15): an account with no chosen name shows the part before the "@".
+        let account = usage.accountLabel.map(DeckAccountWords.shown)
+        let whose = [agent, account].compactMap { $0 }.joined(separator: " · ")
         let title = UsageBarRules.title(readouts: readouts, whose: whose, unwired: !EngineBridge.shared.isReady, withheld: usage.withheld,
                                         blocked: usage.blocked, report: usage.report)
         let reading = usage.withheld == nil && (usage.context?.isFresh(now: now) ?? false) ? usage.context : nil
         let figure = reading?.figure(compact: tight)
         let folded = tight && figure != nil
-        return HStack(spacing: 6) {
+        return HStack(spacing: 4) {
             if let reading, figure != nil, !folded {
-                Button { send(.press(.context)) } label: { ContextStrip(reading: reading, figure: figure) }
-                    .buttonStyle(.plain)
-                    .onHover { hover("context", $0) }
-                    .accessibilityLabel(reading.summary(now: now) ?? "Context window")
-                    .popover(isPresented: binding(.context), arrowEdge: .bottom) {
-                        sheet { if let breakdown = reading.panel(now: now) { ContextSection(panel: breakdown) } }
-                    }
+                Button { send(.press(.context)) } label: {
+                    ContextStrip(reading: reading, figure: figure)
+                        .padding(.horizontal, 5).frame(height: 26)
+                        .background(Color.primary.opacity(hovering.contains("context") ? 0.07 : 0), in: .rect(cornerRadius: 7, style: .continuous))
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .onHover { hover("context", $0) }
+                .accessibilityLabel(reading.summary(now: now) ?? "Context window")
+                .deckMenu(isPresented: binding(.context), alignment: .trailing, width: 280) {
+                    if let breakdown = reading.panel(now: now) { ContextSection(panel: breakdown).deckMenuInset() }
+                }
             }
             Button { send(.press(.plan)) } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     if folded, let reading { ContextStrip(reading: reading, figure: figure) }
-                    Ring(percent: worst?.percent, level: worst?.level ?? .ok, reading: usage.checking)
+                    DeckUsageRing(percent: worst?.percent, level: worst?.level ?? .ok, reading: usage.checking)
                 }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(.quaternary.opacity(0.45), in: .capsule)
+                .padding(.horizontal, 5).frame(height: 26)
+                .background(Color.primary.opacity(hovering.contains("plan") ? 0.07 : 0), in: .rect(cornerRadius: 7, style: .continuous))
+                .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .onHover { hover("plan", $0) }
+            .help(title)
             .accessibilityLabel(folded && reading != nil ? "\(reading?.summary(now: now) ?? "") Plan limits: \(title)" : "Plan limits: \(title)")
-            .popover(isPresented: binding(.plan), arrowEdge: .bottom) {
-                sheet {
-                    if folded, let breakdown = reading?.panel(now: now) { ContextSection(panel: breakdown) }
-                    planPanel(readouts: readouts, agent: agent)
+            .deckMenu(isPresented: binding(.plan), alignment: .trailing, width: 280) {
+                if folded, let breakdown = reading?.panel(now: now) {
+                    ContextSection(panel: breakdown).deckMenuInset()
+                    DeckMenuDivider()
                 }
+                NativeUsagePlanPanel(provider: provider, agent: agent, account: account, readouts: readouts, now: now,
+                                     checking: usage.checking,
+                                     note: UsageBarRules.panelNote(unwired: !EngineBridge.shared.isReady, withheld: usage.withheld,
+                                                                   blocked: usage.blocked, failed: usage.failed, detail: usage.detail,
+                                                                   reason: usage.report?.reason, rows: readouts.count),
+                                     missing: usage.report?.missingNumbersNote,
+                                     refresh: { usage.check(force: true) })
             }
         }
-    }
-
-    @ViewBuilder
-    private func planPanel(readouts: [UsageReadout], agent: String?) -> some View {
-        let note = UsageBarRules.panelNote(unwired: !EngineBridge.shared.isReady, withheld: usage.withheld, blocked: usage.blocked,
-                                           failed: usage.failed, detail: usage.detail, reason: usage.report?.reason, rows: readouts.count)
-        HStack(spacing: 6) {
-            if let provider { NativeCodingAIProviderMark(provider: provider, size: 13) }
-            Text(agent ?? "This session").font(.callout.weight(.semibold))
-            if let account = usage.accountLabel { Text(account).font(.callout).foregroundStyle(.secondary) }
-            if let note { NativeCodingAIInfo(label: "these plan limits", text: note) }
-            Spacer()
-        }
-        ForEach(readouts, id: \.reading.id) { readout in
-            WindowRow(readout: readout)
-        }
-        if usage.checking {
-            Text("Checking with \(agent ?? "the agent")…").font(.caption).foregroundStyle(.secondary).accessibilityAddTraits(.updatesFrequently)
-        }
-        if usage.blocked != nil {
-            Button("Check again") { usage.check(force: true) }
-        }
-    }
-
-    private func sheet<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) { content() }
-            .padding(12)
-            .frame(width: 300, alignment: .leading)
-            .onHover { hover("sheet", $0) }
     }
 
     // MARK: Opening and closing
@@ -290,18 +272,115 @@ struct NativeUsageBar: View {
         panel = next
     }
 
+    /// The pointer only tints the control now; a panel opens on a press.
     private func hover(_ part: String, _ inside: Bool) {
-        if inside {
-            hovering.insert(part)
-            if part == "context" { send(.hover(.context)) }
-            if part == "plan" { send(.hover(.plan)) }
-        } else {
-            hovering.remove(part)
-            Task {
-                try? await Task.sleep(for: .milliseconds(250))
-                if hovering.isEmpty { send(.leave) }
+        if inside { hovering.insert(part) } else { hovering.remove(part) }
+    }
+}
+
+/// The plan panel's content (inside the app's menu surface, 280 wide): whose limits, each limit as a thin bar, and
+/// Refresh. A plain view of plain values, so a picture can draw it without a session.
+struct NativeUsagePlanPanel: View {
+    let provider: String?
+    let agent: String?
+    /// The account's NAME (never its address).
+    let account: String?
+    let readouts: [UsageReadout]
+    let now: Double
+    var checking = false
+    /// Why there is nothing to show (kept behind the heading's tooltip, not as a sentence in the panel).
+    var note: String? = nil
+    /// One calm sentence when some numbers are missing (the logic lane's `report.missingNumbersNote`); said once.
+    var missing: String? = nil
+    var refresh: () -> Void = {}
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let provider { NativeCodingAIProviderMark(provider: provider, size: 13) }
+            Text(agent ?? "This session").font(.system(size: 13, weight: .semibold)).lineLimit(1)
+            if let account { Text(account).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
+            Spacer(minLength: 0)
+        }
+        .deckMenuInset()
+        .help(note ?? "")
+        ForEach(readouts, id: \.reading.id) { readout in
+            DeckUsageLimitRow(readout: readout, now: now).deckMenuInset()
+        }
+        if readouts.isEmpty {
+            Text(DeckUsageWords.none).font(.system(size: 12)).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading).deckMenuInset()
+        }
+        if let missing, !missing.isEmpty { DeckMenuNote(missing) }
+        DeckMenuDivider()
+        DeckMenuRow(checking ? "Checking…" : "Refresh", symbol: "arrow.clockwise", enabled: !checking, keepsOpen: true, action: refresh)
+    }
+}
+
+/// The words of the usage panel (review of 18 Nov, item 15: never "Not reported").
+enum DeckUsageWords {
+    static let none = "No reading yet"
+
+    /// "Resets in 3 h 12 min" from the limit's own reset instant; its own words when it only describes one; nil when
+    /// nothing is known about the reset.
+    static func resets(_ readout: UsageReadout, now: Double) -> String? {
+        switch readout.reading.resets {
+        case .at(let at):
+            let minutes = Int(((at - now) / 60_000).rounded(.up))
+            guard minutes > 0 else { return nil }
+            if minutes < 60 { return "Resets in \(minutes) min" }
+            let hours = minutes / 60, rest = minutes % 60
+            if hours < 24 { return rest == 0 ? "Resets in \(hours) h" : "Resets in \(hours) h \(rest) min" }
+            let days = hours / 24, left = hours % 24
+            return left == 0 ? "Resets in \(days) d" : "Resets in \(days) d \(left) h"
+        case .described(let text):
+            return "Resets \(text)"
+        case .notReported:
+            return nil
+        }
+    }
+
+    /// A limit with no number.
+    static func missing(_ readout: UsageReadout) -> String {
+        readout.state == .expired ? "No reading yet since it reset" : none
+    }
+}
+
+/// One limit: its name, "42% used", a thin bar, and when it resets. No number: the name and "No reading yet".
+struct DeckUsageLimitRow: View {
+    let readout: UsageReadout
+    let now: Double
+
+    var body: some View {
+        let percent = min(100, max(0, readout.percent ?? 0))
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(readout.name).font(.system(size: 12)).lineLimit(1)
+                Spacer(minLength: 8)
+                if readout.bar, let used = readout.percent {
+                    Text(UsageFormat.percent(used) + " used").font(.system(size: 12).monospacedDigit())
+                        .foregroundStyle(readout.level == .ok ? AnyShapeStyle(.primary) : AnyShapeStyle(levelColor(readout.level)))
+                }
+            }
+            if readout.bar {
+                GeometryReader { box in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.primary.opacity(0.10))
+                        Capsule().fill(levelColor(readout.level))
+                            .frame(width: percent > 0 ? max(4, box.size.width * percent / 100) : 0)
+                    }
+                }
+                .frame(height: 4)
+                .opacity(readout.state == .aged ? 0.6 : 1)
+                if let resets = DeckUsageWords.resets(readout, now: now) {
+                    Text(resets).font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            } else {
+                Text(DeckUsageWords.missing(readout)).font(.system(size: 11)).foregroundStyle(.secondary)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(readout.detail)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -325,53 +404,34 @@ private struct ContextStrip: View {
     }
 }
 
-/// The plan ring: the worst window's share, from twelve o'clock; it pulses while a check runs.
-private struct Ring: View {
+/// The plan ring (review of 18 Nov, item 22: "this icon is very bad shape"): a clean ring 15 across and 2 thick, the
+/// worst limit's share from twelve o'clock; a quarter arc turns while a reading is fetched. No number: the empty ring.
+struct DeckUsageRing: View {
     let percent: Double?
     let level: UsageLevel
     let reading: Bool
+    @State private var turning = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let filled = percent.map { max(0, min(100, $0)) / 100 } ?? 0
         ZStack {
-            Circle().stroke(Color.secondary.opacity(0.3), lineWidth: 2)
-            if filled > 0 {
-                Circle().trim(from: 0, to: filled).stroke(levelColor(level), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            Circle().stroke(Color.primary.opacity(0.16), lineWidth: 2)
+            if reading, !reduceMotion {
+                Circle().trim(from: 0, to: 0.25)
+                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(turning ? 270 : -90))
+                    .animation(.linear(duration: 1.1).repeatForever(autoreverses: false), value: turning)
+                    .onAppear { turning = true }
+                    .onDisappear { turning = false }
+            } else if filled > 0 {
+                Circle().trim(from: 0, to: max(filled, 0.03))
+                    .stroke(levelColor(level), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .rotationEffect(.degrees(-90))
             }
         }
-        .frame(width: 12, height: 12)
-        .opacity(reading ? 0.55 : 1)
-        .animation(reading ? .easeInOut(duration: 0.8).repeatForever() : .default, value: reading)
-    }
-}
-
-/// One window of the plan (`WindowRow`): its own name, its value, a meter and when it renews.
-private struct WindowRow: View {
-    let readout: UsageReadout
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack {
-                Text(readout.name).font(.callout)
-                Spacer()
-                Text(readout.value).font(.callout.monospacedDigit()).foregroundStyle(levelColor(readout.level))
-            }
-            if readout.bar {
-                GeometryReader { box in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(.quaternary)
-                        Capsule().fill(levelColor(readout.level))
-                            .frame(width: box.size.width * min(100, max(0, readout.percent ?? 0)) / 100)
-                    }
-                }
-                .frame(height: 5)
-                .opacity(readout.state == .aged ? 0.55 : 1)
-                if !readout.facts.isEmpty { Text(readout.facts).font(.caption).foregroundStyle(.secondary) }
-            } else if !readout.detail.isEmpty {
-                Text(readout.detail).font(.caption).foregroundStyle(.secondary)
-            }
-        }
+        .padding(1)
+        .frame(width: 15, height: 15)
     }
 }
 
@@ -420,7 +480,7 @@ struct ContextSection: View {
     }
 }
 
-private func levelColor(_ level: UsageLevel) -> Color {
+func levelColor(_ level: UsageLevel) -> Color {
     switch level {
     case .ok: return .accentColor
     case .warning: return .orange

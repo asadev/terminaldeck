@@ -168,6 +168,8 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
     private let relay: @Sendable (String) async throws -> Void
     private var link: (any BackendLinkConnection)?
     private var moved = false
+    /// A TURN phone takes video lanes immediately while control stays on the relay socket.
+    private var videoFlag = false
     private var mode = Mode.wire
     private var waiting: [String] = []
     private var waitingBytes = 0
@@ -269,7 +271,7 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
         }
         let previous = lock.withLock { () -> BackendRemoteLinkOutbox? in
             let old = outbox
-            self.link = link; self.failure = failure; outbox = made
+            self.link = link; self.failure = failure; outbox = made; videoFlag = false
             return old
         }
         previous?.stop()
@@ -277,6 +279,7 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
     func set(_ mode: Mode) { lock.withLock { self.mode = mode } }
     var currentMode: Mode { lock.withLock { mode } }
     var hasMoved: Bool { lock.withLock { moved } }
+    func videoOnLink() { lock.withLock { videoFlag = true } }
     /// The relay channel under this connection closed while its link carries on (§11.4).
     func relayClosed() { lock.withLock { relayGone = true } }
     var relayIsGone: Bool { lock.withLock { relayGone } }
@@ -320,8 +323,12 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
         }
         switch route.mode {
         case .wire:
-            // The old dc2 hand-over (tests and any wire that has a link without link-only): the link after the move.
-            guard route.moved, !text.hasPrefix(Self.signalPrefix) else { try await relay(text); return }
+            // dc2 terms: control stays on the relay until the Mac moves; signalling always uses the relay.
+            if text.hasPrefix(Self.signalPrefix) {
+                if !route.relayGone { try await relay(text) }
+                return
+            }
+            guard route.moved else { try await relay(text); return }
             try sendOnLink(text, route.link, route.failure)
         case .noLink:
             guard let type = Self.type(of: text), Self.relayTypes.contains(String(type)) || type == "pong" else { return }
@@ -376,17 +383,17 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
         throw NativeRPCError(code: "unavailable", message: "The direct link ended.")
     }
 
-    /// Video (contract §6): nil before the move (no link to carry it), true when it went on `lane`, false when it was
+    /// Video (contract §6): nil before the move unless enabled on a TURN link, true when it went on `lane`, false when it was
     /// dropped (the moving channel is full; the viewer asks for a keyframe).
     func direct(_ data: Data, lane: BackendLinkLane) -> Bool? {
-        guard let link = lock.withLock({ moved ? link : nil }) else { return nil }
+        guard let link = lock.withLock({ moved || videoFlag ? link : nil }) else { return nil }
         // M5: over TCP every video message goes the reliable way (one channel, one order; nothing is ever given up).
         return link.send(data, lane: lane == .moving && link.overTCP ? .still : lane)
     }
 
-    /// How video goes on the link now (M5): nil before the move.
+    /// How video goes on the link now (M5): also available before the move on a kept TURN link.
     func video() -> BackendLinkVideo? {
-        guard let link = lock.withLock({ moved ? link : nil }) else { return nil }
+        guard let link = lock.withLock({ moved || videoFlag ? link : nil }) else { return nil }
         return BackendLinkVideo(reliableOnly: link.overTCP, queuedMoving: link.queued(.moving), queuedStill: link.queued(.still))
     }
 
@@ -406,7 +413,7 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
     /// The outbox's contents are kept to go over the relay. Returns the link to close.
     func beginBack() -> (any BackendLinkConnection)? {
         let (link, box) = lock.withLock { () -> ((any BackendLinkConnection)?, BackendRemoteLinkOutbox?) in
-            defer { self.link = nil; failure = nil; outbox = nil; returning = true; moved = false; mode = .wire }
+            defer { self.link = nil; failure = nil; outbox = nil; returning = true; moved = false; videoFlag = false; mode = .wire }
             return (self.link, outbox)
         }
         if let box {
@@ -433,7 +440,7 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
 
     func detach() -> (any BackendLinkConnection)? {
         let (link, box) = lock.withLock { () -> ((any BackendLinkConnection)?, BackendRemoteLinkOutbox?) in
-            defer { self.link = nil; failure = nil; waiting = []; waitingBytes = 0; outbox = nil }
+            defer { self.link = nil; failure = nil; waiting = []; waitingBytes = 0; outbox = nil; videoFlag = false }
             return (self.link, outbox)
         }
         box?.stop()
@@ -464,6 +471,10 @@ struct BackendRemoteLinkState: Sendable {
     /// The client said `link.only` (§11): it sends nothing app-level on the relay, so its link messages are never held,
     /// late candidates go on the link, and the link outlives the relay channel.
     var clientOnly = false
+    /// This phone was welcomed on dc2 terms: relay data is accepted until the Mac's marker.
+    var relayFirst = false
+    /// Its open link uses TURN: control stays on the relay socket, video may use the link.
+    var keptOnRelay = false
     var waiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     var feed: AsyncStream<(Data, BackendLinkLane)>.Continuation?
     var reader: Task<Void, Never>?
@@ -543,7 +554,7 @@ extension BackendRemoteHost {
         linkEligible.insert(device)
         let token = UUID()
         live[id]?.link.got = 0; live[id]?.link.candidates = 0; live[id]?.link.clientMoved = false
-        live[id]?.link.clientBack = nil; live[id]?.link.answered = false
+        live[id]?.link.clientBack = nil; live[id]?.link.answered = false; live[id]?.link.keptOnRelay = false
         let (stream, feed) = AsyncStream<(Data, BackendLinkLane)>.makeStream()
         let inbox = BackendRemoteLinkInbox()
         live[id]?.link.token = token
@@ -612,20 +623,29 @@ extension BackendRemoteHost {
         if let signal = try? BackendRemoteServerMessage(.linkPeer, fields: fields) { try? await linkSignal(id, signal) }
     }
 
-    /// Every channel is open: the marker goes as the last relay message and from then on everything goes on the link.
+    /// Every channel is open: direct links move control onto the link; TURN phones keep it on the relay socket.
     private func linkOpened(_ id: UUID, _ token: UUID, route: String) async {
         guard linkCurrent(id, token), let row = live[id], let connection = row.link.connection, !row.link.open else { return }
+        let route = linkRouteForTests ?? route
         live[id]?.link.open = true
         live[id]?.link.openedAt = clock()
         live[id]?.link.relinks = 0
         row.link.path.deviceName = row.device?.name ?? "a device"
         live[id]?.link.route = route
         row.link.path.attach(connection, failure: { [weak self] why in Task { await self?.linkEnded(id, token, why: why, tell: true) } })
-        // The marker, then everything that waited for the link (§11.2), through the one ordered writer.
-        do { try await row.writer.send(BackendRemoteLinkPath.movedText) }
-        catch { await linkEnded(id, token, why: "The hand-over could not be sent.", tell: true); return }
+        let keptOnRelay = row.link.relayFirst && route == "turn"
+        live[id]?.link.keptOnRelay = keptOnRelay
+        if keptOnRelay {
+            // No control message goes on this link: dc2 phones would hold it waiting for a marker that never comes.
+            row.link.path.videoOnLink()
+        } else {
+            // The marker, then everything that waited for the link (§11.2), through the one ordered writer.
+            do { try await row.writer.send(BackendRemoteLinkPath.movedText) }
+            catch { await linkEnded(id, token, why: "The hand-over could not be sent.", tell: true); return }
+        }
         let took = Int((clock() - row.link.offeredAt).rounded())
         BackendRemoteRelayClient.note("link: up \(route)\(connection.overTCP ? " over TCP" : "") in \(took) ms (\(row.device?.name ?? "a device")\(row.link.clientOnly ? ", link only" : ""))")
+        if keptOnRelay { BackendRemoteRelayClient.note("link: \(row.device?.name ?? "a device") stays on the relay socket (turn)") }
     }
 
     private func linkDeadline(_ id: UUID, _ token: UUID) async {
@@ -639,10 +659,10 @@ extension BackendRemoteHost {
     func linkEnded(_ id: UUID, _ token: UUID, why: String, tell: Bool) async {
         guard linkCurrent(id, token), let row = live[id] else { return }
         let moved = row.link.path.hasMoved || row.link.clientMoved
-        let linkOnly = row.link.path.currentMode != .wire
+        let linkOnly = row.link.path.currentMode != .wire || row.link.relayFirst
         let keepBack = row.link.keep && !row.link.path.relayIsGone && moved
         let connection = (keepBack ? row.link.path.beginBack() : row.link.path.detach()) ?? row.link.connection
-        live[id]?.link.connection = nil; live[id]?.link.open = false; live[id]?.link.token = nil
+        live[id]?.link.connection = nil; live[id]?.link.open = false; live[id]?.link.token = nil; live[id]?.link.keptOnRelay = false
         row.link.task?.cancel()
         row.link.feed?.finish(); live[id]?.link.feed = nil
         for waiter in row.link.waiters.values { waiter.resume(returning: false) }
@@ -932,12 +952,12 @@ extension BackendRemoteHost {
         }
     }
 
-    /// Video on the link (contract §6): nil when this connection has not moved (send it the usual way).
+    /// Video on the link (contract §6): also available on a TURN link whose control stays on the relay socket.
     public func sendDirect(_ id: UUID, data: Data, lane: BackendLinkLane) -> Bool? {
         live[id]?.link.path.direct(data, lane: lane)
     }
 
-    /// How video goes on a connection's link now (M5): nil when it has not moved.
+    /// How video goes on a connection's link now (M5), including a kept TURN link.
     public func linkVideo(_ id: UUID) -> BackendLinkVideo? {
         live[id]?.link.path.video()
     }

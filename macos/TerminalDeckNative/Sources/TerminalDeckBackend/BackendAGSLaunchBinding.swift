@@ -19,6 +19,7 @@ public struct BackendAGSPreparedLaunch: Sendable {
     fileprivate let requestedSettings: AGSAgentSettings
     fileprivate let plan: BackendAGSLaunchPlan
     fileprivate let nativeServerNames: Set<String>
+    var appliedEffort: String? { plan.appliedEffort(provider: settings.provider) }
     public var hostLeaseID: UUID { lease.id }
     public var readableFiles: [String] { plan.privateFiles.keys.sorted().map { lease.directory.appendingPathComponent($0).path } }
 }

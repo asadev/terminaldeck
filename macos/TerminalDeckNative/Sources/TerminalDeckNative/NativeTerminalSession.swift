@@ -94,10 +94,15 @@ final class NativeTerminalSession {
     static let replayQuiet: Duration = .milliseconds(150)
 
     var ended: Bool { end != nil }
+    var movingHere: Bool {
+        guard let row = NativeCloudChats.shared.remoteRow(tabId: sessionId) else { return false }
+        return NativeCloudChats.shared.moveLine(ref: row.ref, sessionId: row.sessionId)?.moving == true
+    }
 
     /// A chat session (Asad, 13 Oct): its window is Hoot's own chat screen on this session's conversation.
     var isChat: Bool { info?.chat == true }
     @ObservationIgnored private var chatModelMade: NativeHootChatModel?
+    @ObservationIgnored let remoteChat = NativeMachineChatLive()
     var chatLoading: Bool? { chatModelMade?.loading }
     var chatDisplayState: NativeRPCValue? { chatModelMade?.displayState }
     /// The one chat model of this session (made the first time its screen shows it).
@@ -214,6 +219,8 @@ final class NativeTerminalSession {
             guard let self, let chunk = args.first as? [String: Any],
                   chunk["machineId"] as? String == machineId, chunk["sessionId"] as? String == sessionId,
                   let data = chunk["data"].flatMap(Self.decodeText) else { return }
+            if let problem = chunk["problem"] as? String { self.say(problem, sticky: true); return }
+            if chunk["reset"] as? Bool == true { self.beginRemoteReplay() }
             self.receiveRemote(data, replay: TerminalJSON.bool(chunk["replay"]) == true)
         })
         subscriptions.append(bridge.on("machines:upload:progress") { [weak self] args in
@@ -229,26 +236,44 @@ final class NativeTerminalSession {
         let links = NativeMachineLinks.shared
         links.follow(self)
         links.start()
-        startHoldClock()
-        let size = terminal.getTerminal()
-        remote("machines:attach", [machineId, sessionId, size.cols, size.rows])
-        machineLinksChanged()
+        Task { [weak self] in
+            await links.readNow()
+            guard let self, !self.removed else { return }
+            self.machineLinksChanged()
+            // A remote chat is watched through chats.*, never attached as a PTY or addressed as a local chat.
+            if !self.isChat {
+                self.startHoldClock()
+                let size = self.terminal.getTerminal()
+                self.remote("machines:attach", [machineId, sessionId, size.cols, size.rows])
+            }
+        }
     }
 
     /// The far machine's link or session list moved: the session's facts and its end.
     func machineLinksChanged() {
-        guard case .machine(let machineId, let sessionId) = target else { return }
+        guard !removed, case .machine(let machineId, let sessionId) = target else { return }
         let links = NativeMachineLinks.shared
         let machineName = links.snapshot.names[machineId] ?? "that machine"
         let link = links.snapshot.links[machineId]
         let facts = link?.session(sessionId)
         if let facts {
             info = TerminalSessionInfo(id: sessionId, cwd: facts.cwd, title: facts.title, provider: facts.provider,
-                                       exitCode: facts.exitCode, profileName: nil)
+                                       exitCode: facts.exitCode, profileName: nil, chat: facts.chat)
             if let parsed = TerminalStatus.parse(facts.status) { status = parsed }
         }
         guard links.loaded else { return }
         setEnd(SessionEnd.ofMachineSession(machine: machineName, link: link, session: facts))
+    }
+
+    private func beginRemoteReplay() {
+        noteTimer?.cancel(); note = nil
+        holdTimer?.cancel(); quietTimer?.cancel()
+        backfill = TerminalBackfill(); replayed = ""; pendingOutput = ""
+        terminal.alphaValue = 0
+        replaying = true
+        terminal.feed(text: "\u{1b}c")
+        replaying = false
+        startHoldClock()
     }
 
     private func receiveRemote(_ data: String, replay: Bool) {
@@ -283,9 +308,12 @@ final class NativeTerminalSession {
         let previous = remoteChain
         remoteChain = Task { [weak self] in
             await previous?.value
-            let answer = try? await EngineBridge.shared.invoke(channel, args)
-            if let onAnswer { onAnswer(answer) }
-            _ = self
+            do {
+                let answer = try await EngineBridge.shared.invoke(channel, args)
+                if let onAnswer { onAnswer(answer) }
+            } catch {
+                self?.say(RemoteCall.text(error, TerminalTransfer.noLink), sticky: true)
+            }
         }
     }
 
@@ -582,7 +610,7 @@ final class NativeTerminalSession {
     fileprivate func send(_ bytes: ArraySlice<UInt8>) {
         // While another device has the session and its panel shows here, nothing typed here reaches the program
         // (Asad, 28 Oct: typing is not choosing; he chooses with "Move back here" or the session list).
-        guard !replaying, end == nil, !bytes.isEmpty, !showsMoveBack else { return }
+        guard !removed, !movingHere, !replaying, end == nil, !bytes.isEmpty, !showsMoveBack else { return }
         let text = String(decoding: bytes, as: UTF8.self)
         switch target {
         case .local(let id):
@@ -714,7 +742,7 @@ final class NativeTerminalSession {
     }
 
     private func sendSize(force: Bool, cols: Int? = nil, rows: Int? = nil) {
-        guard end == nil, terminal.window != nil, terminal.bounds.width > 0, terminal.bounds.height > 0 else { return }
+        guard !removed, !movingHere, !isChat, end == nil, terminal.window != nil, terminal.bounds.width > 0, terminal.bounds.height > 0 else { return }
         let size = (cols: cols ?? terminal.getTerminal().cols, rows: rows ?? terminal.getTerminal().rows)
         guard size.cols > 0, size.rows > 0 else { return }
         if !force, let last = lastSentSize, last == size { return }
@@ -892,7 +920,7 @@ final class NativeTerminalSession {
     }
 
     func readControls() {
-        guard end == nil else { return }
+        guard !removed, end == nil, !(isRemote && isChat) else { return }
         controlsState.read()
     }
 
@@ -951,9 +979,11 @@ final class NativeTerminalSession {
         holdTimer?.cancel()
         quietTimer?.cancel()
         noteTimer?.cancel()
+        remoteChat.close()
+        removed = true
         switch target {
         case .machine(let machineId, let sessionId):
-            remote("machines:detach", [machineId, sessionId])
+            if !isChat { remote("machines:detach", [machineId, sessionId]) }
         case .server:
             if let shellId {
                 remote("servers:shell:close", [shellId])
@@ -1147,10 +1177,12 @@ final class NativeMachineLinks {
             guard let self, let view = MachinesSnapshot.decode(args.first) else { return }
             self.update(view)
         }
-        Task { [weak self] in
-            guard let view = MachinesSnapshot.decode(try? await EngineBridge.shared.invoke("machines:list")) else { return }
-            self?.update(view)
-        }
+        Task { [weak self] in await self?.readNow() }
+    }
+
+    func readNow() async {
+        guard let view = MachinesSnapshot.decode(try? await EngineBridge.shared.invoke("machines:list")) else { return }
+        update(view)
     }
 
     private func update(_ view: MachinesSnapshot) {

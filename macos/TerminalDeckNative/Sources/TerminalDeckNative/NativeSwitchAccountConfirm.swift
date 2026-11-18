@@ -13,6 +13,7 @@ struct NativeSwitchAccountConfirm: View {
     var notice: String? = nil
     /// Only with the offer, only while the agent is busy (AccountSwitchWords.warning).
     var warning: String? = nil
+    var repairAPIKey: (() -> Void)? = nil
     var answer: ((String) -> Void)? = nil
 
     /// 12 Oct: a session that started before account switching was ready cannot switch in place; it is started
@@ -85,6 +86,10 @@ struct NativeSwitchAccountConfirm: View {
                         reply("defer", closes: false)
                     }
                     .disabled(request.busy)
+                }
+                if let repairAPIKey {
+                    Button("Edit API key", action: repairAPIKey)
+                        .buttonStyle(.borderedProminent)
                 }
                 if request.offersSwitch {
                     Button(offerText == nil ? request.confirmLabel

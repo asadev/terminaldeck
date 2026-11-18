@@ -289,7 +289,10 @@ public actor BackendSessionLauncher {
         // Private agent settings already carry their effort. Plain sessions and
         // saved agents with no override use Asad's Extra default too.
         let selectedEffort = input.effort.flatMap { ["", "auto", "default"].contains($0) ? nil : $0 }
-        if input.agentSettings?.effort == nil, let effort = selectedEffort ?? AGSCapabilities.defaultEffort(provider: provider.id) {
+        if let prepared = BackendAGSLaunchScope.prepared {
+            input.effort = prepared.appliedEffort
+        } else if let effort = selectedEffort ?? AGSCapabilities.defaultEffort(provider: provider.id) {
+            input.effort = effort  // The ledger must remember the value actually passed to this session.
             if provider.id == "claude" { additions += ["--effort", effort] }
             else if provider.id == "codex" { additions += ["-c", "model_reasoning_effort=" + effort] }
         }

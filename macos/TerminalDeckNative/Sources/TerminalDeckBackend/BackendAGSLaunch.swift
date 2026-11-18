@@ -7,6 +7,24 @@ public struct BackendAGSLaunchPlan: Sendable {
     public let workingFolder: String?, keepOpen: Bool
     /// Feed this map into the existing per-session MCP config/grant resolver.
     public let mcpServers: [String: Bool]
+
+    /// Only values materialized in this launch are evidence; old CLIs may omit the app default.
+    func appliedEffort(provider: String) -> String? {
+        if provider == "claude" {
+            if let index = arguments.firstIndex(of: "--effort"), index + 1 < arguments.count { return arguments[index + 1] }
+            if let index = arguments.firstIndex(of: "--settings"), index + 1 < arguments.count {
+                let value = arguments[index + 1]
+                let data = value.hasPrefix("{") ? Data(value.utf8) : privateFiles[URL(fileURLWithPath: value).lastPathComponent]
+                if let data, let raw = try? NativeRPCValue.parseJSON(data), raw["ultracode"].bool == true { return AGSCapabilities.ultracode }
+            }
+        } else if provider == "codex" {
+            return arguments.first(where: { $0.hasPrefix("model_reasoning_effort=") })
+                .map { String($0.dropFirst("model_reasoning_effort=".count)).trimmingCharacters(in: CharacterSet(charactersIn: "\"")) }
+        } else if provider == "gemini", let data = privateFiles["ags-gemini-settings.json"], let raw = try? NativeRPCValue.parseJSON(data) {
+            return raw["modelConfig"]["generateContentConfig"]["thinkingConfig"]["thinkingLevel"].string?.lowercased()
+        }
+        return nil
+    }
 }
 public enum BackendAGSLaunch {
     /// The inline --settings value that turns Claude Code's Ultracode on for the session.

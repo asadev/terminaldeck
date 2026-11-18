@@ -46,6 +46,8 @@
 	<string>MIT License</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Terminal Deck connects straight to your paired phones and computers when they are on this network, so your terminal and screen answer faster.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>A website in the built-in browser can ask to use your location. You choose which requests to allow.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Terminal Deck uses the camera when you ask a session to use it or allow a website on its browser tab.</string>
 	<key>NSAppleEventsUsageDescription</key>

@@ -4,7 +4,7 @@ import TerminalDeckNativeCore
 
 /// What the composition must do after an account change (AM8, N3).
 public enum BackendCloudAccountSessionChange: Sendable, Equatable {
-    /// Signed in and the server allows Cloud.
+    /// The saved sign-in is valid. Cloud capability and subscription remain separate in the snapshot.
     case signedIn
     /// The server explicitly said Cloud is not allowed: nothing runs, the saved sign-in is KEPT.
     case dormant
@@ -100,6 +100,32 @@ public actor BackendCloudAccount {
     private var lastPorts: BackendCloudAccountPorts?
     private let clock: @Sendable () -> Int64
     private var current: CloudAccountSnapshot = .signedOut
+    private var subscription: CloudSubscriptionSnapshot = .init()
+    private var subscriptionCheckedAt: UInt64?
+    private var subscriptionReading = false
+    /// Shares the app's existing quiet watch; no extra timer, and no request more often than every five minutes.
+    public static let subscriptionGap: UInt64 = 300 * 1_000_000_000
+    public func refreshSubscriptionIfDue() async {
+        guard !subscriptionReading else { return }
+        if let at = subscriptionCheckedAt, monotonic() &- at < Self.subscriptionGap { return }
+        subscriptionReading = true
+        defer { subscriptionReading = false }
+        let version = generation
+        let answer: CloudSubscription?
+        do {
+            let session = try await identity.credentials()
+            // A missing identity must not suppress a later sign-in's first read.
+            subscriptionCheckedAt = monotonic()
+            let response = try await http.send(.init(url: configuration.baseURL.appendingPathComponent("subscription"), method: "GET",
+                headers: ["Authorization": "Bearer " + session.accessToken], body: Data()))
+            answer = response.status == 200 ? (try? CloudWire.decode(CloudSubscription.self, from: response.body)) : nil
+        } catch { answer = nil }
+        guard generation == version else { return }
+        let wasAllowed = subscription.allowsCloudServices
+        subscription.received(answer)
+        publish(current)
+        if !wasAllowed && subscription.allowsCloudServices { startRefresh() }
+    }
     /// Status-line lane: one "Sync now" pass at a time.
     public let syncNowGate = BackendCloudSyncNowGate()
     /// Status-line lane: the account's room left (`/state` budget `bytesLeft`); nil before the first answer.
@@ -411,6 +437,8 @@ public actor BackendCloudAccount {
     }
     private func remove(_ id: UUID) { listeners[id] = nil }
     private func publish(_ snapshot: CloudAccountSnapshot) {
+        var snapshot = snapshot
+        snapshot.subscription = subscription
         current = snapshot; listeners.values.forEach { $0.yield(snapshot) }
     }
     /// A link can only START a sign-in while no account is saved on this Mac; it never closes an open gate (finding 3).
@@ -517,6 +545,12 @@ public actor BackendCloudAccount {
             await reach("save sign-in")
             try await identity.install(session)
             do {
+                await refreshSubscriptionIfDue()
+                if !subscription.allowsCloudServices {
+                    publish(.init(phase: .signedIn, gate: .closed, displayName: session.user.displayName))
+                    await sessionHook?(.signedIn)
+                    return
+                }
                 await reach("device keys")
                 let registration = try await identity.deviceRegistration()
                 await reach("Cloud connection")
@@ -568,6 +602,15 @@ public actor BackendCloudAccount {
             refreshStage = "saved sign-in"
             let session = try await identity.credentials()
             signedInAs = session.user.displayName
+            await refreshSubscriptionIfDue()
+            guard generation == version else { throw CancellationError() }
+            if !subscription.allowsCloudServices {
+                // Presentation only: no pause, stop, sign-out, deletion or saved-choice write on a payment change.
+                if current.phase == .needsSignIn || current.phase == .signedOut {
+                    publish(.init(phase: .signedIn, gate: current.gate, displayName: signedInAs))
+                }
+                return
+            }
             refreshStage = "connection"
             let bound = try await ports()
             refreshStage = "status"
@@ -1062,6 +1105,7 @@ public actor BackendCloudAccount {
     /// `revokedBy`: Cloud's explicit answer that another device signed this Mac out (see `revokedByCloud`). The outbox is
     /// paused, never emptied: the changes waiting in it go up after he signs in again. Nothing of his on this Mac is removed.
     private func clearSignIn(leaving note: BackendCloudLeaveNote? = nil, revokedBy detail: CloudErrorDetail? = nil) async throws {
+        subscription = .init(); subscriptionCheckedAt = nil
         flow = nil; generation += 1; refreshing?.cancel(); retrying?.cancel(); retrying = nil; checkedAt = nil; failures = 0
         background?.cancel(); background = nil
         trustAlarm = nil

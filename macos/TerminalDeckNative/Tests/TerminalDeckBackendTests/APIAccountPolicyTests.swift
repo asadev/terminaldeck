@@ -13,6 +13,34 @@ final class APIAccountPolicyTests: XCTestCase {
         let record = try BackendAPIAccountRecord(profile: profile, appName: appName, kind: kind, baseURL: endpoint, model: model)
         return (root, profile, record)
     }
+    func testAPIKeyMetadataDistinguishesAbsenceAccessAndConnectionWithoutReadingAKey() throws {
+        let (root, _, record) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let matching: [String: Any] = [kSecAttrGeneric as String: record.credentialScope]
+        XCTAssertEqual(BackendAPIAccountKeychain.availability(status: errSecSuccess, attributes: matching, record: record), .available)
+        XCTAssertEqual(BackendAPIAccountKeychain.availability(status: errSecItemNotFound, attributes: nil, record: record), .missing)
+        for code in [errSecInteractionNotAllowed, errSecAuthFailed, errSecNotAvailable] {
+            XCTAssertEqual(BackendAPIAccountKeychain.availability(status: code, attributes: nil, record: record), .accessUnavailable)
+        }
+        XCTAssertEqual(BackendAPIAccountKeychain.availability(status: errSecSuccess, attributes: [:], record: record), .differentEndpoint)
+        var changed = record
+        changed.baseURL = "https://other.example.test"
+        XCTAssertEqual(BackendAPIAccountKeychain.availability(status: errSecSuccess, attributes: matching, record: changed), .differentEndpoint)
+        XCTAssertEqual(changed.keychainService, record.keychainService)
+        XCTAssertEqual(changed.keychainAccount, record.keychainAccount, "Connection changes keep the same account but require the new endpoint's key")
+        let renamed = BackendAccountProfile(id: record.accountID, name: "Renamed display label", provider: record.provider,
+            configDir: record.configDirectory, system: false, color: "--accent", createdAt: 0)
+        let sameAccount = try BackendAPIAccountRecord(profile: renamed, appName: record.appName, kind: record.kind, baseURL: record.baseURL, model: record.model)
+        XCTAssertEqual(sameAccount.keychainService, record.keychainService)
+        XCTAssertEqual(sameAccount.keychainAccount, record.keychainAccount, "The display label is never a Keychain lookup name")
+        XCTAssertFalse(BackendAPIAccountKeychain.Availability.accessUnavailable.detail.contains("missing"))
+        for status in [BackendAPIAccountKeychain.Availability.missing, .accessUnavailable, .differentEndpoint] {
+            let diagnostic = CloudSecretsLog.cause(CloudSecretsPlainFailure(status.detail))
+            XCTAssertEqual(diagnostic, status.detail)
+            XCTAssertTrue(CloudSecretsLog.safe(diagnostic))
+        }
+    }
+
     func testSavedAccountContainsOnlyAReferenceAndNonSecretMetadata() throws {
         let (root, profile, record) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }

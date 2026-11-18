@@ -152,6 +152,7 @@ public actor NativeChatTranscriptReader {
     public nonisolated let path: String
     private let allowedRoots: [String]
     private let limits: NativeChatTranscriptLimits
+    private let mergeAgentTurn: Bool
     private var offset: Int64
     private var startedMidFile: Bool
     private var pending = Data()
@@ -167,13 +168,14 @@ public actor NativeChatTranscriptReader {
     private var cwd = ""
 
     public init(path: String, sessionID: String? = nil, startAt: Int64 = 0,
-                allowedRoots: [String] = [], limits: NativeChatTranscriptLimits = NativeChatTranscriptLimits()) {
+                allowedRoots: [String] = [], limits: NativeChatTranscriptLimits = NativeChatTranscriptLimits(), mergeAgentTurn: Bool = true) {
         self.path = URL(fileURLWithPath: path).standardizedFileURL.path
         self.sessionID = sessionID ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
         self.offset = max(0, startAt)
         self.startedMidFile = startAt > 0
         self.allowedRoots = allowedRoots
         self.limits = limits
+        self.mergeAgentTurn = mergeAgentTurn
     }
 
     public var conversation: [ChatMessage] { messages }
@@ -239,7 +241,9 @@ public actor NativeChatTranscriptReader {
             if nextSession.isEmpty, let value = parsed.sessionID { nextSession = value }
             if nextCwd.isEmpty, let value = parsed.cwd { nextCwd = value }
             let changedMessage: ChatMessage
-            if parsed.role == .agent, let index = nextOpen {
+            // Chat history groups a turn. A last-answer consumer needs the final API message and its own timestamp.
+            if parsed.role == .agent, let index = nextOpen,
+               mergeAgentTurn || nextMessages[index].id == "agent:" + parsed.groupKey {
                 let old = nextMessages[index]
                 changedMessage = ChatMessage(id: old.id, role: .agent,
                     text: old.text.isEmpty ? parsed.text : old.text + "\n\n" + parsed.text,

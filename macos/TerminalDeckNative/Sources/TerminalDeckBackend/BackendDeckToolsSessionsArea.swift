@@ -221,19 +221,41 @@ public enum BackendDeckToolsSessionsArea {
             }
         }
     }
+    /// The same reader used by sessions_result. A readable record with no answer is distinct from a missing record.
+    public struct AnswerRecord: Sendable {
+        public let answer: NativeRPCValue?
+        public var completedAt: Double? = nil
+    }
     static func latestAnswer(_ session: NativeRPCValue, runtime: any BackendDeckToolsSessionsRuntime, surface: any BackendDeckToolsSessionsSurface, context: BackendMCPCallContext) async throws -> NativeRPCValue? {
+        try await answerRecord(session, runtime: runtime, surface: surface, context: context)?.answer
+    }
+    public static func answerRecord(_ session: NativeRPCValue, runtime: any BackendDeckToolsSessionsRuntime, surface: any BackendDeckToolsSessionsSurface,
+                                    context: BackendMCPCallContext, maximumChars: Int? = 4_000) async throws -> AnswerRecord? {
+        let sessions: [NativeRPCValue]
+        if BackendDeckCoreAgentRecords.keepsOwnRecord(session["provider"].string) { sessions = [] }
+        else { sessions = try await runtime.sessions(context) }
+        return try await answerRecord(session, sessions: sessions, source: .init(
+            transcripts: { try await surface.transcripts(cwd: $0, context: context) },
+            transcriptBytes: { try await surface.transcriptBytes(path: $0, context: context) },
+            transcriptMessages: { try await surface.answerMessages(path: $0, fromByte: $1, context: context) },
+            agentRecord: { await surface.agentRecord(session: $0, windowBytes: 256 * 1_024, context: context) }), maximumChars: maximumChars)
+    }
+    public static func answerRecord(_ session: NativeRPCValue, sessions: [NativeRPCValue], source: BackendSessionAnswerSource,
+                                    maximumChars: Int? = 4_000) async throws -> AnswerRecord? {
         if BackendDeckCoreAgentRecords.keepsOwnRecord(session["provider"].string) {
-            return await surface.agentRecord(session: session, windowBytes: 256 * 1_024, context: context)?.lastAnswer(maximumChars: 4_000)
+            guard let record = await source.agentRecord(session) else { return nil }
+            return AnswerRecord(answer: record.lastAnswer(maximumChars: maximumChars), completedAt: record.completedAt)
         }
-        let cwd = session["cwd"].string ?? "", files = try await surface.transcripts(cwd: cwd, context: context)
-        let inFolder = try await runtime.sessions(context).filter { $0["cwd"].string == cwd }
+        let cwd = session["cwd"].string ?? "", files = try await source.transcripts(cwd)
+        let inFolder = sessions.filter { $0["cwd"].string == cwd }
         let match = BackendDeckToolsSessionsTranscriptMatch.match(session: session, files: files, sessionsInFolder: inFolder)
         guard let path = match["path"].string else { return nil }
-        let bytes = try await surface.transcriptBytes(path: path, context: context)
-        let messages = try await surface.transcriptMessages(path: path, fromByte: max(0, bytes - 256 * 1_024), context: context)
-        guard let answer = messages.reversed().first(where: { $0["role"].string == "agent" && !($0["text"].string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return nil }
-        let text = (answer["text"].string ?? "").trimmingCharacters(in: .whitespacesAndNewlines), cut = text.utf16.count > 4_000
-        return object([("at", answer["at"]), ("text", .string(cut ? BackendDeckToolsSupport.slice(text, 0, 4_000) + "…" : text)), ("truncated", .bool(cut))])
+        let bytes = try await source.transcriptBytes(path)
+        let messages = try await source.transcriptMessages(path, max(0, bytes - 256 * 1_024))
+        guard let answer = messages.reversed().first(where: { $0["role"].string == "agent" && !($0["text"].string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return AnswerRecord(answer: nil) }
+        let text = (answer["text"].string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let cut = maximumChars.map { text.utf16.count > $0 } ?? false
+        return AnswerRecord(answer: object([("at", answer["at"]), ("text", .string(cut ? BackendDeckToolsSupport.slice(text, 0, maximumChars ?? 0) + "…" : text)), ("truncated", .bool(cut))]))
     }
     static func outcomeNote(_ outcome: String) -> String {
         switch outcome {

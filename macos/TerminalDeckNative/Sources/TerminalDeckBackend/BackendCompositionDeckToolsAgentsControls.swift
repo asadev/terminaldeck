@@ -45,14 +45,19 @@ public struct BackendCompositionDeckToolsAgentControls: BackendCompositionAgentC
         public let session: @Sendable (_ sessionID: String) async -> BackendSessionMeta?
         /// session-account.ts establishedConfigDir: nil keeps every file fallback on the app's own Claude directory.
         public let configDir: (@Sendable (_ sessionID: String) async -> String?)?
+        /// The session's own saved launch, including the effort it actually started with.
+        public let savedLaunch: (@Sendable (_ sessionID: String) async -> NativeRPCValue)?
         /// Remember a model only after the CLI confirmed the person's selection.
         public let rememberModel: (@Sendable (_ sessionID: String, _ model: String) async -> Void)?
+        public let rememberEffort: (@Sendable (_ sessionID: String, _ effort: String) async -> Void)?
         public init(write: @escaping @Sendable (_ sessionID: String, _ data: String) async -> Void,
                     screen: @escaping @Sendable (_ sessionID: String) async -> String?,
                     session: @escaping @Sendable (_ sessionID: String) async -> BackendSessionMeta?,
                     configDir: (@Sendable (_ sessionID: String) async -> String?)?,
-                    rememberModel: (@Sendable (_ sessionID: String, _ model: String) async -> Void)?) {
-            self.write = write; self.screen = screen; self.session = session; self.configDir = configDir; self.rememberModel = rememberModel
+                    rememberModel: (@Sendable (_ sessionID: String, _ model: String) async -> Void)?,
+                    savedLaunch: (@Sendable (_ sessionID: String) async -> NativeRPCValue)? = nil,
+                    rememberEffort: (@Sendable (_ sessionID: String, _ effort: String) async -> Void)? = nil) {
+            self.write = write; self.screen = screen; self.session = session; self.configDir = configDir; self.rememberModel = rememberModel; self.savedLaunch = savedLaunch; self.rememberEffort = rememberEffort
         }
         /// host-core.ts:2678 controlAccess over the native owners: `ptys.write`/`ptys.screen`
         /// → BackendPTYManager, `establishedConfigDir` → BackendAccountAttribution,
@@ -62,7 +67,9 @@ public struct BackendCompositionDeckToolsAgentControls: BackendCompositionAgentC
                    screen: { id in manager.screen(id) },
                    session: { id in manager.list().first { $0.id == id } },
                    configDir: { id in await attribution.establishedConfigDir(sessionID: id) },
-                   rememberModel: { id, model in _ = try? await store.ledgerUpdate(id, patch: .object([.init("model", .string(model))])) })
+                   rememberModel: { id, model in _ = try? await store.ledgerUpdate(id, patch: .object([.init("model", .string(model))])) },
+                   savedLaunch: { id in (try? await store.ledgerGet(id)) ?? .null },
+                   rememberEffort: { id, effort in _ = try? await store.ledgerUpdate(id, patch: .object([.init("effort", .string(effort))])) })
         }
     }
 
@@ -307,7 +314,17 @@ extension BackendCompositionDeckToolsAgentControls {
         guard let last = found.last, let level = Pattern.group(text, last, 1) ?? Pattern.group(text, last, 2) else { return nil }
         return (level.lowercased(), scopeOf(Pattern.group(text, last, 0) ?? ""))
     }
-    static func readEffortFromScreen(_ screen: String) -> String? { readEffortConfirmation(screen)?.level }
+    static func readEffortFromScreen(_ screen: String) -> String? {
+        if let confirmed = readEffortConfirmation(screen)?.level { return confirmed }
+        // A newly started CLI announces effort in its welcome line before any /effort command.
+        for line in lines(screen).reversed() {
+            guard line.contains("Claude Code v") || line.hasPrefix("│") else { continue }
+            guard let found = Pattern.first(line, #"\bwith\s+([a-z]+)\s+effort\s*·"#, [.caseInsensitive]),
+                  let level = Pattern.group(line, found, 1)?.lowercased(), effortLevels.contains(where: { $0.id == level }) else { continue }
+            return level
+        }
+        return nil
+    }
     /// agent-controls.ts:1077 readFastIndicator: the `↯` in the rule above the command line.
     static func readFastIndicator(_ screen: String) -> String? {
         let all = lines(screen)
@@ -560,12 +577,16 @@ extension BackendCompositionDeckToolsAgentControls {
         } else if let screen, let welcomed = Self.readModelFromWelcome(screen) { model = Reading(value: welcomed, label: welcomed, source: "screen") }
         else { model = Self.modelFromSettings(settings) }
         let effort: Reading
-        // This process's environment, which is this machine's (agent-controls.ts:1705).
-        let override = local ? BackendSharedText.trim(environment["CLAUDE_CODE_EFFORT_LEVEL"] ?? "").lowercased() : ""
-        if !override.isEmpty { effort = Reading(value: override, label: Self.effortLevels.first(where: { $0.id == override })?.label ?? override, source: "env") }
-        else if let screen, let confirmed = Self.readEffortFromScreen(screen) {
+        let saved = if local, let sessionID, let lookup = access.savedLaunch { await lookup(sessionID) } else { NativeRPCValue.null }
+        let launchEffort = saved["effort"].string?.lowercased()
+        if let screen, let confirmed = Self.readEffortFromScreen(screen) {
             effort = Reading(value: confirmed, label: Self.effortLevels.first(where: { $0.id == confirmed })?.label ?? confirmed, source: "screen")
-        } else { effort = Self.effortFromSettings(settings) }
+        } else if let level = launchEffort, let known = Self.effortLevels.first(where: { $0.id == level }) {
+            effort = Reading(value: level, label: known.label, source: "launch")
+        } else {
+            // Session launch strips inherited CLAUDE_CODE_* values; the app's environment cannot describe it.
+            effort = Self.effortFromSettings(settings)
+        }
         let fast = screen.flatMap(Self.readFast) ?? Self.fastFromSettings(settings)
         return reading(model: model, effort: effort, fast: fast, permission: permission)
     }
@@ -769,6 +790,7 @@ extension BackendCompositionDeckToolsAgentControls {
             case .ran(.answered(let answer), let note):
                 guard answer.ok else { return Outcome(ok: false, message: Self.withNote(answer.text, note), reading: fallback()) }
                 let scope = answer.scope.map { " — \(Self.scopeText($0))." } ?? "."
+                if local { await access.rememberEffort?(id, value) }
                 return Outcome(ok: true, message: Self.withNote("Effort is now \(known.label)\(scope)", note), reading: Reading(value: value, label: known.label, source: "screen"))
             }
         case "fast":

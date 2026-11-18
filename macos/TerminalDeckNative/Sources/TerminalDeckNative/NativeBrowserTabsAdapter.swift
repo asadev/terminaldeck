@@ -6,7 +6,7 @@ import AppKit
 
 extension NativeBrowserTabs: BrowserTabsProvider {
     var browserTabs: [BrowserTabInfo] {
-        tabs.map { BrowserTabInfo(id: $0.id, title: $0.displayTitle, favicon: $0.favicon, loading: $0.isLoading) }
+        tabs.map { BrowserTabInfo(id: $0.id, title: $0.displayTitle, favicon: $0.favicon, loading: $0.isLoading, needsAttention: $0.pageRequests.needsAttention) }
     }
 
     func newBrowserTab() -> String {

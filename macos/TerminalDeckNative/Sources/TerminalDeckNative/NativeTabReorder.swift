@@ -32,9 +32,44 @@ final class NativeTabReorder {
 
     var liveIndex: Int { dragID.flatMap { order.firstIndex(of: $0) } ?? startIndex }
 
+    /// Each tab's own width when they differ (the tab on show keeps room for its title); empty: all one `step` apart.
+    @ObservationIgnored var widths: [String: CGFloat] = [:]
+
     /// The sideways offset of a tab: the held one follows the pointer, the rest sit in their places.
     func offset(for id: String) -> CGFloat {
-        id == dragID ? translation - CGFloat(liveIndex - startIndex) * step : 0
+        id == dragID ? translation - (slotStart(of: id, in: order) - slotStart(of: id, in: base)) : 0
+    }
+
+    /// The place the held tab has reached. Tabs of one width: the shared rule (a step at a time). Tabs of their own
+    /// widths (the tab on show is wider): the held tab passes a neighbour when its edge crosses that neighbour's middle.
+    private func targetIndex(for id: String) -> Int {
+        guard let width = widths[id] else {
+            return TabOrderRules.targetIndex(start: startIndex, translation: Double(translation), step: Double(step), count: base.count)
+        }
+        let gap = CGFloat(TabStripMetrics.spacing)
+        let left = slotStart(of: id, in: base) + translation, right = left + width
+        func middle(_ other: String) -> CGFloat { slotStart(of: other, in: base) + (widths[other] ?? (step - gap)) / 2 }
+        var index = startIndex
+        if translation > 0 {
+            for other in base.dropFirst(startIndex + 1) {
+                if right > middle(other) { index += 1 } else { break }
+            }
+        } else if translation < 0 {
+            for other in base.prefix(startIndex).reversed() {
+                if left < middle(other) { index -= 1 } else { break }
+            }
+        }
+        return index
+    }
+
+    /// Where a tab's slot starts in an order: the widths (and gaps) of the tabs before it.
+    private func slotStart(of id: String, in list: [String]) -> CGFloat {
+        var x: CGFloat = 0
+        for other in list {
+            if other == id { break }
+            x += widths[other].map { $0 + CGFloat(TabStripMetrics.spacing) } ?? step
+        }
+        return x
     }
 
     func begin(_ id: String, in current: [String]) {
@@ -47,7 +82,7 @@ final class NativeTabReorder {
         self.translation = translation
         popping = outsideWindow || TabOrderRules.popsOut(pointerY: Double(pointerY), stripHeight: Double(stripHeight))
         // Over the pop-out line the tab stays where it was: only a tab still in the strip makes the others move.
-        let target = popping ? startIndex : TabOrderRules.targetIndex(start: startIndex, translation: Double(translation), step: Double(step), count: base.count)
+        let target = popping ? startIndex : targetIndex(for: id)
         let next = TabOrderRules.moved(base, id: id, to: target)
         if next != order { withAnimation(.easeOut(duration: 0.14)) { order = next } }
     }

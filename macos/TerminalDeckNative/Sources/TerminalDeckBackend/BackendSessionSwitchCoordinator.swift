@@ -102,7 +102,7 @@ public actor BackendSessionSwitchCoordinator {
     private let store: NativeStateStore
     private let emit: @Sendable (BackendSessionLifecycleEvent) -> Void
     private let sharedHistory: BackendSessionSwitchSharedHistory?
-    private let apiCredentialAvailable: @Sendable (BackendAPIAccountRecord) -> Bool
+    private let apiCredentialAvailable: (@Sendable (BackendAPIAccountRecord) -> Bool)?
     private var observer: UUID?
     private var lifecycleObserver: UUID?
     private var pending: [String: Pending] = [:]
@@ -112,7 +112,7 @@ public actor BackendSessionSwitchCoordinator {
 
     private init(lifecycle: BackendSessionLifecycleCoordinator, accounts: BackendAccountLaunchAdapter,
                  attribution: BackendAccountAttribution, planner: BackendSessionRestorePlanner, store: NativeStateStore,
-                 sharedHistory: BackendSessionSwitchSharedHistory?, apiCredentialAvailable: @escaping @Sendable (BackendAPIAccountRecord) -> Bool,
+                 sharedHistory: BackendSessionSwitchSharedHistory?, apiCredentialAvailable: (@Sendable (BackendAPIAccountRecord) -> Bool)?,
                  emit: @escaping @Sendable (BackendSessionLifecycleEvent) -> Void) {
         self.lifecycle = lifecycle; self.accounts = accounts; self.attribution = attribution; self.planner = planner; self.store = store
         self.sharedHistory = sharedHistory; self.apiCredentialAvailable = apiCredentialAvailable; self.emit = emit
@@ -122,7 +122,7 @@ public actor BackendSessionSwitchCoordinator {
     public static func start(lifecycle: BackendSessionLifecycleCoordinator, accounts: BackendAccountLaunchAdapter,
                              attribution: BackendAccountAttribution, planner: BackendSessionRestorePlanner, store: NativeStateStore,
                              sharedHistory: BackendSessionSwitchSharedHistory? = nil,
-                             apiCredentialAvailable: @escaping @Sendable (BackendAPIAccountRecord) -> Bool = { BackendAPIAccountKeychain.contains($0) },
+                             apiCredentialAvailable: (@Sendable (BackendAPIAccountRecord) -> Bool)? = nil,
                              emit: @escaping @Sendable (BackendSessionLifecycleEvent) -> Void) async throws -> BackendSessionSwitchCoordinator {
         // D11 / TS wire.ts: with the vault off (no secure store, or logins that will not unlock) there is
         // no broker socket, and switching still works for plain and agent-kept accounts; app-kept ones
@@ -188,7 +188,8 @@ public actor BackendSessionSwitchCoordinator {
         }
         if let sentence = Self.refusal(meta: meta, saved: savedEntry, target: targetProfile, targetSignedIn: signedIn, targetUnavailable: unavailable) { return refused(sentence) }
         guard let live = meta, let target = targetProfile, let saved = savedEntry else { return refused("This session cannot be switched.") }
-        if pending[sessionID] != nil { return refused("This session's last account change is still waiting for the agent to pick up the new login. Cancel it or wait a moment, then try again.") }
+        // A login already handed to the broker may be superseded before the idle CLI rereads it.
+        // The per-session gate still serializes writes; delayed proof for an older target is ignored.
         if live.provider == "claude", target.provider == "claude",
            !Self.requiresAccountReplacement(sourceID: live.profileId, targetID: target.id),
            await accounts.broker.seatSnapshot(sessionID: sessionID) != nil {
@@ -216,7 +217,7 @@ public actor BackendSessionSwitchCoordinator {
     }
     /// Configuration availability only: a saved key is not proof that the provider accepts it.
     static func apiTargetRefusal(_ target: BackendAccountProfile, configuration: BackendAccountConfiguration? = nil,
-                                 credentialAvailable: (BackendAPIAccountRecord) -> Bool = BackendAPIAccountKeychain.contains) -> String? {
+                                 credentialAvailable: ((BackendAPIAccountRecord) -> Bool)? = nil) -> String? {
         guard BackendAPIAccountRecord.isAPIAccountID(target.id) else { return nil }
         do {
             guard let record = try BackendAPIAccountRecord.read(target) else {
@@ -225,8 +226,10 @@ public actor BackendSessionSwitchCoordinator {
             if let configuration, record.appName != configuration.appName || !BackendAccountSignInStorage.ownsFolder(target, configuration: configuration) {
                 return "This API account belongs to another copy of the app. Nothing was changed."
             }
-            guard !record.requiresKey || credentialAvailable(record) else {
-                return "The API key for \(target.name) is missing or unavailable. Open Settings › Coding AIs and update its key. Nothing was changed."
+            if record.requiresKey {
+                let status = credentialAvailable.map { $0(record) ? BackendAPIAccountKeychain.Availability.available : .missing }
+                    ?? BackendAPIAccountKeychain.availability(record)
+                if status != .available { return status.detail + " Nothing was changed." }
             }
             return nil
         } catch {
@@ -420,13 +423,15 @@ public actor BackendSessionSwitchCoordinator {
             }
         }
         let sequence = await broker.credentialSequence()
-        pending[plan.sessionID] = Pending(target: target, previousID: previous, saved: saved, seat: seat, afterSequence: sequence, requested: Date())
+        let previousChange = pending[plan.sessionID]
+        pending[plan.sessionID] = Pending(target: target, previousID: previousChange?.previousID ?? previous,
+            saved: saved, seat: seat, afterSequence: sequence, requested: Date(), createdNudge: previousChange?.createdNudge)
         let moved = await BackendAccountSwitchInPlace.switchInPlace(sessionID: plan.sessionID,
             account: .init(id: target.id, name: target.name, configDir: target.configDir), dependencies: broker.switchInPlaceDependencies())
         switch moved {
         case .refused(let why):
             // Nothing was retargeted: the seat is as it was.
-            pending[plan.sessionID] = nil
+            pending[plan.sessionID] = previousChange
             throw BackendSessionFailure.unsupported(why)
         case .switched(let nudged, let file, _):
             // TS noteCreatedNudge: a `{}` this switch created is taken back once the reread is seen.

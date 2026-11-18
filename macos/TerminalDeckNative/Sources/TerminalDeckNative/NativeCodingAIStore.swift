@@ -17,8 +17,23 @@ final class NativeCodingAIStore {
     static let shared = NativeCodingAIStore()
 
     // Where the agents run
-    var scope: CodingAIScope = .thisMachine
-    private(set) var machines = CodingAIMachinesView.empty
+    private var savedScope: CodingAIScope = .thisMachine
+    var scope: CodingAIScope {
+        get {
+            if case .device = savedScope, !NativeCloudOffers.shows(.remoteMachineChoices) { return .thisMachine }
+            return savedScope
+        }
+        set { savedScope = newValue }
+    }
+    private var savedMachines = CodingAIMachinesView.empty
+    var machines: CodingAIMachinesView {
+        get {
+            var shown = savedMachines
+            if !NativeCloudOffers.shows(.remoteMachineChoices) { shown.devices = [] }
+            return shown
+        }
+        set { savedMachines = newValue }
+    }
 
     // What is installed and which agents can hold a login
     private(set) var prerequisites: CodingAIPrerequisites?
@@ -176,7 +191,7 @@ final class NativeCodingAIStore {
             bridge.on("machines:state") { [weak self] args in
                 guard let self else { return }
                 self.machines = CodingAIMachinesView.parse(CodingAIJSON(args.first))
-                self.scope = self.scope.after(devices: self.machines.devices)
+                self.savedScope = self.savedScope.after(devices: self.savedMachines.devices)
             },
             bridge.on("remote:connections") { [weak self] _ in self?.readMachines() },
             bridge.on("session:created") { [weak self] _ in self?.readSessions() },
@@ -312,7 +327,7 @@ final class NativeCodingAIStore {
         Task {
             guard let raw = try? await call("machines:list") else { return }
             machines = CodingAIMachinesView.parse(raw)
-            scope = scope.after(devices: machines.devices)
+            savedScope = savedScope.after(devices: savedMachines.devices)
         }
     }
 

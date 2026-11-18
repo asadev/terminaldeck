@@ -38,7 +38,6 @@ extension NativeCompositionProduction {
             tunnelsDropped: { [weak self] id in await (await MainActor.run { self?.reachLedger })?.forget(id) })
         machineCoordinator = coordinator; joins.bindMachines(coordinator)
         NativeRemoteMacs.shared.bind(coordinator)   // Other Macs' screens (Mac to Mac, 31 Oct)
-        NativeReachLive.shared.machinesReady()      // His other Macs by sign-in (live use, 15 Nov)
         let panels = BackendRemotePanelRegistry()
         guard let index = files.artifacts, let previews = files.previews, let mcp = clients.mcpClients else {
             throw NativeRPCError(code: "composition-incomplete", message: "Machine panels need the actual artifacts, preview and MCP owners.")
@@ -142,10 +141,15 @@ extension NativeCompositionProduction {
                 },
                 disconnect: { [usage] context in await usage.disconnect(ownerID: context.ownerID) }),
             transferredDomains: ["machines", "remote-serve"], requireSuppliers: { [joins] in _ = try joins.sessions(); _ = try joins.authority() },
-            authorizeInvoke: { [authority] channel, context, _ in
+            authorizeInvoke: { [authority] channel, context, args in
                 if Self.machineChannelIsRead(channel) { try authority.authorizeMetadata(context) } else { try authority.authorizeMutation(context) }
+                await watch.invoked(channel, args)
             },
-            activate: { _ in try await coordinator.open(connectSaved: true); return [] },
+            activate: { _ in
+                try await coordinator.open(connectSaved: true)
+                await MainActor.run { NativeReachLive.shared.machinesReady() }
+                return []
+            },
             deactivate: { await coordinator.stop(); await watch.dispose() }))
     }
 }

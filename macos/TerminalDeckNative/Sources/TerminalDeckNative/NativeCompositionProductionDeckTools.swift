@@ -194,6 +194,9 @@ extension NativeCompositionProduction {
             },
             rememberModel: { [state = root.state] id, model in
                 _ = try? await state.ledgerUpdate(id, patch: .object([.init("model", .string(model))]))
+            }, savedLaunch: { [state = root.state] id in (try? await state.ledgerGet(id)) ?? .null },
+            rememberEffort: { [state = root.state] id, effort in
+                _ = try? await state.ledgerUpdate(id, patch: .object([.init("effort", .string(effort))]))
             })
         #else
         let controlAccess = BackendCompositionDeckToolsAgentControls.Access.local(manager: sessions.manager,

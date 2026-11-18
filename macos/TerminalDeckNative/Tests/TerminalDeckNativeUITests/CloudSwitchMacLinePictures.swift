@@ -25,7 +25,7 @@ final class CloudSwitchMacLinePictures: XCTestCase {
         XCTAssertTrue(canSwitch(NativeCloudMoveLine.state(row: Self.row(on: false), machine: "MacBook Air", move: nil)))
         XCTAssertFalse(canSwitch(NativeCloudMoveLine.state(row: Self.row(closed: true), machine: "MacBook Air", move: nil)), "an Earlier chat runs nowhere")
         XCTAssertFalse(canSwitch(NativeCloudMoveLine.state(row: Self.row(kind: "hoot"), machine: "MacBook Air", move: nil)), "never on Hoot's chat")
-        XCTAssertEqual(NativeCloudMoveLine.state(row: Self.row(), machine: "MacBook Air", move: ("Moving from MacBook Air…", true)),
+        XCTAssertEqual(NativeCloudMoveLine.state(row: Self.row(), machine: "MacBook Air", move: ("Moving from MacBook Air…", true, true)),
                        .moving("Moving from MacBook Air…"))
     }
 

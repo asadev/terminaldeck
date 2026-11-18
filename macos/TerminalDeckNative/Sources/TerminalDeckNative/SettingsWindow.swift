@@ -183,7 +183,9 @@ struct NativeSettingsSidebarList: View {
 struct NativeSettingsDetail: View {
     let section: String
     var body: some View {
-        let shows = NativeCloudDisplayGate.shared.shows
+        let _ = NativeCloudAccount.shared.snapshot
+        let section = NativeSettingsNavigation.canonical(section)
+        let shows = NativeCloudDisplayGate.shared.accountShows
         Group {
             if section == NativeSettingsNavigation.profileID, shows {
                 NativeProfileSettings()
@@ -191,12 +193,15 @@ struct NativeSettingsDetail: View {
                 NativeProfilePersonalPage()
             } else if section == NativeSettingsNavigation.signInID, shows {
                 NativeProfileSignInPage()
+            } else if section == CloudSubscriptionPage.id {
+                NativeCloudSubscriptionPage()
             } else if section == NativeSettingsNavigation.cloudID, shows {
                 NativeCloudPage()
+            } else if section == NativeSettingsNavigation.planID, shows {
+                // Paywall off (or the plan not known): the page does not exist; an old link shows Profile.
+                if let plan = NativeCloudPlanSeam.shown() { NativeCloudPlanPage(facts: plan) } else { NativeProfileSettings() }
             } else if section == NativeSettingsNavigation.devicesID {
                 NativeDevicesSettings()
-            } else if section == NativeSettingsNavigation.olderDevicesID {
-                NativeOlderDevicesPage()
             } else if let row = NativeSettingsNavigation.deviceRow(section) {
                 NativeDevicePage(rowID: row)
             } else if section == "island" {

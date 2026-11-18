@@ -170,9 +170,10 @@ final class CloudSessionMoveTests: XCTestCase {
         func launch(_ request: BackendCloudSessionMove.LaunchRequest) -> String { launched.append(request); return "local-new" }
     }
 
-    func mover(_ name: String, _ cloud: Cloud, _ mac: Mac, _ clock: Clock) -> BackendCloudSessionMove {
+    func mover(_ name: String, _ cloud: Cloud, _ mac: Mac, _ clock: Clock,
+               attemptSeconds: Double = 960, modify: (inout BackendCloudSessionMove.Ports) -> Void = { _ in }) -> BackendCloudSessionMove {
         let send: BackendCloudChatsUploader.Send = { method, path, body in await cloud.handle(name, method, path, body) }
-        let ports = BackendCloudSessionMove.Ports(
+        var ports = BackendCloudSessionMove.Ports(
             send: send,
             row: { ref in await BackendCloudSessionsRead.list(send, earlier: false)?.rows.first { $0.ref == ref } },
             local: { _ in await mac.local() },
@@ -189,7 +190,8 @@ final class CloudSessionMoveTests: XCTestCase {
             launch: { request in await mac.launch(request) },
             sleep: { ms in clock.advance(ms); await Task.yield() },
             now: { clock.now })
-        return BackendCloudSessionMove(ports: ports, file: root.appendingPathComponent(name).appendingPathComponent("cloud-moves.json"), autoStart: false)
+        modify(&ports)
+        return BackendCloudSessionMove(ports: ports, file: root.appendingPathComponent(name).appendingPathComponent("cloud-moves.json"), autoStart: false, attemptSeconds: attemptSeconds)
     }
 
     struct World {
@@ -198,6 +200,113 @@ final class CloudSessionMoveTests: XCTestCase {
     func world() -> World {
         let clock = Clock(Self.start), cloud = Cloud(clock: clock), air = Mac(), mini = Mac()
         return World(clock: clock, cloud: cloud, air: air, mini: mini, airMove: mover("A", cloud, air, clock), miniMove: mover("B", cloud, mini, clock))
+    }
+
+    func testLostLookAnswersFinishAsFailureInsteadOfBypassingTheDeadline() async throws {
+        let clock = Clock(Self.start), cloud = Cloud(clock: clock), mac = Mac()
+        await mac.setAlive(false)
+        let engine = mover("B", cloud, mac, clock) { ports in
+            let original = ports.send
+            ports.send = { method, path, body in
+                let action = (try? JSONSerialization.jsonObject(with: body) as? [String: String])?["action"]
+                if action == "look" { throw NativeRPCError(code: "offline", message: "fixture offline") }
+                return try await original(method, path, body)
+            }
+        }
+        _ = await engine.switchHere(ref: Self.ref)
+        await engine.driveForTesting(Self.ref)
+        let entry = await engine.entry(ref: Self.ref)
+        XCTAssertEqual(entry?.step, .failed)
+        XCTAssertEqual(entry?.resumeStep, .asked)
+        XCTAssertEqual(entry?.source?.name, "Site redesign")
+        XCTAssertEqual(entry?.line, BackendCloudSessionMoveWords.unconfirmed)
+        XCTAssertGreaterThanOrEqual(clock.now - Self.start, BackendCloudSessionMove.noAnswerMs)
+        XCTAssertLessThan(clock.now - Self.start, BackendCloudSessionMove.noAnswerMs + 6_000)
+        let launches = await mac.launched
+        XCTAssertTrue(launches.isEmpty)
+    }
+
+    func testAnUnresponsiveStageFailsWithinItsBoundAndALateAnswerCannotLaunch() async throws {
+        let clock = Clock(Self.start), cloud = Cloud(clock: clock), mac = Mac()
+        let gate = BackendRemoteServeMachinesTestsGate()
+        await mac.setAlive(false); await cloud.setOn("A", false)
+        let engine = mover("B", cloud, mac, clock, attemptSeconds: 0.5) { ports in
+            ports.folder = { _ in await gate.suspend(); return nil }
+        }
+        _ = await engine.switchHere(ref: Self.ref)
+        await engine.driveForTesting(Self.ref)
+        let failed = await engine.entry(ref: Self.ref)
+        XCTAssertEqual(failed?.step, .failed)
+        XCTAssertEqual(failed?.resumeStep, .code)
+        XCTAssertTrue(failed?.line?.contains("timed out") == true)
+        await gate.release()
+        try await Task.sleep(for: .milliseconds(20))
+        let launches = await mac.launched
+        XCTAssertTrue(launches.isEmpty)
+        // Retry is explicit and uses the journal's stage. It neither asks again nor creates two local sessions.
+        let retry = mover("B", cloud, mac, clock)
+        _ = await retry.switchHere(ref: Self.ref)
+        await retry.driveForTesting(Self.ref)
+        let done = await retry.entry(ref: Self.ref), started = await mac.launched, actions = await cloud.asked("B")
+        XCTAssertEqual(done?.step, .done)
+        XCTAssertEqual(started.count, 1)
+        XCTAssertEqual(started.first?.name, "Site redesign")
+        XCTAssertEqual(actions.filter { $0 == "ask" }.count, 1)
+    }
+
+    func testRetryDuringLateLaunchJoinsTheSameCreation() async throws {
+        let clock = Clock(Self.start), cloud = Cloud(clock: clock), mac = Mac(), gate = BackendRemoteServeMachinesTestsGate()
+        await mac.setAlive(false); await cloud.setOn("A", false)
+        let engine = mover("B", cloud, mac, clock, attemptSeconds: 0.5) { ports in
+            ports.launch = { request in await gate.suspend(); return await mac.launch(request) }
+        }
+        _ = await engine.switchHere(ref: Self.ref)
+        await engine.driveForTesting(Self.ref)
+        let failed = await engine.entry(ref: Self.ref)
+        XCTAssertEqual(failed?.step, .failed); XCTAssertEqual(failed?.resumeStep, .launching)
+        _ = await engine.switchHere(ref: Self.ref)
+        let retry = Task { await engine.driveForTesting(Self.ref) }
+        try await Task.sleep(for: .milliseconds(10)); await gate.release(); await retry.value
+        let done = await engine.entry(ref: Self.ref), launches = await mac.launched
+        XCTAssertEqual(done?.step, .done)
+        XCTAssertEqual(launches.count, 1)
+    }
+
+    func testFailedStopDoesNotHandOverOwnership() async throws {
+        let clock = Clock(Self.start), cloud = Cloud(clock: clock), air = Mac(), mini = Mac()
+        let taker = mover("B", cloud, mini, clock)
+        _ = await taker.switchHere(ref: Self.ref)
+        let giver = mover("A", cloud, air, clock) { ports in
+            ports.close = { _ in throw NativeRPCError(code: "failed", message: "fixture close failed") }
+        }
+        await giver.hint(ref: Self.ref); await giver.driveForTesting(Self.ref)
+        let failure = await giver.entry(ref: Self.ref), owner = await cloud.owner, actions = await cloud.asked("A")
+        XCTAssertEqual(failure?.step, .failed)
+        XCTAssertEqual(failure?.resumeStep, .releasing)
+        XCTAssertEqual(failure?.line, BackendCloudSessionMoveWords.couldNotStop)
+        XCTAssertEqual(owner, "A")
+        XCTAssertFalse(actions.contains("release"))
+    }
+
+    func testCancelThatLosesToHandoverContinuesToLaunchInsteadOfStrandingOwner() async throws {
+        let clock = Clock(Self.start), cloud = Cloud(clock: clock), mac = Mac(), gate = BackendRemoteServeMachinesTestsGate()
+        await mac.setAlive(false)
+        let engine = mover("B", cloud, mac, clock) { ports in
+            ports.sleep = { ms in clock.advance(ms); await gate.suspend() }
+        }
+        _ = await engine.switchHere(ref: Self.ref)
+        let driving = Task { await engine.driveForTesting(Self.ref) }
+        try await BackendAppDeviceDeadline.run(within: 2, "Waiting for the fixture move") { await gate.waitUntilEntered() }
+        _ = await engine.cancel(ref: Self.ref)
+        await cloud.setOn("A", false)
+        let current = await engine.entry(ref: Self.ref)
+        let move = try XCTUnwrap(current)
+        let body = try JSONSerialization.data(withJSONObject: ["action": "take", "ref": Self.ref, "id": move.moveId])
+        _ = await cloud.handle("B", "POST", "/sessions/move", body)
+        await gate.release(); await driving.value
+        let done = await engine.entry(ref: Self.ref), launches = await mac.launched
+        XCTAssertEqual(done?.step, .done)
+        XCTAssertEqual(launches.count, 1)
     }
 
     // MARK: The cases

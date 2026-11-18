@@ -3,7 +3,7 @@ import SwiftUI
 import TerminalDeckNativeCore
 
 // Lane BR (browser parity): which computer a browser window's localhost addresses
-// open on — MachinePicker.tsx beside the Session button, the "served by" word in
+// open on — MachinePicker.tsx (here: More ▸ "Open localhost on"), the "served by" word in
 // the address field (served-mark.ts), the start page's ports for the chosen
 // machine, and the tunnels behind them (reach-ledger.ts over `browser:reach:*`).
 // Drawn only when another machine or server is paired, as the web browser does.
@@ -25,7 +25,7 @@ final class NativeBRMachines {
     @ObservationIgnored private var choiceSerial: [String: Int] = [:]
 
     var choices: [BRMachineChoice] {
-        BRMachines.choices(view) + servers.map { BRServers.choice(id: $0.id, name: $0.name, answer: serverAnswers[$0.id]) }
+        (NativeCloudOffers.shows(.remoteMachineChoices) ? BRMachines.choices(view) : []) + servers.map { BRServers.choice(id: $0.id, name: $0.name, answer: serverAnswers[$0.id]) }
     }
     /// `hereName`: what this computer calls itself, else "This Mac".
     var here: String {
@@ -33,7 +33,13 @@ final class NativeBRMachines {
         return named.isEmpty ? "This Mac" : named
     }
 
-    func picked(_ tabId: String) -> String { picked[tabId] ?? BRMachines.thisMachine }
+    func picked(_ tabId: String) -> String {
+        let value = picked[tabId] ?? BRMachines.thisMachine
+        if !NativeCloudOffers.shows(.remoteMachineChoices), !choices.contains(where: { $0.id == value && $0.kind == "server" }) {
+            return BRMachines.thisMachine
+        }
+        return value
+    }
 
     /// Called each time a browser toolbar appears. Servers have no change event,
     /// so their list is read again then: one added since shows up without a restart.
@@ -170,50 +176,21 @@ final class NativeBRMachines {
     }
 }
 
-// MARK: - The picker (between the Session button and the address)
+// MARK: - The machines, as rows of More ▸ "Open localhost on" (it was a picker in the toolbar until 18 Nov)
 
-struct NativeBrowserMachinePicker: View {
-    let tab: NativeBrowserTab
-    @State private var store = NativeBRMachines.shared
-
-    var body: some View {
-        let machines = store.choices
-        Group {
-            if !machines.isEmpty {
-                let selected = store.picked(tab.id)
-                let label = BRMachines.label(machines, selected: selected, here: store.here)
-                Menu {
-                    Text("Open localhost on")
-                    Button { store.select(BRMachines.thisMachine, for: tab) } label: {
-                        if selected == BRMachines.thisMachine { Label(store.here, systemImage: "checkmark") } else { Text(store.here) }
-                    }
-                    ForEach(machines) { machine in
-                        let trailing = machine.unreachable
-                            ?? (machine.ports.isEmpty ? "" : "\(machine.ports.count) \(machine.ports.count == 1 ? "port" : "ports")")
-                        let text = trailing.isEmpty ? machine.name : "\(machine.name)   \(trailing)"
-                        Button { store.select(machine.id, for: tab) } label: {
-                            if machine.id == selected { Label(text, systemImage: "checkmark") } else { Text(text) }
-                        }
-                        .disabled(machine.unreachable != nil)
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "display").font(.system(size: 11))
-                        Text(label).font(.caption).lineLimit(1)
-                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
-                    }
-                    .foregroundStyle(selected == BRMachines.thisMachine ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.primary))
-                    .padding(.horizontal, 6)
-                    .frame(height: 26)
-                }
-                .menuIndicator(.hidden)
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Open localhost on \(label)")
-                .accessibilityLabel("Addresses open on \(label). Choose a machine.")
+extension NativeBRMachines {
+    /// This Mac first, then every paired machine; empty when none is paired (the row is then absent).
+    func rows(for tab: NativeBrowserTab) -> [BrowserMachineRow] {
+        let machines = choices
+        guard !machines.isEmpty else { return [] }
+        let selected = picked(tab.id)
+        return [BrowserMachineRow(id: BRMachines.thisMachine, name: here, chosen: selected == BRMachines.thisMachine)]
+            + machines.map { machine in
+                let detail = machine.unreachable
+                    ?? (machine.ports.isEmpty ? "" : "\(machine.ports.count) \(machine.ports.count == 1 ? "port" : "ports")")
+                return BrowserMachineRow(id: machine.id, name: machine.name, detail: detail,
+                                         enabled: machine.unreachable == nil, chosen: machine.id == selected)
             }
-        }
-        .task { store.start() }
     }
 }
 

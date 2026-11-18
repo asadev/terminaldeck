@@ -183,21 +183,16 @@ public struct BackendDeckToolsSessionsNativeSurface: BackendDeckToolsSessionsSur
     }
     public func insights(transcriptPath: String, context caller: BackendMCPCallContext) async throws -> NativeRPCValue { try await insightsService.session(path: transcriptPath, context: context(caller), cancellation: caller.cancellation) }
     public func transcripts(cwd: String, context caller: BackendMCPCallContext) async throws -> [NativeRPCValue] {
-        try await cost.files(project: cwd, context: context(caller)).map { file in BackendDeckToolsSupport.object([("path", .string(file.path)), ("sessionId", .string(file.sessionID)), ("createdAt", .number(file.createdAt)), ("modifiedAt", .number(file.modifiedAt)), ("bytes", .number(Double(file.bytes)))]) }
+        try await BackendSessionAnswerSource.native(cost: cost, context: context(caller), locate: agentRecords).transcripts(cwd)
     }
     public func transcriptBytes(path: String, context caller: BackendMCPCallContext) async throws -> Int {
-        let scope = try await cost.scope(project: nil, context: context(caller))
-        _ = try NativeTranscriptPaths.assertTranscript(path, scope: scope)
-        let attributes = try FileManager.default.attributesOfItem(atPath: path)
-        guard let size = attributes[.size] as? NSNumber else { throw BackendDeckToolsSupport.unavailable("The transcript byte count") }
-        return size.intValue
+        try await BackendSessionAnswerSource.native(cost: cost, context: context(caller), locate: agentRecords).transcriptBytes(path)
     }
     public func transcriptMessages(path: String, fromByte: Int, context caller: BackendMCPCallContext) async throws -> [NativeRPCValue] {
-        let scope = try await cost.scope(project: nil, context: context(caller))
-        _ = try NativeTranscriptPaths.assertTranscript(path, scope: scope)
-        let reader = NativeChatTranscriptReader(path: path, startAt: Int64(max(0, fromByte)), allowedRoots: try NativeTranscriptPaths.approvedRoots(scope))
-        let result = try await reader.readAll(wholeConversation: true)
-        return result.messages.map { BackendDeckToolsSupport.object([("id", .string($0.id)), ("role", .string($0.role.rawValue)), ("at", .number($0.at)), ("text", .string($0.text)), ("truncated", .bool(false))]) }
+        try await BackendSessionAnswerSource.native(cost: cost, context: context(caller), locate: agentRecords).transcriptMessages(path, fromByte)
+    }
+    public func answerMessages(path: String, fromByte: Int, context caller: BackendMCPCallContext) async throws -> [NativeRPCValue] {
+        try await BackendSessionAnswerSource.native(cost: cost, context: context(caller), locate: agentRecords, mergeAgentTurn: false).transcriptMessages(path, fromByte)
     }
     public func agentRecord(session: NativeRPCValue, windowBytes: Int, context: BackendMCPCallContext) async -> BackendDeckCoreAgentRecord? {
         await BackendDeckCoreAgentRecords.read(session: session, locate: agentRecords, windowBytes: windowBytes)

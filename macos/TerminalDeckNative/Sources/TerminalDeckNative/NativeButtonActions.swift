@@ -342,13 +342,19 @@ final class NativeButtonActions {
             guard let saved = held.first(where: { $0["key"] as? String == key }) else { return }
             let reply = try await call("session:held-retry", [key], failure: "That saved session could not be reopened.")
             guard let remaining = reply as? [[String: Any]] else { try refuse("The saved session's result could not be read.") }
-            guard !remaining.contains(where: { $0["key"] as? String == key }) else { return }
+            if let failed = remaining.first(where: { $0["key"] as? String == key }) {
+                try refuse(Self.because("That saved session could not be reopened.", failed["reason"] as? String ?? ""))
+            }
             // Match the restored tab's recorded identity, never an unrelated newly created session.
-            guard let tabKey = saved["tabKey"] as? String, !tabKey.isEmpty else { return }
+            guard let tabKey = saved["tabKey"] as? String, !tabKey.isEmpty else {
+                try refuse("The session reopened, but its tab could not be identified. Choose it in the side panel.")
+            }
             let live = try await call("session:list", [], failure: "The restored session could not be read.") as? [[String: Any]] ?? []
             let matching = live.filter { $0["tabKey"] as? String == tabKey && ($0["exitCode"] == nil || $0["exitCode"] is NSNull) }
             guard matching.count == 1, let restored = matching.first,
-                  let realID = restored["id"] as? String, UUID(uuidString: realID) != nil else { return }
+                  let realID = restored["id"] as? String, UUID(uuidString: realID) != nil else {
+                try refuse("The session reopened, but its tab is not available yet. Choose it in the side panel.")
+            }
             created(restored)
             guard selectionRevision == selectionAtStart else { return }
             try await select(realID)
@@ -358,6 +364,12 @@ final class NativeButtonActions {
             let snapshot = MachinesSnapshot.decode(try await call("machines:list", [], failure: "The other Mac is not answering."))
             guard selectionRevision == selectionAtStart else { return }
             guard let link = snapshot?.links[machine], link.state == .online, let row = link.session(session) else { try refuse("That session on the other Mac is not available. Check its connection and try again.") }
+            if tabs.layout?.modeSwitch != true {
+                let old = tabs.layout ?? WindowLayout()
+                tabs.layout = WindowLayout(mode: old.mode, swarm: old.swarm, root: old.root, focusedPaneId: old.focusedPaneId,
+                    primaryPaneId: old.primaryPaneId, modeSwitch: true, splitOffer: old.splitOffer, swarmSessions: old.swarmSessions)
+                layoutOwned = true
+            }
             if !tabs.tabs.contains(where: { $0.id == id }) {
                 added.append(TabItem(id: id, title: row.title, kind: "session", status: row.status, closable: true)); ingest(tabs); ingest(sidebar)
             }
@@ -420,6 +432,14 @@ final class NativeButtonActions {
         }
         remove(id); effects.forgotten(id)
     }
+    /// A completed Cloud move replaces this viewer with the already-created local row. No remote close request.
+    func retireRemoteViewer(_ id: String) {
+        guard case .machine = SessionTarget(tabId: id) else { return }
+        remove(id)
+        NativeTerminalSessions.shared.forget(id)
+        effects.changed()
+    }
+
     private func remove(_ id: String) {
         NativeSessionRailContinuity.shared.removed(id); NativeSessionControlsState.forget(id)
         let wasActive = tabs.activeID == id || sidebar.selectedId == id

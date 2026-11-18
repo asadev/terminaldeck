@@ -48,6 +48,8 @@ final class NativeBrowserSignalWait {
 /// A rendering host is never evidence that a page is visible to the person.
 @MainActor
 final class NativeBrowserCaptureWindow: NSWindow {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
     func releasePage(_ view: NSView, previousSuperview: NSView?, previousFrame: NSRect) {
         // A visible host may adopt the page while snapshot awaits WebKit.
         if contentView === view, view.window === self {

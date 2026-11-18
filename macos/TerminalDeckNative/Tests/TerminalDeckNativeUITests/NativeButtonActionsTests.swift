@@ -18,6 +18,8 @@ import TerminalDeckNativeCore
         var forgotten: [String] = []
         var sessions: [[String: Any]] = []
         var reasons: [String: String] = [:]
+        var held: [[String: Any]] = []
+        var remainingHeld: [[String: Any]] = []
         func invoke(_ channel: String, _ args: [Any?]) throws -> Any {
             calls.append((channel, args))
             if throwsOn.contains(channel) { throw NSError(domain: "fixture", code: 1) }
@@ -25,6 +27,8 @@ import TerminalDeckNativeCore
             if refuses.contains(channel) { return ["ok": false] }
             switch channel {
             case "session:list": return sessions
+            case "sessions:held": return held
+            case "session:held-retry": return remainingHeld
             case "servers:shell:open": return ["ok": true, "shellId": "private-shell"]
             case "servers:rename": return ["renamed": true]
             case "machines:list": return ["machines": [["id": "other", "name": "Other Mac"]], "links": [
@@ -33,6 +37,33 @@ import TerminalDeckNativeCore
             }
         }
     }
+    func testMacLogicAReopenFailureSaysWhyAndKeepsCurrentSession() async {
+        let engine = Engine(), model = make(engine)
+        engine.held = [["key": "saved", "tabKey": "saved-tab", "reason": "old reason"]]
+        engine.remainingHeld = [["key": "saved", "tabKey": "saved-tab", "reason": "Restore the saved account in Settings, then reopen this session."]]
+        await refuses(model, .select("held:saved"))
+        XCTAssertEqual(model.tabs.activeID, a)
+        XCTAssertEqual(model.problem, "That saved session could not be reopened. Restore the saved account in Settings, then reopen this session.")
+        XCTAssertEqual(engine.calls.map { $0.0 }, ["sessions:held", "session:held-retry"])
+    }
+    func testMacLogicAReopenSelectsOnlyTheReturnedStableTab() async {
+        let engine = Engine(), model = make(engine)
+        engine.held = [["key": "saved", "tabKey": "saved-tab"]]
+        engine.sessions = [["id": b, "tabKey": "saved-tab", "cwd": "/work", "title": "Reopened conversation"],
+            ["id": a, "tabKey": "another-tab", "cwd": "/work"]]
+        await succeeds(model, .select("held:saved"))
+        XCTAssertEqual(model.tabs.activeID, b)
+        XCTAssertEqual(engine.calls.map { $0.0 }, ["sessions:held", "session:held-retry", "session:list"])
+    }
+    func testMacLogicAReopenWithoutAnIdentifiableTabDoesNotReportSuccess() async {
+        let engine = Engine(), model = make(engine)
+        engine.held = [["key": "saved", "tabKey": "saved-tab"]]
+        engine.sessions = [["id": b, "tabKey": "unrelated-tab", "cwd": "/work"]]
+        await refuses(model, .select("held:saved"))
+        XCTAssertEqual(model.tabs.activeID, a)
+        XCTAssertTrue(model.problem?.contains("tab is not available yet") == true)
+    }
+
     func testVerify20FirstToolSelectionReplaysExistingSessions() async {
         let engine = Engine(), model = make(engine)
         let id = "33333333-3333-4333-8333-333333333333"

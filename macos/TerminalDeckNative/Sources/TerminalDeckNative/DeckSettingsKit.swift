@@ -216,10 +216,14 @@ enum DeckSettingsColumnMargin {
 struct DeckSettingsGroup<Content: View>: View {
     var title: String? = nil
     var info: String? = nil
+    /// Where the hairlines between rows start (the rows' text edge): 44 pt for rows with a 26 pt tile; a list whose
+    /// rows carry a wider picture (the devices) hands in its own.
+    var separatorInset: CGFloat = DeckSettingsLook.separatorInset
     @ViewBuilder let content: () -> Content
 
-    init(_ title: String? = nil, info: String? = nil, @ViewBuilder content: @escaping () -> Content) {
-        self.title = title; self.info = info; self.content = content
+    init(_ title: String? = nil, info: String? = nil, separatorInset: CGFloat = DeckSettingsLook.separatorInset,
+         @ViewBuilder content: @escaping () -> Content) {
+        self.title = title; self.info = info; self.separatorInset = separatorInset; self.content = content
     }
 
     var body: some View {
@@ -236,7 +240,7 @@ struct DeckSettingsGroup<Content: View>: View {
                 Group(subviews: content()) { rows in
                     ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                         if index > 0 {
-                            DeckSettingsHairline().padding(.leading, DeckSettingsLook.separatorInset)
+                            DeckSettingsHairline().padding(.leading, separatorInset)
                         }
                         row
                     }

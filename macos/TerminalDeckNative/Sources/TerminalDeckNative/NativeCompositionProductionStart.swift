@@ -244,7 +244,7 @@ extension NativeCompositionProduction {
             try? await root.registry.publish("session:created", arguments: [BackendCompositionSuppliers.sessionWire(meta)])
         }
         if let held = try? await root.state.heldSessions() {
-            try? await root.registry.publish("sessions:held", arguments: [.array(held.map(\.wireValue))])
+            try? await root.registry.publish("sessions:held", arguments: [.array(BackendSessionRestoreCoordinator.reopenableHeld(held).map(\.wireValue))])
         }
         // 22 Oct (Reviewer, finding 5): finished jobs a running helper still lists from before this start leave the
         // list after restore, once the page shows its tabs, so the job that was the active tab at quit stays.

@@ -225,9 +225,10 @@ final class NativeSessionControlsState {
 // MARK: - The cluster (`SessionControls`)
 
 /// The session's own controls, at the trailing end of its bar: the usage reading
-/// first, then a chip per control — or, when the bar is too narrow, one chip with
-/// both values that opens a panel of every control. Absent for a bare shell; over
-/// an ended session it says so instead.
+/// first, then a pill per control — or, when the bar is too narrow, one pill with
+/// both values that opens a panel of every control. Absent for a bare shell.
+/// Review of 18 Nov: small solid pills (item 17), no Connectors drop-down here (item 21), a value that is not known
+/// yet shows the control's own name, never "Unknown" (item 20's look), and every list is the app's own menu.
 struct NativeSessionControls: View {
     let session: NativeTerminalSession
 
@@ -235,15 +236,9 @@ struct NativeSessionControls: View {
 
     var body: some View {
         Group {
-            if let end = session.end {
-                HStack(spacing: 8) {
-                    usage(tight: false)
-                    Text(end.notice.title)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .help(end.notice.detail)
-                }
+            if session.end != nil, !session.movingHere {
+                // The ended page already explains the outcome.
+                usage(tight: false)
             } else if state.running == "shell" {
                 EmptyView()
             } else {
@@ -254,17 +249,16 @@ struct NativeSessionControls: View {
                             ControlChip(state: state, control: control, blocked: blocked(control),
                                         nestedFast: control == "model" ? blocked("fast") : nil)
                         }
-                        if hasConnectors { ConnectorsChip(state: state, session: session) }
                     }
                     .fixedSize()
                     HStack(spacing: 6) {
                         usage(tight: false)
-                        SummaryChip(state: state, session: session, blocked: blocked, hasConnectors: hasConnectors, glyph: false)
+                        SummaryChip(state: state, blocked: blocked, glyph: false)
                     }
                     .fixedSize()
                     HStack(spacing: 6) {
                         usage(tight: true)
-                        SummaryChip(state: state, session: session, blocked: blocked, hasConnectors: hasConnectors, glyph: true)
+                        SummaryChip(state: state, blocked: blocked, glyph: true)
                     }
                 }
             }
@@ -280,8 +274,6 @@ struct NativeSessionControls: View {
         }
     }
 
-    private var hasConnectors: Bool { state.connectorsLoaded && !state.connectors.isEmpty }
-
     /// `blockedFor`.
     private func blocked(_ control: String) -> String? {
         if let note = TerminalControlCatalog.foreignAgentNote(state.running) { return note }
@@ -291,9 +283,10 @@ struct NativeSessionControls: View {
 }
 
 /// The notice an applied change answers with, under the bar: the CLI's own
-/// confirmation (gone after four seconds) or its refusal (kept until dismissed).
+/// confirmation (gone after four seconds) or its refusal (kept until dismissed). A solid surface, no glass.
 struct NativeSessionControlsNotice: View {
     let state: NativeSessionControlsState
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         if let notice = state.notice {
@@ -311,40 +304,62 @@ struct NativeSessionControlsNotice: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .frame(maxWidth: 360, alignment: .leading)
-            .background(.regularMaterial, in: .rect(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
+            .background(DeckMenuColours.surface, in: .rect(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DeckMenuColours.border, lineWidth: 1 / max(displayScale, 1)))
             .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
             .accessibilityAddTraits(.isStaticText)
         }
     }
 }
 
-// MARK: - Chips and menus (`ControlPicker`, `ControlToggleItem`, `ControlSection`)
+// MARK: - Pills and menus (`ControlPicker`, `ControlToggleItem`, `ControlSection`)
 
-/// `cc-chip`: a value and a caret, the control's name only while the value is unknown.
-private struct ChipLabel: View {
-    let name: String?
-    let value: String
-    let unknown: Bool
-
-    var body: some View {
-        HStack(spacing: 4) {
-            if let name { Text(name).foregroundStyle(.secondary) }
-            Text(value)
-                .italic(unknown)
-                .foregroundStyle(unknown ? .secondary : .primary)
-            Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold)).foregroundStyle(.secondary)
-        }
-        .font(.caption)
-        .lineLimit(1)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(.quaternary.opacity(0.5), in: .capsule)
-        .contentShape(.capsule)
+/// The header's small solid pill (DESIGN-shell §4): 22 high, a capsule, a quiet solid fill that only darkens under the
+/// pointer. Shared by model, effort, the folded pill and "Switch to this Mac".
+enum DeckPill {
+    static let height: CGFloat = 22
+    static let font = Font.system(size: 11, weight: .medium)
+    static func fill(_ scheme: ColorScheme, hovering: Bool) -> Color {
+        Color.primary.opacity(scheme == .dark ? (hovering ? 0.20 : 0.13) : (hovering ? 0.12 : 0.07))
     }
 }
 
-/// One control on the row: its chip opens its list; the model's list ends with fast mode.
+/// A pill's frame around its own words.
+struct DeckPillLabel<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    @State private var hovering = false
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        HStack(spacing: 4) { content() }
+            .font(DeckPill.font)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .frame(height: DeckPill.height)
+            .background(DeckPill.fill(scheme, hovering: hovering), in: .capsule)
+            .contentShape(.capsule)
+            .onHover { hovering = $0 }
+    }
+}
+
+/// A control's pill: its value and a caret. A value that is not known yet shows the control's own name in grey:
+/// never the word "Unknown", never italics.
+private struct ChipLabel: View {
+    let name: String
+    /// nil: not known yet.
+    let value: String?
+    var busy = false
+
+    var body: some View {
+        DeckPillLabel {
+            Text(busy ? "Working…" : value ?? name)
+                .foregroundStyle(value == nil || busy ? .secondary : .primary)
+            Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold)).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// One control on the row: its pill opens its list; the model's list ends with fast mode.
 private struct ControlChip: View {
     let state: NativeSessionControlsState
     let control: String
@@ -356,82 +371,42 @@ private struct ControlChip: View {
     var body: some View {
         let reading = state.readings?.reading(control)
         let busy = state.busy == control
+        let known = reading?.label != nil
+        let name = TerminalControlCatalog.name(control)
         let value = TerminalControlCatalog.value(reading, control: control)
-        let shown = control == "model" && reading?.label != nil ? TerminalControlCatalog.shortModelLabel(value) : value
+        let shown = control == "model" && known ? TerminalControlCatalog.shortModelLabel(value) : value
         Button { open.toggle() } label: {
-            ChipLabel(name: reading?.label == nil ? TerminalControlCatalog.name(control) : nil,
-                      value: busy ? "Working…" : shown, unknown: reading?.label == nil || busy)
+            ChipLabel(name: name, value: known ? shown : nil, busy: busy)
         }
         .buttonStyle(.plain)
         .disabled(state.busy != nil)
         .opacity(blocked != nil ? 0.6 : 1)
-        .help(TerminalControlCatalog.chipHelp(control, reading: reading, busy: busy, blocked: blocked))
-        .accessibilityLabel("\(TerminalControlCatalog.name(control)): \(value)")
-        .popover(isPresented: $open, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 2) {
-                if let blocked { BlockedLine(text: blocked) }
-                OptionRows(state: state, control: control, disabled: blocked != nil) { open = false }
-                if let nestedFast { FastSwitchRow(state: state, blocked: nestedFast) }
-            }
-            .padding(6)
-            .frame(minWidth: 220, maxWidth: 320, alignment: .leading)
+        .help(blocked ?? (known || busy ? TerminalControlCatalog.chipHelp(control, reading: reading, busy: busy, blocked: nil)
+                          : "\(name): not read from this session yet"))
+        .accessibilityLabel(known ? "\(name): \(value)" : "\(name): not known yet")
+        .deckMenu(isPresented: $open, alignment: .trailing) {
+            if let blocked { DeckMenuNote(blocked) }
+            OptionRows(state: state, control: control, disabled: blocked != nil)
+            if let nestedFast { FastSwitchRow(state: state, blocked: nestedFast) }
         }
     }
 }
 
-private struct BlockedLine: View {
-    let text: String
-    var body: some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 6))
-    }
-}
-
-/// The rows of one control: a tick on the one in force, a hint where a row has
-/// one, and a caption over the rows that are a different kind of claim.
+/// The rows of one control: a check on the one in force, a hint where a row has
+/// one, and a quiet title over the rows that are a different kind of claim.
 private struct OptionRows: View {
     let state: NativeSessionControlsState
     let control: String
     let disabled: Bool
-    var picked: () -> Void = {}
 
     var body: some View {
         let reading = state.readings?.reading(control)
         ForEach(state.options(control)) { option in
-            if let group = option.group {
-                Text(group)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.top, 6)
-            }
-            let current = TerminalControlCatalog.isCurrent(reading, option)
-            Button {
-                picked()
+            if let group = option.group { DeckMenuSection(group) }
+            DeckMenuRow(option.label, detail: option.hint, checked: TerminalControlCatalog.isCurrent(reading, option),
+                        enabled: !(disabled || state.busy != nil)) {
                 state.pick(control, option.id)
-            } label: {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(current ? "✓" : "").frame(width: 12, alignment: .leading)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(option.label)
-                        if let hint = option.hint {
-                            Text(hint).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .contentShape(.rect)
             }
-            .buttonStyle(MenuRowStyle(current: current))
-            .disabled(disabled || state.busy != nil)
-            .accessibilityAddTraits(current ? .isSelected : [])
         }
     }
 }
@@ -448,70 +423,28 @@ private struct FastSwitchRow: View {
         let read = reading?.value == "on" || reading?.value == "off"
         let isOn = reading?.value == "on"
         let busy = state.busy == "fast"
-        Divider().padding(.vertical, 2)
+        DeckMenuDivider()
         if let blocked {
-            caption
-            BlockedLine(text: blocked)
+            DeckMenuSection("Fast mode")
+            DeckMenuNote(blocked)
         } else if read {
-            Button {
-                state.pick("fast", isOn ? "off" : "on")
-            } label: {
-                HStack(spacing: 6) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Fast mode")
-                        Text("off if you switch model").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 8)
-                    if busy {
-                        Text("Working…").font(.caption).italic().foregroundStyle(.secondary)
-                    } else {
-                        Toggle("", isOn: .constant(isOn)).toggleStyle(.switch).controlSize(.mini).labelsHidden().allowsHitTesting(false)
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .contentShape(.rect)
-            }
-            .buttonStyle(MenuRowStyle(current: false))
-            .disabled(state.busy != nil)
-            .help("Fast mode: \(busy ? "Working…" : TerminalControlCatalog.value(reading, control: "fast")) — \(TerminalControlCatalog.sourceNote(reading?.source)) · \(TerminalControlCatalog.reach("fast") ?? "")")
-            .accessibilityAddTraits(isOn ? .isSelected : [])
+            DeckMenuToggleRow(title: "Fast mode", detail: busy ? "Working…" : "off if you switch model",
+                              isOn: Binding(get: { isOn }, set: { state.pick("fast", $0 ? "on" : "off") }),
+                              enabled: state.busy == nil)
+                .help("Fast mode: \(busy ? "Working…" : TerminalControlCatalog.value(reading, control: "fast")) — \(TerminalControlCatalog.sourceNote(reading?.source)) · \(TerminalControlCatalog.reach("fast") ?? "")")
         } else {
-            caption
-            Text(TerminalControlCatalog.toggleUnreadBrief("fast"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 8)
+            DeckMenuSection("Fast mode")
+            DeckMenuNote(TerminalControlCatalog.toggleUnreadBrief("fast"))
             OptionRows(state: state, control: "fast", disabled: false)
         }
     }
-
-    private var caption: some View {
-        Text("Fast mode")
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.top, 4)
-    }
 }
 
-private struct MenuRowStyle: ButtonStyle {
-    let current: Bool
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(configuration.isPressed ? Color.primary.opacity(0.18) : (current ? Color.primary.opacity(0.10) : .clear),
-                        in: .rect(cornerRadius: 5))
-    }
-}
-
-/// The folded cluster: one chip carrying both values (or the sliders mark when
+/// The folded cluster: one pill carrying both values (or the sliders mark when
 /// even that does not fit), opening a panel with a section per control.
 private struct SummaryChip: View {
     let state: NativeSessionControlsState
-    let session: NativeTerminalSession
     let blocked: (String) -> String?
-    let hasConnectors: Bool
     let glyph: Bool
     @State private var open = false
 
@@ -520,52 +453,34 @@ private struct SummaryChip: View {
         let effort = state.readings?.effort
         let modelValue = TerminalControlCatalog.value(model, control: "model")
         let effortValue = TerminalControlCatalog.value(effort, control: "effort")
-        let label = TerminalControlCatalog.summaryLabel(model: modelValue, effort: effortValue, withConnectors: hasConnectors)
+        let modelShown = model?.label == nil ? TerminalControlCatalog.name("model") : TerminalControlCatalog.shortModelLabel(modelValue)
+        let effortShown = effort?.label == nil ? TerminalControlCatalog.name("effort") : effortValue
+        let label = model?.label == nil && effort?.label == nil ? "Model and effort: not read from this session yet"
+            : TerminalControlCatalog.summaryLabel(model: modelShown, effort: effortShown, withConnectors: false)
         Button { open.toggle() } label: {
-            HStack(spacing: 4) {
+            DeckPillLabel {
                 if glyph {
-                    Image(systemName: "slider.horizontal.3").font(.system(size: 12))
+                    Image(systemName: "slider.horizontal.3").font(.system(size: 11, weight: .medium))
                 } else {
-                    if model?.label == nil { Text("Model").foregroundStyle(.secondary) }
-                    Text(model?.label == nil ? modelValue : TerminalControlCatalog.shortModelLabel(modelValue))
-                        .italic(model?.label == nil)
-                    Divider().frame(height: 10)
-                    if effort?.label == nil { Text("Effort").foregroundStyle(.secondary) }
-                    Text(effortValue).italic(effort?.label == nil)
+                    Text(modelShown).foregroundStyle(model?.label == nil ? .secondary : .primary)
+                    Text("·").foregroundStyle(.secondary)
+                    Text(effortShown).foregroundStyle(effort?.label == nil ? .secondary : .primary)
                 }
                 Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold)).foregroundStyle(.secondary)
             }
-            .font(.caption)
-            .lineLimit(1)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(.quaternary.opacity(0.5), in: .capsule)
-            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
         .help(label)
         .accessibilityLabel("Session controls: \(label)")
-        .popover(isPresented: $open, arrowEdge: .bottom) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    NativeSessionControlsNotice(state: state)
-                    ForEach(TerminalControlCatalog.chromeControls, id: \.self) { control in
-                        ControlSection(state: state, control: control, blocked: blocked(control))
-                    }
-                    if hasConnectors {
-                        ConnectorsChip(state: state, session: session)
-                    }
-                }
-                .padding(12)
+        .deckMenu(isPresented: $open, alignment: .trailing, width: 300) {
+            ForEach(TerminalControlCatalog.chromeControls, id: \.self) { control in
+                ControlSection(state: state, control: control, blocked: blocked(control))
             }
-            .frame(width: 340)
-            .frame(maxHeight: 520)
         }
     }
 }
 
-/// One control in the folded panel (`ControlSection`): its name (with the ⓘ
-/// where there is something behind it), then a switch or its rows.
+/// One control in the folded panel (`ControlSection`): its name, then a switch or its rows.
 private struct ControlSection: View {
     let state: NativeSessionControlsState
     let control: String
@@ -574,77 +489,17 @@ private struct ControlSection: View {
     var body: some View {
         let reading = state.readings?.reading(control)
         let name = TerminalControlCatalog.name(control)
-        let dotNote = blocked ?? (reading?.isUnread ?? true ? TerminalControlCatalog.unreadNote(control) : nil) ?? TerminalControlCatalog.note(control)
         let toggle = state.options(control).count == 2
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
-                Text(name).font(.subheadline.weight(.semibold))
-                if let dotNote {
-                    Image(systemName: "info.circle").font(.caption).foregroundStyle(.secondary).help(dotNote)
-                        .accessibilityLabel("About \(name)")
-                }
-            }
-            if toggle, reading?.value == "on" || reading?.value == "off", blocked == nil {
-                let isOn = reading?.value == "on"
-                Toggle(isOn: Binding(get: { isOn }, set: { state.pick(control, $0 ? "on" : "off") })) {
-                    Text(state.busy == control ? "Working…" : TerminalControlCatalog.value(reading, control: control))
-                        .font(.caption)
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .disabled(state.busy != nil)
+        if toggle, reading?.value == "on" || reading?.value == "off", blocked == nil {
+            let isOn = reading?.value == "on"
+            DeckMenuToggleRow(title: name, detail: state.busy == control ? "Working…" : nil,
+                              isOn: Binding(get: { isOn }, set: { state.pick(control, $0 ? "on" : "off") }),
+                              enabled: state.busy == nil)
                 .help("\(name): \(TerminalControlCatalog.value(reading, control: control)) — \(TerminalControlCatalog.sourceNote(reading?.source)) · \(TerminalControlCatalog.reach(control) ?? "")")
-            } else {
-                if let blocked { BlockedLine(text: blocked) }
-                OptionRows(state: state, control: control, disabled: blocked != nil)
-            }
-        }
-        .help(blocked ?? TerminalControlCatalog.chipHelp(control, reading: reading, busy: state.busy == control, blocked: nil))
-    }
-}
-
-/// `ConnectorsPicker`: this session's MCP servers, each with the CLI's reason it
-/// would skip one or what was read of it, and the way to the MCP servers view —
-/// for a session on this Mac only.
-private struct ConnectorsChip: View {
-    let state: NativeSessionControlsState
-    let session: NativeTerminalSession
-    @State private var open = false
-
-    var body: some View {
-        Button { open.toggle() } label: {
-            ChipLabel(name: nil, value: "Connectors", unknown: false)
-        }
-        .buttonStyle(.plain)
-        .help("Connectors")
-        .popover(isPresented: $open, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(state.connectors) { row in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(row.name)
-                        Spacer(minLength: 8)
-                        Text(row.detail).font(.caption).foregroundStyle(.secondary)
-                    }
-                    .opacity(row.enabled ? 1 : 0.55)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                }
-                if case .local = state.target {
-                    Divider()
-                    // `panelOn('mcp')`: with the MCP servers feature off the door stays, disabled.
-                    let mcpOn = NativeSessionFeatures.shared.value.mcpOn
-                    Button(mcpOn ? "Open MCP servers" : TerminalControlCatalog.connectorsUnavailable) {
-                        open = false
-                        AppModel.shared.select("mcp")
-                    }
-                    .disabled(!mcpOn)
-                    .help(mcpOn ? "Open MCP servers" : TerminalControlCatalog.mcpUninstalled)
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 4)
-                }
-            }
-            .padding(6)
-            .frame(minWidth: 240, maxWidth: 360, alignment: .leading)
+        } else {
+            DeckMenuSection(name)
+            if let blocked { DeckMenuNote(blocked) }
+            OptionRows(state: state, control: control, disabled: blocked != nil)
         }
     }
 }

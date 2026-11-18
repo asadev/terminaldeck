@@ -5,16 +5,16 @@ import TerminalDeckNativeCore
 
 /// One browser tab, drawn in Swift on WKWebView (Safari's engine). The tab
 /// itself sits in the main window's strip beside the sessions (see
-/// `NativeBrowserTabs`); this is what the window shows for it — the web
-/// browser's toolbar, in the same order:
+/// `NativeBrowserTabs`); this is what the window shows for it. The toolbar
+/// (18 Nov 2026, notes/review-20261118/DESIGN-browser.md; its pieces are in
+/// NativeBrowserChrome.swift):
 ///
-///   back · forward · reload/stop · home · Session · [Enter a URL, or search] ·
-///   Shared/Isolated · Annotate · Record · Shot · Draw · Size · Devtools ·
-///   Downloads · Profile (one menu)
+///   back · forward · reload/stop · [address … ☆] · (a pill per mode that is on) ·
+///   Connect · Downloads · Profile · More (⋮: every other action, as labelled rows)
 ///
-/// then the progress line, find in page, the handover and Record panels, and
-/// the page (or "Open a page"); Annotate and Draw freeze the page over it.
-/// The machine picker (pages on another computer) is not here yet.
+/// then the bookmarks bar (New Tab page, or always), the progress line, find in
+/// page, the handover and Record panels, and the page (or "Open a page");
+/// Annotate and Draw freeze the page over it.
 /// Agent driving of this browser (the engine's `browser_*` tools) is a later step.
 struct NativeBrowserScreen: View {
     let tabId: String
@@ -44,6 +44,8 @@ struct NativeBrowserTabView: View {
     let tab: NativeBrowserTab
     var keyboard = true
     var modeSwitch = true
+    /// The bookmarks bar's "»" is open.
+    @State private var bookmarksOverflow = false
 
     private var modeHint: String {
         var drawing = false, annotating = false
@@ -56,14 +58,29 @@ struct NativeBrowserTabView: View {
     }
 
     var body: some View {
+        let bookmarks = NativeBrowserBookmarksStore.shared
+        let marks = bookmarks.list(profile: tab.profile)
         VStack(spacing: 0) {
             NativeBrowserToolbarRow(store: store, tab: tab, modeSwitch: modeSwitch)
                 .overlay(alignment: .bottom) { NativeBrowserProgressLine(tab: tab).allowsHitTesting(false) }
                 .zIndex(2) // the suggestions list hangs over the page
+            // Bookmarks: on the New Tab page, or everywhere with "Always show the bookmarks bar" (never an empty bar).
+            if !marks.isEmpty, tab.markup == nil, tab.showsStartView || bookmarks.alwaysShowBar {
+                GeometryReader { proxy in
+                    BrowserBookmarksBar(items: marks, width: proxy.size.width, overflowOpen: $bookmarksOverflow,
+                                        open: { NativeBrowserBookmarkActions.open($0, newTab: $1, in: tab, store: store) },
+                                        copy: { NativeBrowserBookmarkActions.copy($0, store: store) },
+                                        remove: { bookmarks.remove($0) })
+                }
+                .frame(height: BrowserBookmarksBarMetrics.height)
+                .background(NativeSessionChrome.ground)
+                .environment(\.colorScheme, NativeSessionChrome.scheme.isLight ? .light : .dark)
+            }
             if tab.findVisible && tab.markup == nil {
                 NativeBrowserFindBar(tab: tab)
                 Divider()
             }
+            NativeBrowserPageRequestBar(tab: tab)
             NativeBrowserDriveBand(tab: tab) // lane BR: "Hoot is driving on …" (DriveBanner.tsx)
             if let prompt = tab.handoverPrompt {
                 NativeBrowserHandoverBar(tab: tab, prompt: prompt)
@@ -118,6 +135,91 @@ struct NativeBrowserTabView: View {
     }
 }
 
+/// What a press on a bookmark does (the bar, its "»" menu and More ▸ Bookmarks all come here).
+@MainActor
+enum NativeBrowserBookmarkActions {
+    static func open(_ mark: BrowserBookmark, newTab: Bool, in tab: NativeBrowserTab, store: NativeBrowserTabs) {
+        guard let url = URL(string: mark.url) else { return }
+        if newTab { store.create(url: url, after: tab.id, profile: tab.profile) } else { tab.load(url) }
+    }
+
+    static func copy(_ mark: BrowserBookmark, store: NativeBrowserTabs) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(mark.url, forType: .string)
+        store.show("Address copied")
+    }
+}
+
+/// More (three dots) with the tab's live values: every action the toolbar's icons and the old profile menu had.
+struct NativeBrowserMoreCard: View {
+    let store: NativeBrowserTabs
+    let tab: NativeBrowserTab
+    /// The window's split switch is offered here (the main window only), as a session's header offers it.
+    var splitOffered = false
+
+    var body: some View {
+        BrowserMoreMenu(model: model, act: perform)
+    }
+
+    private var model: BrowserMoreModel {
+        var annotating = tab.inspecting, drawing = false
+        switch tab.markup {
+        case .annotate: annotating = true
+        case .draw: drawing = true
+        case nil: break
+        }
+        let layout = splitOffered ? AppModel.shared.tabs?.layout : nil
+        return BrowserMoreModel(
+            hasPage: tab.url != nil && !tab.showsStartView,
+            hasAddress: tab.url != nil,
+            annotating: annotating,
+            drawing: drawing,
+            recording: tab.recording,
+            recordedSteps: tab.recording ? 0 : tab.steps.count,
+            zoom: BrowserZoom.percent(tab.zoom),
+            isolated: tab.isolated,
+            split: layout.flatMap { $0.modeSwitch ? $0.mode == "split" : nil },
+            bookmarksAlways: NativeBrowserBookmarksStore.shared.alwaysShowBar,
+            bookmarks: NativeBrowserBookmarksStore.shared.list(profile: tab.profile),
+            size: BrowserSizeModel(deviceID: tab.deviceID, landscape: tab.deviceLandscape, phoneUserAgent: tab.mobileUserAgent,
+                                   custom: "\(tab.customWidth) × \(tab.customHeight)"),
+            machines: NativeBRMachines.shared.rows(for: tab))
+    }
+
+    private func perform(_ action: BrowserMoreAction) {
+        switch action {
+        case .newTab: store.create(after: tab.id)
+        case .newIsolatedTab: store.create(after: tab.id, isolated: true, profile: tab.profile)
+        case .annotate: tab.toggleAnnotate() // lane BR: the live picker first, as the web browser's Annotate
+        case .screenshot: tab.takeShot()
+        case .draw: tab.startMarkup(annotate: false)
+        case .record: tab.toggleRecording()
+        case .showFlow: tab.flowHidden = false
+        case .devtools: tab.showWebInspector()
+        case .zoomOut: tab.zoom(by: -1)
+        case .zoomReset: tab.resetZoom()
+        case .zoomIn: tab.zoom(by: 1)
+        case .find: tab.showFind()
+        case .print: tab.printPage()
+        case .copyAddress: tab.copyAddress()
+        case .openInBrowser: tab.openInDefaultBrowser()
+        case .toggleIsolated: tab.switchStore(profile: tab.profile, isolated: !tab.isolated)
+        case .toggleSplit:
+            if let layout = AppModel.shared.tabs?.layout { AppModel.shared.runButton(.setMode(layout.mode == "split" ? "terminal" : "split")) }
+        case .home: tab.goHome()
+        case .setStartPage: tab.setAsStartPage()
+        case .store: AppModel.shared.select("store") // lane BR: the Store page (App.tsx showPanel('store'))
+        case .settings: NativeBrowserSettingsWindow.show()
+        case .size(let id): tab.deviceID = id
+        case .landscape(let on): tab.deviceLandscape = on
+        case .phoneUserAgent(let on): tab.setMobileUserAgent(on)
+        case .bookmarksAlways(let on): NativeBrowserBookmarksStore.shared.alwaysShowBar = on
+        case .openBookmark(let address): if let url = URL(string: address) { tab.load(url) }
+        case .machine(let id): NativeBRMachines.shared.select(id, for: tab)
+        }
+    }
+}
+
 // MARK: - Toolbar row (the web browser's, in its order)
 
 struct NativeBrowserToolbarRow: View {
@@ -128,6 +230,10 @@ struct NativeBrowserToolbarRow: View {
     @Bindable var tab: NativeBrowserTab
     var modeSwitch = false
     @State private var inMainWindow = false
+    /// The toolbar's open card (one at a time; a press anywhere else closes it).
+    @State private var menu: BrowserChromeMenu?
+    /// A narrow toolbar (a split pane): Connect shows its glyph only.
+    @State private var compact = false
     @State private var address = ""
     @FocusState private var addressFocused: Bool
     @State private var selection: TextSelection?
@@ -147,36 +253,44 @@ struct NativeBrowserToolbarRow: View {
     var body: some View {
         inputRule.bind(to: inputScope)
         inputRule.update(active: inputScope == nil ? screenActive : true, enabled: true)
-        return HStack(spacing: 4) {
+        return BrowserToolbarFrame {
             navigation
-            // Which session this window is attached to — between Home and the address,
-            // where the web browser draws it (lane BR: NativeBrowserBRBinding.swift).
-            NativeBrowserConnectButton(tabId: tab.id)
-            NativeBrowserMachinePicker(tab: tab) // lane BR: only with another machine paired (MachinePicker.tsx)
-            addressField.frame(minWidth: 100).layoutPriority(1)
-            ViewThatFits(in: .horizontal) {
-                tools
-                ScrollView(.horizontal) { tools }
-            }
-            .frame(minWidth: 26, idealWidth: 194, maxWidth: 194)
-            .frame(height: 26)
-            .layoutPriority(2)
+        } address: {
+            addressField
+        } trailing: {
+            // The page tools, like Chrome's extensions (owner, 18 Nov: "We can have extension like this way"): a small
+            // group right of the address; the rest is behind the three dots. A narrow pane keeps them behind the dots.
+            if !compact { toolGroup }
+            modePills
+            // ONE Connect control (owner, 18 Nov: "keep one icon only, disconnect and connect, not two").
+            NativeBrowserConnectButton(tabId: tab.id, compact: compact, open: menu == .connect) { toggle(.connect) }
+                .deckMenu(isPresented: shows(.connect), alignment: .trailing, width: BrowserToolbarMetrics.connectWidth) {
+                    NativeBrowserConnectCard(tabId: tab.id)
+                }
             NativeBrowserDownloadsButton(store: store)
-            NativeBrowserProfileButton(store: store, tab: tab)
-            // The window's split switch (either side can be a session or a browser tab), where a session's header has it.
-            if modeSwitch, inMainWindow, let layout = AppModel.shared.tabs?.layout, layout.modeSwitch {
-                NativeModeSwitch(layout: layout)
+            NativeBrowserProfileButton(store: store, tab: tab, open: menu == .profile) { toggle(.profile) }
+                .deckMenu(isPresented: shows(.profile), alignment: .trailing, width: BrowserToolbarMetrics.profileWidth) {
+                    NativeBrowserProfileCard(store: store, tab: tab, screenActive: screenActive, inputScope: inputScope)
+                }
+            // Three dots: every other action, as labelled rows (BrowserMoreMenu).
+            BrowserToolbarButton(label: "More", help: "More", active: menu == .more, action: { toggle(.more) }) {
+                Image(systemName: "ellipsis").rotationEffect(.degrees(90))
+            }
+            .deckMenu(isPresented: shows(.more), alignment: .trailing, width: BrowserToolbarMetrics.moreWidth) {
+                NativeBrowserMoreCard(store: store, tab: tab, splitOffered: modeSwitch && inMainWindow)
+            }
+            // Screenshot's card (More ▸ Screenshot, and a finished drawing) opens under the More button.
+            .popover(item: $tab.pendingShot, arrowEdge: .bottom) { shot in
+                NativeBrowserShotView(shot: shot, tabID: tab.id) { tab.pendingShot = nil }
             }
         }
-        .buttonStyle(.borderless)
-        .labelStyle(.iconOnly)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
         .background(NativeSessionChrome.ground)
         .environment(\.colorScheme, NativeSessionChrome.scheme.isLight ? .light : .dark)
+        .onGeometryChange(for: Bool.self, of: { $0.size.width < BrowserToolbarMetrics.compactUnder }) { compact = $0 }
         .background(NativeWindowReader { window in
             inMainWindow = window != nil && window === AppModel.shared.web.webView.window
         })
+        .task { NativeBRMachines.shared.start() } // lane BR: which machine serves a page (the address field's word)
         .onAppear {
             address = BrowserAddress.display(tab.url)
             // An empty tab he opened puts his cursor in its address bar; a page's own new window (it has no address
@@ -202,27 +316,33 @@ struct NativeBrowserToolbarRow: View {
         }
     }
 
-    // back · forward · reload/stop · home
-    private var navigation: some View {
-        HStack(spacing: 2) {
-            NativeBrowserIcon("Back", "chevron.left", help: "Back (⌘[)") { tab.goBack() }
-                .disabled(!tab.canGoBack && tab.failure == nil && !tab.showingHome)
-                .contextMenu { historyMenu(tab.backList) }
-            NativeBrowserIcon("Forward", "chevron.right", help: "Forward (⌘])") { tab.goForward() }
-                .disabled(!tab.canGoForward)
-                .contextMenu { historyMenu(tab.forwardList) }
-            if tab.isLoading {
-                NativeBrowserIcon("Stop loading", "xmark", help: "Stop loading (⌘.)") { tab.stop() }
-            } else {
-                NativeBrowserIcon("Reload", "arrow.clockwise", help: "Reload (⌘R)") { tab.reload() }
-                    .disabled(tab.url == nil && tab.failure == nil)
-            }
-            NativeBrowserIcon("Home", "house", help: "Home (⇧⌘H)") { tab.goHome() }
+    private func toggle(_ card: BrowserChromeMenu) { menu = menu == card ? nil : card }
+
+    /// The card's own "is it open": the shared menu sets it false when a press elsewhere or Escape closes it.
+    private func shows(_ card: BrowserChromeMenu) -> Binding<Bool> {
+        Binding(get: { menu == card }, set: { open in
+            if open { menu = card } else if menu == card { menu = nil }
+        })
+    }
+
+    // back · forward · reload/stop (Home is in More)
+    @ViewBuilder private var navigation: some View {
+        BrowserToolbarButton("Back", "chevron.left", help: "Back (⌘[)") { tab.goBack() }
+            .disabled(!tab.canGoBack && tab.failure == nil && !tab.showingHome)
+            .contextMenu { historyMenu(tab.backList) }
+        BrowserToolbarButton("Forward", "chevron.right", help: "Forward (⌘])") { tab.goForward() }
+            .disabled(!tab.canGoForward)
+            .contextMenu { historyMenu(tab.forwardList) }
+        if tab.isLoading {
+            BrowserToolbarButton("Stop loading", "xmark", help: "Stop loading (⌘.)") { tab.stop() }
+        } else {
+            BrowserToolbarButton("Reload", "arrow.clockwise", help: "Reload (⌘R)") { tab.reload() }
+                .disabled(tab.url == nil && tab.failure == nil)
         }
     }
 
     private var addressField: some View {
-        HStack(spacing: 6) {
+        BrowserAddressPill(focused: addressFocused) {
             NativeBrowserServedMark(tab: tab) // lane BR: which machine serves this page (served-mark.ts)
             NativeSessionTextField("Enter a URL, or search", text: $address, selection: $selection)
                 .sessionFocused($addressFocused)
@@ -236,78 +356,66 @@ struct NativeBrowserToolbarRow: View {
                 .onChange(of: address) { _, now in edited(now) }
             if tab.zoom != 1 {
                 NativeSessionButton(BrowserZoom.percent(tab.zoom)) { tab.resetZoom() }
+                    .buttonStyle(.borderless)
                     .font(.caption.monospacedDigit())
                     .help("Reset zoom")
             }
-        }
-        .padding(.horizontal, 10)
-        .frame(height: 28)
-        .background(.quaternary.opacity(0.55), in: .rect(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(NativeSessionChrome.accent.opacity(addressFocused ? 0.7 : 0), lineWidth: 1.5)
+            // The bookmark star, on every web page (owner, 18 Nov: "We can have bookmarks over here").
+            if hasPage, let url = tab.url, BrowserHistory.visitable(url.absoluteString) != nil {
+                BrowserBookmarkStar(saved: NativeBrowserBookmarksStore.shared.contains(profile: tab.profile, url: url)) {
+                    let added = NativeBrowserBookmarksStore.shared.toggle(profile: tab.profile, url: url, title: tab.title,
+                                                                         favicon: tab.favicon)
+                    if let added { store.show(added ? "Bookmark added" : "Bookmark removed") }
+                }
+            }
         }
         .overlay(alignment: .topLeading) {
             if addressFocused && !tab.suggestions.isEmpty {
                 NativeBrowserSuggestions(tab: tab) { open($0) }
-                    .offset(y: 32)
+                    .offset(y: BrowserToolbarMetrics.addressHeight + 4)
             }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 4)
     }
 
-    // Shared/Isolated · Annotate · Record · Shot · Draw · Size · Devtools · Downloads · Profile
-    private var tools: some View {
-        HStack(spacing: 2) {
-            NativeBrowserIcon(tab.isolated ? "Isolated" : "Shared",
-                              tab.isolated ? "lock" : "person.2",
-                              help: tab.isolated
-                                ? "Isolated: this tab keeps its own cookies, in memory only"
-                                : "Shared: this tab uses the profile's cookies",
-                              pressed: tab.isolated) {
-                tab.switchStore(profile: tab.profile, isolated: !tab.isolated)
-            }
-
-            NativeBrowserIcon("Annotate", "cursorarrow", help: "Annotate — mark things on the page, say what should change, send it to a session",
-                              pressed: isAnnotating || tab.inspecting) {
+    /// Annotate, Screenshot, Record: one press each. Annotate and Record are pills while they are on (`modePills`).
+    @ViewBuilder private var toolGroup: some View {
+        if !(isAnnotating || tab.inspecting) {
+            BrowserToolbarButton("Annotate", "cursorarrow.rays",
+                                 help: "Annotate: mark things on the page, say what should change, send it to a session") {
                 tab.toggleAnnotate() // lane BR: the live picker first, as the web browser's Annotate
             }
             .disabled(!hasPage)
-
-            NativeBrowserIcon(tab.recording ? (tab.steps.count > 1 ? "Stop (\(tab.steps.count))" : "Stop") : "Record",
-                              tab.recording ? "stop.circle.fill" : "record.circle",
-                              help: tab.recording ? "Stop recording" : "Record — write down every click, entry and navigation as a flow",
-                              pressed: tab.recording, tint: tab.recording ? .red : nil) {
+        }
+        BrowserToolbarButton("Screenshot", "camera", help: "Screenshot: a picture of the page to copy or send to a session") {
+            tab.takeShot()
+        }
+        .disabled(!hasPage)
+        if !tab.recording {
+            BrowserToolbarButton("Record", "record.circle", help: "Record: write down every click, entry and navigation as a flow") {
                 tab.toggleRecording()
             }
-            .disabled(!hasPage && !tab.recording)
-
-            NativeBrowserIcon("Shot", "camera", help: "Shot — a picture of the page to copy or send to a session") {
-                tab.takeShot()
-            }
             .disabled(!hasPage)
-            .popover(item: $tab.pendingShot, arrowEdge: .bottom) { shot in
-                NativeBrowserShotView(shot: shot, tabID: tab.id) { tab.pendingShot = nil }
-            }
+        }
+    }
 
-            NativeBrowserIcon("Draw", "pencil.tip", help: "Draw — mark up a screenshot of the page, then copy it or send it",
-                              pressed: isDrawing) {
+    /// A mode that is on shows as a pill here, and the pill turns it off. Nothing shows while none is on.
+    @ViewBuilder private var modePills: some View {
+        if isAnnotating || tab.inspecting {
+            BrowserModePill(text: "Annotating", symbol: "cursorarrow.rays", help: "Stop annotating") { tab.toggleAnnotate() }
+        }
+        if tab.recording {
+            BrowserModePill(text: tab.steps.count > 1 ? "Recording · \(tab.steps.count)" : "Recording", symbol: "record.circle.fill",
+                            tint: .red, help: "Stop recording") { tab.toggleRecording() }
+        }
+        if isDrawing {
+            BrowserModePill(text: "Drawing", symbol: "pencil.tip", help: "Leave drawing without saving") {
                 tab.startMarkup(annotate: false)
             }
-            .disabled(!hasPage)
-
-            NativeBrowserSizeMenu(tab: tab)
-                .disabled(!hasPage)
-
-            NativeBrowserIcon("Devtools", "chevron.left.forwardslash.chevron.right",
-                              help: "Devtools — Safari's Web Inspector (⌥⌘I, or right-click ▸ Inspect Element)") {
-                tab.showWebInspector()
-            }
-            .disabled(!hasPage)
-
         }
-        .fixedSize(horizontal: true, vertical: false)
+        if tab.deviceID != nil {
+            BrowserModePill(text: BrowserSizeModel(deviceID: tab.deviceID).label, symbol: "iphone",
+                            help: "Fill the window again") { tab.deviceID = nil }
+        }
     }
 
     /// The web toolbar's inline completion: on an insertion, the top suggestion
@@ -418,92 +526,6 @@ struct NativeBrowserIcon: View {
         }
         .help(help)
         .accessibilityLabel(label)
-    }
-}
-
-/// "Size": the page in a device's frame, as the web browser's device bar offers.
-struct NativeBrowserSizeMenu: View {
-    @Bindable var tab: NativeBrowserTab
-
-    var body: some View {
-        Menu {
-            Button {
-                tab.deviceID = nil
-            } label: {
-                if tab.deviceID == nil { Label("Fill the window", systemImage: "checkmark") } else { Text("Fill the window") }
-            }
-            Divider()
-            ForEach(BrowserDevicePreset.all) { preset in
-                Button {
-                    tab.deviceID = preset.id
-                } label: {
-                    let text = "\(preset.label) — \(preset.width) × \(preset.height)"
-                    if tab.deviceID == preset.id { Label(text, systemImage: "checkmark") } else { Text(text) }
-                }
-            }
-            Button {
-                tab.deviceID = BRDeviceSize.customID
-            } label: {
-                let text = "Custom — \(tab.customWidth) × \(tab.customHeight)"
-                if tab.deviceID == BRDeviceSize.customID { Label(text, systemImage: "checkmark") } else { Text(text) }
-            }
-            Divider()
-            Toggle("Landscape", isOn: $tab.deviceLandscape)
-                .disabled(tab.deviceID == nil)
-            Toggle("Phone user agent", isOn: Binding(get: { tab.mobileUserAgent },
-                                                     set: { tab.setMobileUserAgent($0) }))
-        } label: {
-            Label("Size", systemImage: "iphone")
-                .font(.system(size: 13))
-                .frame(width: 26, height: 26)
-                .foregroundStyle(tab.deviceID != nil ? AnyShapeStyle(Color.primary) : AnyShapeStyle(Color.secondary))
-                .background(tab.deviceID != nil ? AnyShapeStyle(Color.primary.opacity(0.12)) : AnyShapeStyle(.clear),
-                            in: .rect(cornerRadius: 6))
-        }
-        .menuIndicator(.hidden)
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("Size — show the page at a phone, tablet or desktop size")
-    }
-}
-
-/// The page actions within the one Profile menu.
-struct NativeBrowserMenuActions: View {
-    @Bindable var store: NativeBrowserTabs
-    let tab: NativeBrowserTab
-
-    var body: some View {
-        Group {
-            NativeSessionButton("New Tab") { store.create(after: tab.id) }
-            NativeSessionButton("New Isolated Tab") { store.create(after: tab.id, isolated: true, profile: tab.profile) }
-            Divider()
-            NativeSessionButton("Store") { AppModel.shared.select("store") } // lane BR: the Store page (App.tsx showPanel('store'))
-            NativeSessionButton("Set as Start Page") { tab.setAsStartPage() }
-                .disabled(tab.url == nil)
-            NativeSessionButton("Open in Your Browser") { tab.openInDefaultBrowser() }
-                .disabled(tab.url == nil)
-            NativeSessionButton("Copy Address") { tab.copyAddress() }
-                .disabled(tab.url == nil)
-            Divider()
-            NativeSessionButton("Zoom Out") { tab.zoom(by: -1) }.disabled(tab.url == nil)
-            NativeSessionButton("Actual Size (\(BrowserZoom.percent(tab.zoom)))") { tab.resetZoom() }.disabled(tab.url == nil)
-            NativeSessionButton("Zoom In") { tab.zoom(by: 1) }.disabled(tab.url == nil)
-            Divider()
-            NativeSessionButton("Find in Page") { tab.showFind() }.disabled(tab.url == nil || tab.showsStartView)
-            NativeSessionButton("Print…") { tab.printPage() }.disabled(tab.url == nil || tab.showsStartView)
-            // Lane BR: the rest of the web browser's ⋮ (BrowserMenu.tsx). History and
-            // Passwords belong to the tab's profile, which an Isolated tab does not save to.
-            Divider()
-            if !tab.isolated {
-                NativeSessionButton("History") { tab.historyShown = true }
-                NativeSessionButton("Passwords") { NativeBRSettingsLink.open("browser", passwords: true) }
-            }
-            if !tab.steps.isEmpty && !tab.recording {
-                NativeSessionButton("Recorded flow") { tab.flowHidden = false }
-            }
-            NativeSessionButton("Scraping") { NativeBRSettingsLink.open("scraping") }
-            NativeSessionButton("Browser Settings…") { NativeBrowserSettingsWindow.show() }
-        }
     }
 }
 
