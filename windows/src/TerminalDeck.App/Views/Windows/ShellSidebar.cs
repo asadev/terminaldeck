@@ -68,7 +68,7 @@ public sealed partial class ShellWindow
   {
     PinnedPageRows.Children.Clear(); pageCounts.Clear(); pageNavigation.Clear(); pageCountButtons.Clear();
     ProjectsSection.Visibility = sidebar.Pinned("Projects") ? Visibility.Visible : Visibility.Collapsed;
-    foreach (var id in sidebar.Read.Pages.Where(p => p is not ("Projects" or "Devices")))
+    foreach (var id in sidebar.Read.Pages.Where(p => p is not ("Projects" or "Devices") && (Runtime.CloudServicesAllowed || p != "Cloud")))
     {
       var page = SidebarState.Catalogue.Single(p => p.Id == id);
       var row = new Grid { ColumnSpacing = 8 };
@@ -168,6 +168,7 @@ public sealed partial class ShellWindow
   }
   private void OpenPageTab(string id)
   {
+    if (!Runtime.CloudServicesAllowed && id is "Cloud" or "Devices") { ShowCloudSubscription(); return; }
     if (id == "Devices") { ShowDevicesPopup(); return; }
     if (!Enum.TryParse<ShellPage>(id, out var page)) return;
     windowState.Reveal("page:" + id); windowState.Ensure("page:" + id, "pages", id, "page", SidebarState.Catalogue.FirstOrDefault(p => p.Id == id)?.Title ?? id, explicitPage: true);
@@ -175,6 +176,7 @@ public sealed partial class ShellWindow
   }
   private void OpenSidebarPage(string id)
   {
+    if (!Runtime.CloudServicesAllowed && id is "Cloud" or "Devices") { ShowCloudSubscription(); return; }
     morePagesFlyout?.Hide();
     if (id is "Files" or "SourceControl" or "GitHub") { CodeWorkspaceView(id == "Files" ? "Files" : id == "SourceControl" ? "Changes" : "Pull requests"); id = "Code"; }
     if (id == "Devices") { ShowDevicesPopup(); return; }
@@ -185,7 +187,7 @@ public sealed partial class ShellWindow
   {
     var rows = new StackPanel { Spacing = 2, MinWidth = 248 };
     var opens = new List<Button>();
-    foreach (var page in SidebarState.Catalogue)
+    foreach (var page in SidebarState.Catalogue.Where(p => Runtime.CloudServicesAllowed || p.Id is not ("Cloud" or "Devices")))
     {
       var row = new Grid { ColumnSpacing = 8 };
       row.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
@@ -263,6 +265,7 @@ public sealed partial class ShellWindow
   /// that has a row here already (a live tab, or it moved here) is not listed twice.
   private void RenderCloudSessionRows()
   {
+    if (!Runtime.CloudServicesAllowed) { renderedCloudRows = ""; CloudSessionRows.Children.Clear(); CloudSessionRows.Visibility = Visibility.Collapsed; return; }
     if (Runtime.CloudChats is not { } chats) { CloudSessionRows.Visibility = Visibility.Collapsed; return; }
     if (!cloudRowsWired)
     {
@@ -291,6 +294,7 @@ public sealed partial class ShellWindow
   /// Start with its readable Cloud copy; its existing live host route replaces it when reachable.
   private void OpenCloudChat(SidebarCloudRow row)
   {
+    if (!Runtime.CloudServicesAllowed) { ShowCloudSubscription(); return; }
     if (Runtime.CloudChats is null) return;
     cloudChatRef = row.Ref;
     cloudChatView = new TerminalDeck.App.Views.Chat.CloudSessionRoute(row, Runtime);
@@ -301,8 +305,8 @@ public sealed partial class ShellWindow
   }
 
   /// Your Cloud: a full page of the main window (DESIGN-WINDOWS-CLOUD.md 1).
-  private FrameworkElement YourCloudView() => new TerminalDeck.App.Views.Settings.YourCloudPage(Runtime.YourCloud, () => { Model.Page = ShellPage.GitHub; },
-    ShowBrowserSettingsWindow, message => Model.Notice = message);
+  private FrameworkElement YourCloudView() => CloudSurface(new TerminalDeck.App.Views.Settings.YourCloudPage(Runtime.YourCloud, () => { Model.Page = ShellPage.GitHub; },
+    ShowBrowserSettingsWindow, message => Model.Notice = message));
 
   private FrameworkElement ConnectionPage(ShellPage page)
   {

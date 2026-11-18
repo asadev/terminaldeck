@@ -69,7 +69,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     // A phone started watching or controlling this PC's screen: said on the PC, with where to stop it.
     Runtime.PhoneScreenNotice += message => { if (message.Length > 0) DispatcherQueue.TryEnqueueHandled(() => Model.Notice = message); };
     Runtime.Cloud.Changed += _ => DispatcherQueue.TryEnqueue(RefreshSidebarFooter);
-    Runtime.Changed += () => DispatcherQueue.TryEnqueueHandled(() => { SyncSessions(); Projects?.Model.Refresh(); Agents?.Model.Refresh(); RefreshAccountChip(); if (Runtime.TaskProblem is { } problem) Model.Notice = problem; });
+    Runtime.Changed += () => DispatcherQueue.TryEnqueueHandled(() => { SyncSessions(); Projects?.Model.Refresh(); Agents?.Model.Refresh(); RefreshAccountChip(); RefreshCloudAccessUi(); if (Runtime.TaskProblem is { } problem) Model.Notice = problem; });
     Title = Brand.Name;
     BrandLabel.Text = Brand.Name;
     var work = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary).WorkArea;
@@ -154,7 +154,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
           }
           if (args.TryGetProperty("split", out var split)) { var mode = Enum.Parse<SplitPresentation>(split.GetString()!, true); if (mode == SplitPresentation.None) { if (windowState.Layout(Scope).Active is { } active) windowState.One(active, Scope); } else SplitWindows(mode == SplitPresentation.Browser); }
           if (args.TryGetProperty("theme", out var theme)) SetTheme(theme.GetString() switch { "light" => ElementTheme.Light, "dark" => ElementTheme.Dark, _ => ElementTheme.Default });
-          if (args.TryGetProperty("page", out var page)) Model.Page = Enum.Parse<ShellPage>(page.GetString()!, true);
+          if (args.TryGetProperty("page", out var page)) { var destination = Enum.Parse<ShellPage>(page.GetString()!, true); if (!CloudPageAllowed(destination)) throw new McpRefusal(TerminalDeck.Core.Remote.CloudRelayLifecycle.SubscriptionRequired); Model.Page = destination; }
           if (args.TryGetProperty("settingsSection", out var section))
           {
             await OpenSettingsAsync(section.GetString() ?? "general");

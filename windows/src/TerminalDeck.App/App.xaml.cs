@@ -71,6 +71,14 @@ public partial class App : Application
         };
       }
       // Explicit component proof branches before accounts, keeper, hooks and shared activation pointers.
+      if (DevelopmentRun && Environment.GetEnvironmentVariable("TD_C_PARITY_PROOF") is { } cPictures)
+      {
+        if (!Path.GetFullPath(cPictures).StartsWith(root.DirectoryPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+            !File.Exists(Path.Combine(root.DirectoryPath, ".c-parity-proof"))) throw new InvalidOperationException("The C proof needs an explicit scratch marker and output inside that root.");
+        window = new Verification.CloudScreensProofWindow(root, cPictures, cParity: true);
+        window.AppWindow.Show(false);
+        return;
+      }
       if (DevelopmentRun && Environment.GetEnvironmentVariable("TD_UMER_PRS_PROOF") is { } proof &&
           Path.GetFullPath(proof).StartsWith(root.DirectoryPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
       {

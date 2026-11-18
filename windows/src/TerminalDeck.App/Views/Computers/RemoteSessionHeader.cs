@@ -22,6 +22,7 @@ internal sealed class RemoteSessionHeader : Grid
   private readonly Button account = ChatBar.AccountChip(""), model = new(), effort = new(), usage = new();
   private JsonElement controls, accounts;
   private bool refreshing;
+  private bool cProof;
   private readonly TextBlock provider = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
   internal RemoteSessionHeader(OtherComputersService service, string computer, string session, bool chat, Action<string> notice)
   {
@@ -59,11 +60,16 @@ internal sealed class RemoteSessionHeader : Grid
     more.Visibility = Has("rename") || Has("close") ? Visibility.Visible : Visibility.Collapsed;
     actions.Children.Add(more); SetColumn(actions, 1); bar.Children.Add(actions); Children.Add(bar);
     account.Click += async (_, _) => await AccountMenuAsync(); model.Click += async (_, _) => await ControlMenuAsync("model", model); effort.Click += async (_, _) => await ControlMenuAsync("effort", effort); usage.Click += async (_, _) => await UsageMenuAsync();
-    Loaded += async (_, _) => { service.Changed -= Changed; service.Changed += Changed; Render(); await ReadAsync(); }; Unloaded += (_, _) => service.Changed -= Changed;
+    Loaded += async (_, _) => { service.Changed -= Changed; service.Changed += Changed; Render(); if (!cProof) await ReadAsync(); }; Unloaded += (_, _) => service.Changed -= Changed;
     SizeChanged += (_, _) => { var narrow = ActualWidth < 600; path.MaxWidth = narrow ? 100 : 200; name.MaxWidth = narrow ? 100 : 160; };
     Render();
   }
-  private bool Has(string capability) => service.List().Any(c => c.Id == computer && c.State == "Online" && c.Capabilities.Contains(capability));
+  internal void CProofData(JsonElement controls, JsonElement accounts)
+  {
+    if (computer != "fixture" || session != "fixture-session") throw new InvalidOperationException("Only the isolated fixture accepts proof data.");
+    cProof = true; this.controls = controls; this.accounts = accounts; Render();
+  }
+  private bool Has(string capability) => service.CloudAllowed && service.List().Any(c => c.Id == computer && c.State == "Online" && c.Capabilities.Contains(capability));
   private void Changed() => DispatcherQueue.TryEnqueue(Render);
   private void Render()
   {

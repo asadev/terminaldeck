@@ -16,7 +16,7 @@ public sealed partial class ShellWindow
       object result;
       switch (kind)
       {
-        case "commands": result = ShellCommands.Matching(query); break;
+        case "commands": result = VisibleShellCommands(query); break;
         case "sidebar": result = SidebarSnapshot(context); break;
         case "quick-files":
           var folder = args.GetProperty("folder").GetString()!; context.Require("folders", folder);

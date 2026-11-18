@@ -83,6 +83,37 @@ public sealed class CloudSubscriptionTests
     _ = await door.CallAsync(registration.Id, "cloud_status", JsonSerializer.SerializeToElement(new { }));
   }
 
+  [Fact]
+  public void Existing_relay_token_loses_only_relay_admission_and_can_resume_without_reissuing_a_key()
+  {
+    var allowed = true;
+    var door = new McpDoor(new NoApproval()) { RelayAllowed = () => allowed };
+    var registration = door.RegisterCaller(new McpGrant("test", null, null, true, AiPermissionMode.Ask, [], [McpTier.Read], [], DateTimeOffset.UtcNow.AddMinutes(5), AllowRelay: true), (_, _, _, _, _) => ValueTask.FromResult(true));
+    Assert.True(door.AllowsRelay(registration.Token));
+    allowed = false;
+    Assert.False(door.AllowsRelay(registration.Token));
+    Assert.Equal(registration.Id, door.Authenticate(registration.Token));
+    allowed = true;
+    Assert.True(door.AllowsRelay(registration.Token));
+  }
+
+  [Theory]
+  [InlineData("chat-watch", McpTier.Read)] [InlineData("chat-unwatch", McpTier.Read)] [InlineData("chat-options", McpTier.Read)]
+  [InlineData("chat-set", McpTier.Alter)] [InlineData("chat-send", McpTier.Alter)] [InlineData("chat-interrupt", McpTier.Alter)] [InlineData("chat-answer", McpTier.Alter)]
+  public void Remote_chat_actions_use_existing_read_and_change_approval_tiers(string action, McpTier expected)
+  {
+    var spec = McpCatalogue.Load().Single(s => s.Id == "computers.services");
+    Assert.Equal(expected, McpCatalogue.EffectiveTier(spec, JsonSerializer.SerializeToElement(new { action })));
+  }
+
+  [Theory]
+  [InlineData("list", McpTier.Read)] [InlineData("read", McpTier.Read)] [InlineData("save", McpTier.Alter)] [InlineData("assign", McpTier.Alter)] [InlineData("unassign", McpTier.Alter)]
+  public void Agent_library_writes_keep_existing_approval_policy(string action, McpTier expected)
+  {
+    var spec = McpCatalogue.Load().Single(s => s.Id == "agents.library");
+    Assert.Equal(expected, McpCatalogue.EffectiveTier(spec, JsonSerializer.SerializeToElement(new { action })));
+  }
+
   private sealed class Clock : TimeProvider
   {
     public DateTimeOffset Utc = DateTimeOffset.UtcNow;

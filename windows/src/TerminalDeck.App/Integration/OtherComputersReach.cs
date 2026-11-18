@@ -9,7 +9,7 @@ public sealed partial class OtherComputersService
   public Func<ReachGuest?>? AccountGuest { get; set; }
   public async Task RefreshAccountMachinesAsync(CancellationToken ct = default)
   {
-    if (AccountGuest?.Invoke() is not { } guest) return;
+    if (!CloudAllowed || AccountGuest?.Invoke() is not { } guest) return;
     foreach (var machine in await guest.ReachableAsync(ct: ct))
     {
       var id = ReachGuest.LinkId(machine.DeviceId);
@@ -18,12 +18,14 @@ public sealed partial class OtherComputersService
   }
   private async Task ConnectReachAsync(string id, CancellationToken ct)
   {
+    RequireCloudAccess();
     var guest = AccountGuest?.Invoke() ?? throw new InvalidOperationException("Sign in to your account to reach this computer.");
     var machine = (await guest.ReachableAsync(ct: ct)).SingleOrDefault(m => ReachGuest.LinkId(m.DeviceId) == id)
       ?? throw new InvalidOperationException("That computer is not reachable yet. Its saved conversation is still available.");
     await mutations.WaitAsync(ct);
     try
     {
+      RequireCloudAccess();
       if (links.ContainsKey(id)) return;
       var secrets = await guest.SecretsAsync(machine, ct);
       var channel = new ComputerChannel { LinkEngine = LinkEngine, RelayBearer = await guest.RelayTokenAsync(ct) };
@@ -38,6 +40,7 @@ public sealed partial class OtherComputersService
         if (Text(answer, "t", "") != "welcome") throw new ProtocolException(Text(answer, "message", "That computer could not open this session."));
         var caps = answer.TryGetProperty("capabilities", out var offered) && offered.ValueKind == JsonValueKind.Array ? offered.EnumerateArray().Select(c => c.GetString() ?? "").ToArray() : [];
         if (!ReferenceEquals(guest, AccountGuest?.Invoke())) throw new InvalidOperationException("The signed-in account changed while connecting.");
+        RequireCloudAccess();
         links[id] = (channel, stopped); AcceptSnapshot(id, answer);
         Set(new(id, machine.ShownName, machine.Platform, "Online", null, caps, [])); Frame?.Invoke(id, answer);
         _ = ReadAsync(id, channel, stopped); _ = RestoreWatchesAsync(id, stopped.Token);
@@ -52,6 +55,7 @@ public sealed partial class OtherComputersService
   }
   public async Task<string?> OpenCloudSessionAsync(string sessionId, string machineName, CancellationToken ct = default)
   {
+    RequireCloudAccess();
     var existing = List().FirstOrDefault(c => c.State == "Online" && Services(c.Id).Sessions.Any(s => Text(s, "id", "") == sessionId));
     if (existing is not null) return existing.Id;
     await RefreshAccountMachinesAsync(ct);

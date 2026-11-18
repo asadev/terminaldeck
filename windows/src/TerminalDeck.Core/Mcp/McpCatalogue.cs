@@ -46,6 +46,7 @@ public static class McpCatalogue
     foreach (var spec in TerminalDeck.Core.Hooks.ProviderHooksTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Notifications.NotificationTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Cloud.CloudTools.Specs) result[spec.Id] = spec;
+    foreach (var spec in TerminalDeck.Core.Cloud.CloudSubscriptionTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Cloud.CloudFolderTools.Specs.Concat(TerminalDeck.Core.Cloud.CloudArtifactsTools.Specs)) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Remote.ReachAccountTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Code.CodeBackupTools.Specs) result[spec.Id] = spec;
@@ -67,7 +68,7 @@ public static class McpCatalogue
       "cloud.devices" => action == "list" ? McpTier.Read : McpTier.Alter,
       "browser.privacy" => action == "list" ? McpTier.Read : McpTier.Alter,
       "terminal.providers" => action == "list" ? McpTier.Read : action == "start" ? McpTier.Act : McpTier.Alter,
-      "computers.services" => action is "look" or "controls-read" or "usage" or "account-read" or "logins" or "host-read" or "github-read" or "clipboard-read" ? McpTier.Read : action is "account-switch" or "sign-in" or "sign-out" or "host-restart" or "host-stop" or "github-connect" or "github-cancel" or "github-disconnect" or "close" or "rename" or "controls-set" or "input" or "keys" or "send" ? McpTier.Alter : McpTier.Act,
+      "computers.services" => action is "chat-watch" or "chat-unwatch" or "chat-options" or "look" or "controls-read" or "usage" or "account-read" or "logins" or "host-read" or "github-read" or "clipboard-read" ? McpTier.Read : action is "chat-set" or "chat-send" or "chat-interrupt" or "chat-answer" or "account-switch" or "sign-in" or "sign-out" or "host-restart" or "host-stop" or "github-connect" or "github-cancel" or "github-disconnect" or "close" or "rename" or "controls-set" or "input" or "keys" or "send" ? McpTier.Alter : McpTier.Act,
       "computers.screen" => action == "picture" ? McpTier.Read : McpTier.Act,
       "quality.staysfixed" => action is "doctor" or "preview" ? McpTier.Read : McpTier.Alter,
       "quality.fix" => action == "preview" ? McpTier.Read : McpTier.Alter,

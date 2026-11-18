@@ -26,30 +26,33 @@ namespace TerminalDeck.App.Verification;
 /// Drawn as stand-ins (said in the JSON): the side panel's frame (its session and project rows are the real row
 /// builders), the agent's right-click menu (a menu cannot be drawn off-screen: its items are drawn in a list beside the
 /// real Agents page). Not drawn: Devices' reach switch and the GitHub page's code backup (both need the app's runtime).
-internal sealed class CloudScreensProofWindow : Window
+internal sealed partial class CloudScreensProofWindow : Window
 {
   private readonly Grid host = new();
   private readonly string output;
   private readonly AppDataRoot data;
+  private readonly bool cParity;
   private readonly List<string> written = [], failed = [];
+  private readonly List<string> passed = [];
 
-  internal CloudScreensProofWindow(AppDataRoot data, string output)
+  internal CloudScreensProofWindow(AppDataRoot data, string output, bool cParity = false)
   {
-    this.data = data; this.output = output;
+    this.data = data; this.output = output; this.cParity = cParity;
+    if (cParity && !File.Exists(Path.Combine(data.DirectoryPath, ".c-parity-proof"))) throw new InvalidOperationException("The C proof requires its explicit scratch marker.");
     // The background is set per picture (Shot): the canvas, or the Settings window's grey.
     Content = host; AppWindow.Resize(new(1500, 1000)); AppWindow.Move(new(-20000, -20000));
     host.Loaded += async (_, _) =>
     {
       Directory.CreateDirectory(output);
-      try { await RunAsync(); }
+      try { if (cParity) await RunCAsync(); else await RunAsync(); }
       catch (Exception error) when (error is not OutOfMemoryException) { failed.Add(error.ToString()); }
       finally
       {
-        await File.WriteAllTextAsync(Path.Combine(output, "cloud-screens-proof.json"), JsonSerializer.Serialize(new
+        await File.WriteAllTextAsync(Path.Combine(output, cParity ? "c-parity-proof.json" : "cloud-screens-proof.json"), JsonSerializer.Serialize(new
         {
-          at = DateTimeOffset.UtcNow, written, failed,
-          standIns = new[] { "side panel frame: the real session and project row builders in a plain column", "agent menu: the real menu's items drawn as a list beside the real Agents page" },
-          notDrawn = new[] { "Devices with the reach switch on and off: the page needs the app's runtime (reach coordinator)", "GitHub page code-backup line and its menu: needs the app's runtime (CodeBackupHolder)" }
+          at = DateTimeOffset.UtcNow, written, passed, failed,
+          standIns = cParity ? new[] { "Agents: actual pages with in-memory made-up projects/runs; Skills: scratch SKILL.md files", "Remote: actual header and capability owner with made-up welcome snapshot; no live host", "Payment: actual Profile/plan pages against in-memory service answers" } : new[] { "side panel frame: the real session and project row builders in a plain column", "agent menu: the real menu's items drawn as a list beside the real Agents page" },
+          notDrawn = cParity ? new[] { "Live provider turn, Hoot response, relay recovery and connected account behavior", "Move/take and remote simulator layout: no supported Windows protocol", "Efficiency controls: separate worker must extend this proof after its source joins" } : new[] { "Devices with the reach switch on and off: the page needs the app's runtime (reach coordinator)", "GitHub page code-backup line and its menu: needs the app's runtime (CodeBackupHolder)" }
         }, new JsonSerializerOptions { WriteIndented = true }));
         Close();
       }
@@ -70,8 +73,9 @@ internal sealed class CloudScreensProofWindow : Window
         // The window's own background for this page (Settings pages sit on the Settings window's grey, so their cards show).
         host.Background = (Brush)ShellTheme.Resource(host, background); host.UpdateLayout();
         var themeWord = theme == ElementTheme.Dark ? "dark" : "light";
-        await W10Proof.CaptureAsync(host, output, "r9-" + name, themeWord, "Made-up local data; no account, no network", _ => { });
-        written.Add("r9-" + name + "-" + themeWord + ".png");
+        var prefix = cParity ? "c-" : "r9-";
+        await W10Proof.CaptureAsync(host, output, prefix + name, themeWord, "Made-up local data; no account, no network", _ => { });
+        written.Add(prefix + name + "-" + themeWord + ".png");
       }
       catch (Exception error) when (error is not OutOfMemoryException) { failed.Add(name + " " + theme + ": " + error.Message); }
     }
@@ -351,6 +355,7 @@ internal sealed class CloudScreensProofWindow : Window
 
   private sealed class ProofCloudService : ICloudHttp
   {
+    public CloudSubscription? Subscription { get; init; }
     private CloudDeviceRegistration? registered;
     private readonly (CloudDeviceRegistration Device, string Name)[] others =
       [(CloudDeviceKeys.Fresh().Registration("sams-studio-mac", "0.22.0", "macos"), "Studio Mac"), (CloudDeviceKeys.Fresh().Registration("sams-air", "0.22.0", "macos"), "MacBook Air")];
@@ -359,6 +364,7 @@ internal sealed class CloudScreensProofWindow : Window
     {
       var path = request.Url.AbsolutePath;
       CloudHttpResponse Ok(object body, int status = 200) => new(status, JsonSerializer.SerializeToUtf8Bytes(body));
+      if (path == "/v1/subscription" && Subscription is { } subscription) return Task.FromResult(Ok(subscription));
       if (path.EndsWith("/exchange", StringComparison.Ordinal))
         return Task.FromResult(Ok(new { accessToken = Jwt(), refreshToken = "made-up", expiresAt = DateTimeOffset.UtcNow.AddMinutes(60).ToUnixTimeMilliseconds(),
           user = new { id = UserId, displayName = "Sam Rivera", email = "sam@example.com", provider = "google" }, capabilities = new { features = new[] { "cloud" }, storageEntitled = true } }));

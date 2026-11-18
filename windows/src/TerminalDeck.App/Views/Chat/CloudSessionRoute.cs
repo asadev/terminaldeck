@@ -18,7 +18,7 @@ internal sealed class CloudSessionRoute : Grid
   internal CloudSessionRoute(SidebarCloudRow row, AppRuntime runtime)
   {
     this.row = row; this.runtime = runtime;
-    Children.Add(new CloudChatPage(row, () => runtime.CloudChatsDoor()));
+    Children.Add(new CloudAccessSurface(new CloudChatPage(row, () => runtime.CloudChatsDoor()), () => runtime.CloudServicesAllowed, h => runtime.Changed += h, h => runtime.Changed -= h));
     Loaded += async (_, _) =>
     {
       runtime.ReachChanged += Changed; runtime.OtherComputers.Changed += Changed; await TryLiveAsync();
@@ -32,7 +32,7 @@ internal sealed class CloudSessionRoute : Grid
   private void Changed() => DispatcherQueue.TryEnqueue(async () => await TryLiveAsync());
   private async Task TryLiveAsync()
   {
-    if (disposed || opening || live is not null || row.SessionId is not { Length: > 0 } session) return;
+    if (!runtime.CloudServicesAllowed || disposed || opening || live is not null || row.SessionId is not { Length: > 0 } session) return;
     opening = true;
     try
     {
@@ -42,7 +42,7 @@ internal sealed class CloudSessionRoute : Grid
       var actual = runtime.OtherComputers.Services(computer).Sessions.FirstOrDefault(s => OtherComputersService.Text(s, "id", "") == session);
       if (OtherComputersService.Text(actual, "status", "") is "exited" or "ended" || TerminalDeck.Core.Computers.RemoteSessionReading.Field(actual, "exitCode").ValueKind == System.Text.Json.JsonValueKind.Number) return;
       live = new RemoteSessionPane(runtime.OtherComputers, computer, session) { RequestedTheme = ActualTheme };
-      Children.Clear(); Children.Add(live);
+      Children.Clear(); Children.Add(new CloudAccessSurface(live, () => runtime.CloudServicesAllowed, h => runtime.Changed += h, h => runtime.Changed -= h));
     }
     catch (Exception ex) when (ex is not OutOfMemoryException)
     {

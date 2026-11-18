@@ -31,8 +31,16 @@ public sealed partial class SettingsPane
   internal TerminalDeck.Core.Cloud.CloudAccountClient CloudAccount => runtime.Cloud;
   // Devices and Cloud live inside Profile (Mac, 15 Nov); a device's own page is "device:<id>".
   // "browser" is drawn for the Browser's own small settings window, never for the Settings list.
+  internal string ResolveSettingsAccess(string id)
+  {
+    var snapshot = runtime.Cloud.Snapshot.Subscription;
+    if (id == TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Id && !snapshot.ShowsSubscription) return "profile";
+    if (!snapshot.AllowsCloudServices && (id == "cloud" || SettingsNavigation.IsDevice(id) || id is "devices" or "devices.older")) return TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Id;
+    return id;
+  }
   internal FrameworkElement? DirectionPage(string id, Action<string> select) => id switch
   {
+    TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Id => new CloudSubscriptionPage(runtime.Cloud),
     "profile" => new ProfilePage(runtime.Cloud, select, async id => { if (runtime.Reach is { } reach) await reach.RemoveIfOnAsync(id); }, ProfilePairedDevices()),
     "personal" => new PersonalPage(runtime.Cloud),
     "sign-in" => new SignInPage(runtime.Cloud),

@@ -32,6 +32,7 @@ public sealed partial class AppRuntime
     Cloud.Machine = CloudMachineFacts.System(Path.Combine(Root.DirectoryPath, "cloud", "machine.mark"),
       CloudMachineFacts.CopyName(Root.DirectoryPath, StableChannel.Root(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)).DirectoryPath));
     CloudTools.Register(Cloud, Door, () => CloudChats?.Uploader?.StatusWire());
+    InitializeCloudSubscription();
     CloudSync = new CloudSyncBridge(Cloud, new CloudSyncPlatform(
       subject => CloudSyncStore.InFolder(CloudAccountFolder(subject), subject),
       () => new HttpClientCloudSyncHttp(), new ClientWebSocketCloudSyncSockets(), new CloudSyncEndpoint(new Uri(CloudWire.ProductionBase), test: false),
@@ -149,6 +150,7 @@ public sealed partial class AppRuntime
       settings: () => CloudSettingsOwner.ForWindows(General, TerminalAppearance), tasks: kinds.Tasks, agents: records.Agents, projects: records.Projects,
       projectNames: () => Projects.List().ToDictionary(p => p.Id, p => p.Name),
       passwordStores: () => cloudSecretStores.OfType<CloudSecretsDeleteOwner>().ToArray(), secretFiles: () => CloudProjectSecretFilesHolder.Shared.Store);
+    YourCloud.AccessAllowed = () => CloudServicesAllowed;
     return owners;
   }
 

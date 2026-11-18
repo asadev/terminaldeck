@@ -62,7 +62,7 @@ public sealed class RemoteSessionPane : Grid, IAsyncDisposable
           {
             case "ready": ready = true; Post(new { type = "theme", theme = ActualTheme == ElementTheme.Dark ? "dark" : "light" }); await service.AttachAsync(computer, session, cols, rows, stop.Token); break;
             case "input":
-              if (!service.List().Any(c => c.Id == computer && c.State == "Online")) { status.Text = "Reconnecting to that computer…"; break; }
+              if (!service.CloudAllowed || !service.List().Any(c => c.Id == computer && c.State == "Online")) { status.Text = "Reconnecting to that computer…"; break; }
               var text = m.GetProperty("data").GetString() ?? "";
               if (Encoding.UTF8.GetByteCount(text) > 65536) throw new ArgumentException("Paste at most 64 KB at once.");
               await service.SendAsync(computer, new { t = "input", id = session, data = text }, stop.Token); break;

@@ -10,6 +10,7 @@ public static class ComputerSessionPicker
   // the local launcher, filesystem checks or local session ledger.
   public static async Task<bool> ChooseAsync(XamlRoot root, OtherComputersService service, CancellationToken ct = default)
   {
+    if (!service.CloudAllowed) return false;
     var computers = service.List().Where(c => c.State == "Online" && c.Capabilities.Contains("create")).ToArray();
     if (computers.Length == 0) return false;
     var location = new ComboBox { Header = "Run on", HorizontalAlignment = HorizontalAlignment.Stretch };
@@ -39,7 +40,7 @@ public static class ComputerSessionPicker
         if (!string.IsNullOrWhiteSpace(folder.Text)) fields["cwd"] = folder.Text;
         var session = await service.CreateSessionAsync(id, fields, ct);
         var pane = new RemoteSessionPane(service, id, session.GetProperty("id").GetString()!) { RequestedTheme = (root.Content as FrameworkElement)?.ActualTheme ?? ElementTheme.Default };
-        var window = new Window { Title = OtherComputersService.Text(session, "title", "Remote session"), Content = pane };
+        var window = new Window { Title = OtherComputersService.Text(session, "title", "Remote session"), Content = new CloudAccessSurface(pane, () => service.CloudAllowed, h => service.Changed += h, h => service.Changed -= h) };
         window.Closed += async (_, _) => await pane.DisposeAsync(); window.Activate(); starting = false; start.Hide();
       }
       catch (Exception ex) when (ex is not OutOfMemoryException) { note.Text = ex.Message; }

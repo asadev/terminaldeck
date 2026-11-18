@@ -67,6 +67,7 @@ public sealed class McpDoor(IMcpPermissionBroker permission, TimeProvider? time 
   Action<McpGrant, McpToolSpec, JsonElement>? preflight = null)
 {
   public Func<string, bool>? ToolOffered { get; set; }
+  public Func<bool>? RelayAllowed { get; set; }
 
   private sealed record Handler(McpToolSpec Spec, McpToolHandler Run);
   private sealed record Caller(byte[] Digest, McpGrant Grant, McpLivePermission Permitted, long Revision, CancellationTokenSource Lifetime);
@@ -123,6 +124,7 @@ public sealed class McpDoor(IMcpPermissionBroker permission, TimeProvider? time 
   }
   public bool AllowsRelay(string token)
   {
+    if (RelayAllowed?.Invoke() == false) return false;
     try { var id = Authenticate(token); lock (gate) return RequireCaller(id).Grant.AllowRelay; }
     catch (McpRefusal) { return false; }
   }

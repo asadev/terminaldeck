@@ -291,6 +291,7 @@ public sealed partial class ShellWindow
   }
   private FrameworkElement PageView(ShellPage page)
   {
+    if (!CloudPageAllowed(page)) return new TerminalDeck.App.Views.Settings.CloudSubscriptionPage(Runtime.Cloud);
     // A session on another machine: its own page each time (never retained under the one page key).
     if (page == ShellPage.CloudChat) return cloudChatView ?? new WorkspaceLoadingView();
     if (pageViews.TryGetValue(page, out var retained)) return retained;

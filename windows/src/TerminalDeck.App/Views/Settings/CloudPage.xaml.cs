@@ -186,7 +186,7 @@ public sealed partial class CloudPage : UserControl
 
   private async Task UseCloudAsync(bool on)
   {
-    if (working) return;
+    if (working || !account.Snapshot.Subscription.AllowsCloudServices) return;
     working = true; Render();
     try { await account.SetUseCloudAsync(on); }
     catch (Exception ex) when (ex is not OutOfMemoryException) { pressProblem = "Could not finish that change. Check your connection."; }
@@ -196,7 +196,7 @@ public sealed partial class CloudPage : UserControl
   /// "Sync now": one round at once; the line follows the engine's own state.
   private async Task SyncNowAsync()
   {
-    if (sync is null || syncing) return;
+    if (sync is null || syncing || !account.Snapshot.Subscription.AllowsCloudServices) return;
     syncing = true; UpdateSync();
     try { await sync.SyncNowAsync(); }
     catch (Exception ex) when (ex is not OutOfMemoryException) { pressProblem = "Could not finish that change. Check your connection."; }
@@ -206,7 +206,7 @@ public sealed partial class CloudPage : UserControl
   /// A trust press: one at a time, its refusal said in plain words on the page.
   private async Task PressAsync(Func<Task> press)
   {
-    if (working) return;
+    if (working || !account.Snapshot.Subscription.AllowsCloudServices) return;
     working = true; pressProblem = null; Render();
     try { await press(); }
     catch (CloudTrustRefusal refusal) { pressProblem = refusal.Words; }

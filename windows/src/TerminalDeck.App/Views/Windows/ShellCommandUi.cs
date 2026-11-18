@@ -68,6 +68,7 @@ public sealed partial class ShellWindow
   }
   private async Task RunShellCommandAsync(string id, string host = "main", TerminalDeck.Core.Mcp.McpCallContext? caller = null)
   {
+    if (!TerminalDeck.Core.Cloud.CloudPaidInventory.ShowsCommand(Runtime.Cloud.Snapshot.Subscription, id)) throw new InvalidOperationException(TerminalDeck.Core.Remote.CloudRelayLifecycle.SubscriptionRequired);
     var tab = FocusedTab(host);
     var target = host == "main" ? Root : detached[host].Root;
     switch (id)
@@ -137,12 +138,12 @@ public sealed partial class ShellWindow
     var query = new TextBox { PlaceholderText = "Search commands", MinWidth = 400 }; AutomationProperties.SetName(query, "Search commands");
     var list = new ListView { DisplayMemberPath = "Title", MaxHeight = 400, SelectionMode = ListViewSelectionMode.Single, IsItemClickEnabled = true };
     var empty = new TextBlock { Text = "No matching commands", Visibility = Visibility.Collapsed, Opacity = 0.7 };
-    void Search() { var results = ShellCommands.Matching(query.Text).ToArray(); list.ItemsSource = results; list.SelectedIndex = results.Length > 0 ? 0 : -1; empty.Visibility = results.Length == 0 ? Visibility.Visible : Visibility.Collapsed; }
+    void Search() { var results = VisibleShellCommands(query.Text).ToArray(); list.ItemsSource = results; list.SelectedIndex = results.Length > 0 ? 0 : -1; empty.Visibility = results.Length == 0 ? Visibility.Visible : Visibility.Collapsed; }
     query.TextChanging += (_, _) => Search(); Search();
     var content = new StackPanel { Spacing = 12 }; content.Children.Add(query); content.Children.Add(list); content.Children.Add(empty);
     var dialog = new ContentDialog { XamlRoot = target.XamlRoot, RequestedTheme = target.ActualTheme, Title = "Command Palette", Content = content, CloseButtonText = "Close" };
     ShellCommand? picked = null;
-    void Pick() { picked = list.SelectedItem as ShellCommand; if (picked is not null && !ShellCommands.Matching(query.Text).Any(command => command.Id == picked.Id)) picked = null; if (picked is not null) dialog.Hide(); }
+    void Pick() { picked = list.SelectedItem as ShellCommand; if (picked is not null && !VisibleShellCommands(query.Text).Any(command => command.Id == picked.Id)) picked = null; if (picked is not null) dialog.Hide(); }
     list.ItemClick += (_, args) => { list.SelectedItem = args.ClickedItem; Pick(); };
     query.KeyDown += (_, args) => { if (args.Key == VirtualKey.Enter) { Pick(); args.Handled = true; } else if (args.Key == VirtualKey.Down) { list.Focus(FocusState.Keyboard); args.Handled = true; } };
     list.KeyDown += (_, args) => { if (args.Key == VirtualKey.Enter) { Pick(); args.Handled = true; } };

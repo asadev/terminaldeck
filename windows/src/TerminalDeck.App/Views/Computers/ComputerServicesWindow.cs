@@ -62,7 +62,7 @@ public sealed class ComputerServicesWindow
     Add(upload, "Send file", "upload", async () => result.Text = ComputerServiceReading.Describe(await service.UploadAsync(this.computer, source.Text, destination.Text, CancellationToken.None)));
     Add(upload, "Cancel upload", "upload", () => { service.CancelUpload(this.computer); return Task.CompletedTask; });
     root.Children.Add(new Expander { Header = "Send a file", Content = upload, HorizontalAlignment = HorizontalAlignment.Stretch });
-    root.Children.Add(result); window.Content = new ScrollViewer { Content = root, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+    root.Children.Add(result); window.Content = new CloudAccessSurface(new ScrollViewer { Content = root, RequestedTheme = theme, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }, () => service.CloudAllowed, h => service.Changed += h, h => service.Changed -= h);
     service.Changed += Changed; service.Frame += Frame;
     window.Closed += async (_, _) => { windows.Remove(this.computer); service.Changed -= Changed; service.Frame -= Frame; foreach (var terminal in terminals) await terminal.DisposeAsync(); };
     Render();
@@ -96,7 +96,7 @@ public sealed class ComputerServicesWindow
       open.Click += (_, _) =>
       {
         var terminal = new RemoteSessionPane(service, computer, id) { RequestedTheme = ((FrameworkElement)window.Content).ActualTheme }; terminals.Add(terminal);
-        var child = new Window { Title = OtherComputersService.Text(session, "title", id), Content = terminal };
+        var child = new Window { Title = OtherComputersService.Text(session, "title", id), Content = new CloudAccessSurface(terminal, () => service.CloudAllowed, h => service.Changed += h, h => service.Changed -= h) };
         child.Closed += async (_, _) => { terminals.Remove(terminal); await terminal.DisposeAsync(); }; child.Activate();
       };
       row.Children.Add(open);

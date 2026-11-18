@@ -20,6 +20,8 @@ public sealed partial class OtherComputersService
     foreach (var id in saved.Keys)
     {
       if (lifetime.IsCancellationRequested) return;
+      wanted.TryAdd(id, 0);
+      if (!CloudAllowed) continue;
       try { await ConnectAsync(id, lifetime.Token); }
       catch (Exception ex) when (ex is not OutOfMemoryException) { }
     }
@@ -52,7 +54,7 @@ public sealed partial class OtherComputersService
       if (!await browserCalls.WaitAsync(0, ct)) throw new McpRefusal("Too many browser calls are pending.");
       entered = true;
       var session = Text(frame, "session", "");
-      bool Allowed() => DrivesBrowser(id) && List().Any(c => c.Id == id && c.State == "Online") && Services(id).Sessions.Any(s => Text(s, "id", "") == session);
+      bool Allowed() => CloudAllowed && DrivesBrowser(id) && List().Any(c => c.Id == id && c.State == "Online") && Services(id).Sessions.Any(s => Text(s, "id", "") == session);
       if (!Allowed() || browserDoor is not { } door) throw new McpRefusal("Allow this computer's sessions to use browser windows here first.");
       var tools = new[] { "browser.open", "browser.close", "browser.windows", "browser.page", "browser.read", "browser.step", "browser.batch", "browser.profiles", "browser.history", "browser.workspace.read", "browser.workspace.change" };
       var tool = Text(frame, "tool", "").Replace('_', '.');

@@ -114,7 +114,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
     InitializePhoneWorkspace();
     InitializePhoneManagementTools();
     _ = ResumeCloudAsync();
-    await Remote.StartAsync(); Changed?.Invoke();
+    await Remote.StartAtLaunchAsync(); Changed?.Invoke();
   }
   private readonly KeeperReconnectGate reconnectGate = new();
   public long KeeperGeneration => reconnectGate.Generation;
@@ -197,9 +197,10 @@ public sealed partial class AppRuntime : IAsyncDisposable
   public Task SendBrowserContextAsync(string id, string draft) =>
     SendAsync(id, TerminalDeck.Core.Browser.BrowserContext.TerminalMessage(draft));
   private bool remoteTools;
-  public bool RemoteToolsEnabled => remoteTools;
+  public bool RemoteToolsEnabled => remoteTools && CloudServicesAllowed;
   public async Task SetRemoteToolsAsync(bool enabled)
   {
+    if (enabled && !CloudServicesAllowed) throw new InvalidOperationException(TerminalDeck.Core.Remote.CloudRelayLifecycle.SubscriptionRequired);
     if (enabled) await Remote.StartAsync();
     remoteTools = enabled;
     if (!enabled)
@@ -394,6 +395,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
   public async ValueTask DisposeAsync() {
     if (Interlocked.Exchange(ref runtimeDisposed, 1) != 0) return;
     accountNotificationsReady = false;
+    if (subscriptionChanged is not null) Cloud.Changed -= subscriptionChanged;
     if (receiverSources is not null) receiverSources.Changed -= EnsureReceiverTransport;
     await DisposeServerSigninAsync();
     await Remote.DisposeAsync();

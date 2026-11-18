@@ -61,6 +61,30 @@ public sealed class CloudContentsTests
   private static CloudDeleteItem Item(string kind, string id, string name) => new(id, kind, name, null);
 
   [Fact]
+  public async Task Retained_manager_callbacks_cannot_open_or_change_any_cloud_owner_after_access_loss()
+  {
+    var allowed = true; var owner = new Owner();
+    owner.Bin.Add(new("g1", CloudDeleteBy.Person, "Fixture PC", null, null, 30, [Item("memory", "old.md", "Old")]));
+    var contents = new CloudContents(() => true, Person) { AccessAllowed = () => allowed };
+    contents.Register(new Source(CloudContentsKind.Memory, owner, ("note.md", "Note")));
+    var row = Assert.Single((await contents.ReadAsync()).Rows);
+    var bin = await contents.BinAsync();
+    allowed = false;
+    Assert.Null(await contents.OpenAsync(row));
+    Assert.Equal(0, (await contents.RemoveFromCloudAsync([row])).Done);
+    Assert.Equal(0, (await contents.RemoveEverywhereAsync([row])).Done);
+    Assert.Equal(0, (await contents.BringBackAsync([row with { State = CloudItemState.NotOnThisPc }])).Done);
+    Assert.Equal(0, (await contents.PutInCloudAgainAsync([row with { State = CloudItemState.OnlyOnThisPc }])).Done);
+    Assert.Equal(0, (await contents.PutBackAllAsync(bin)).Done);
+    Assert.Equal(0, (await contents.DeleteForGoodAsync(bin)).Done);
+    Assert.Empty(owner.Calls);
+    allowed = true;
+    Assert.NotNull(await contents.OpenAsync(row));
+    Assert.Equal(1, (await contents.RemoveEverywhereAsync([row])).Done);
+    Assert.Single(owner.Calls);
+  }
+
+  [Fact]
   public async Task Rows_MarksGiveTheStates_BinnedRowsAreGone_AMarkWithoutItsRowStaysReachable()
   {
     var owner = new Owner();
