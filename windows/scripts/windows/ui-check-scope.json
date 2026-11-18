@@ -10,7 +10,10 @@
         "CloudDeviceNamesTests",
         "SessionKeeperTests",
         "UsageMeterTests",
-        "TerminalControlsTests"
+        "TerminalControlsTests",
+        "CloudAccountTests",
+        "CloudWiringTests",
+        "CloudScreensTests"
       ]
     },
     {
