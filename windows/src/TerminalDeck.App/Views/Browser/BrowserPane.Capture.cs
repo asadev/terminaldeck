@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using TerminalDeck.Core.Browser;
@@ -123,7 +124,18 @@ public sealed partial class BrowserPane
       contextId = world.GetProperty("executionContextId").GetInt32();
       var before = Fingerprint(await Step("Runtime.evaluate", new { expression = BrowserAutomation.HidePrivate, contextId, returnByValue = true }));
       JsonElement result;
-      try { result = await Step("Page.captureScreenshot", new { format = "png", fromSurface = true, captureBeyondViewport = false }, 15); }
+      try
+      {
+        var hiddenWindow = tab.View.XamlRoot is { } pageRoot && (!pageRoot.IsHostVisible || AppWindow.GetFromWindowId(pageRoot.ContentIslandEnvironment.AppWindowId).Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized });
+        if (hiddenWindow)
+        {
+          // Request only the existing CSS viewport from Chromium's offscreen
+          // capture path. This does not resize, scroll or restore its host window.
+          var metrics = await Step("Page.getLayoutMetrics", new { }); var viewport = metrics.GetProperty("cssVisualViewport");
+          result = await Step("Page.captureScreenshot", new { format = "png", fromSurface = true, captureBeyondViewport = true, clip = new { x = viewport.GetProperty("pageX").GetDouble(), y = viewport.GetProperty("pageY").GetDouble(), width = viewport.GetProperty("clientWidth").GetDouble(), height = viewport.GetProperty("clientHeight").GetDouble(), scale = 1 } }, 15);
+        }
+        else result = await Step("Page.captureScreenshot", new { format = "png", fromSurface = true, captureBeyondViewport = false }, 15);
+      }
       catch (TimeoutException) { throw new TimeoutException("The page did not draw a picture within 15 seconds. Reload the page and try again."); }
       var after = Fingerprint(await Step("Runtime.evaluate", new { expression = BrowserAutomation.CaptureFingerprint, contextId, returnByValue = true }));
       if (before != after) throw new InvalidOperationException("A protected field or page changed during capture. No picture was saved; try after the page settles.");

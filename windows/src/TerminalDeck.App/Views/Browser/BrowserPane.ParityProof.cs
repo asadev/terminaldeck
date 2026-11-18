@@ -62,6 +62,7 @@ public sealed partial class BrowserPane
         using var stream = new InMemoryRandomAccessStream(); using (var writer = new DataWriter(stream.GetOutputStreamAt(0))) { writer.WriteBytes(bytes); await writer.StoreAsync(); } stream.Seek(0);
         var decoder = await BitmapDecoder.CreateAsync(stream); var pixels = (await decoder.GetPixelDataAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Straight, new BitmapTransform(), ExifOrientationMode.IgnoreExifOrientation, ColorManagementMode.DoNotColorManage)).DetachPixelData();
         Check(name + " is a nonblank finite image", decoder.PixelWidth > 100 && decoder.PixelHeight > 100 && pixels.Where((_, index) => index % 4 != 3).Distinct().Take(16).Count() >= 16);
+        if (name == "minimised-window") Check("minimised picture contains the newly painted red background", Enumerable.Range(0, pixels.Length / 4).Count(index => Math.Abs(pixels[index * 4] - 76) <= 2 && Math.Abs(pixels[index * 4 + 1] - 76) <= 2 && Math.Abs(pixels[index * 4 + 2] - 234) <= 2) > pixels.Length / 40);
       }
       await Capture("hidden-tab");
       Stage("background-question");
@@ -75,7 +76,7 @@ public sealed partial class BrowserPane
       Stage("minimised"); if (app.Presenter is not OverlappedPresenter presenter) throw new InvalidOperationException("The fixture needs an ordinary desktop window.");
       presenter.Minimize(); await Wait(() => presenter.State == OverlappedPresenterState.Minimized);
       await Core.PerformAsync(tab.Id, BrowserPageAction.Step, JsonSerializer.SerializeToElement(new { verb = "type", selector = "#ordinary", value = "Minimised typed text" }));
-      await tab.Model.CommandAsync("Runtime.evaluate", new { expression = "document.body.style.background='rgb(200,235,250)'; document.querySelector('h1').textContent='Updated while minimised'" });
+      await tab.Model.CommandAsync("Runtime.evaluate", new { expression = "document.body.style.background='rgb(234,76,76)'; document.documentElement.style.background='rgb(234,76,76)'; document.querySelector('h1').textContent='Updated while minimised'" });
       var minimisedState = await Core.PerformAsync(tab.Id, BrowserPageAction.Read, JsonSerializer.SerializeToElement(new { selector = "h1" }));
       Check("minimised page reads its new content", minimisedState.GetRawText().Contains("Updated while minimised", StringComparison.Ordinal));
       await Capture("minimised-window");
