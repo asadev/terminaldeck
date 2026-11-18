@@ -36,15 +36,36 @@ public sealed class FakeBrowserPage(string tabId) : IBrowserPage
   public bool BypassCache { get; private set; }
   public bool Disposed { get; private set; }
   public List<BrowserPageAction> Actions { get; } = [];
+  public Func<Task>? DuringAction { get; set; }
   public Task NavigateAsync(Uri address, CancellationToken ct = default) { Navigations++; return Task.CompletedTask; }
   public Task<JsonElement> DevToolsAsync(string method, JsonElement arguments, CancellationToken ct = default) => throw new InvalidOperationException("No general DevTools tool bridge.");
   public ValueTask ReloadAsync(bool bypassCache, CancellationToken ct) { Reloads++; BypassCache = bypassCache; return ValueTask.CompletedTask; }
-  public ValueTask<JsonElement> PerformAsync(BrowserPageAction action, JsonElement arguments, CancellationToken ct) { Actions.Add(action); return ValueTask.FromResult(JsonSerializer.SerializeToElement(new { done = true })); }
+  public async ValueTask<JsonElement> PerformAsync(BrowserPageAction action, JsonElement arguments, CancellationToken ct) { Actions.Add(action); if (DuringAction is not null) await DuringAction(); return JsonSerializer.SerializeToElement(new { done = true }); }
   public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
 }
 
 public sealed class BrowserTests
 {
+  [Fact] public async Task NativePopupKeepsAnUnnavigatedOpenerStoreAndDoesNotCloseItEarly()
+  {
+    var storage = new FakeBrowserStorage(); var factory = new FakeBrowserFactory();
+    await using var browser = new BrowserModel(new MemoryState<BrowserState>(), factory, storage);
+    var source = await browser.OpenAsync("https://example.test/source", true, sessionId: "session");
+    var popup = await browser.OpenPopupAsync(source.Id, "https://example.test/popup", nativePopup: true, select: false);
+    var made = factory.Created[1]; Assert.Equal(0, made.Page.Navigations); Assert.Equal(source.Id, made.Options.PopupSourceId);
+    Assert.Equal(factory.Created[0].Options.PrivateStoreId, made.Options.PrivateStoreId); Assert.Single(storage.PrivateStores);
+    Assert.Equal("session", popup.SessionId); Assert.Equal(source.Id, browser.Read().SelectedTabId);
+    await browser.CloseAsync(source.Id); Assert.Single(storage.PrivateStores); Assert.False(made.Page.Disposed);
+    await browser.CloseAsync(popup.Id); Assert.Empty(storage.PrivateStores);
+  }
+  [Fact] public async Task APageActionCanRequestItsPopupWithoutDeadlockingTheWorkspace()
+  {
+    var factory = new FakeBrowserFactory(); await using var browser = new BrowserModel(new MemoryState<BrowserState>(), factory, new FakeBrowserStorage());
+    var tab = await browser.OpenAsync("https://example.test/source");
+    factory.Created[0].Page.DuringAction = async () => { await browser.OpenPopupAsync(tab.Id, "https://example.test/popup", nativePopup: true); };
+    await browser.PerformAsync(tab.Id, BrowserPageAction.Step, JsonSerializer.SerializeToElement(new { })).AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+    Assert.Equal(2, browser.Read().Tabs.Length); Assert.Equal(0, factory.Created[1].Page.Navigations);
+  }
   [Fact] public async Task SelectionReorderingBindingAndProfileChangesKeepPagesAliveWithoutReload()
   {
     var factory = new FakeBrowserFactory(); await using var browser = new BrowserModel(new MemoryState<BrowserState>(), factory, new FakeBrowserStorage());

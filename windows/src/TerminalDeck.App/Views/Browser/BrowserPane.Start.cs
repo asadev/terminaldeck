@@ -1,4 +1,5 @@
-using System.Net.NetworkInformation;
+using TerminalDeck.Core.Browser;
+using TerminalDeck.Platform.Windows;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using TerminalDeck.App.Shell;
@@ -26,20 +27,26 @@ public sealed partial class BrowserPane
       scan.IsEnabled = false; ports.Children.Clear(); ports.Children.Add(new TextBlock { Text = "Looking for local servers…" });
       try
       {
-        var listeners = await Task.Run(() => IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Select(p => p.Port).Where(p => p >= 1024).Distinct().Order().ToArray());
+        var listeners = await Task.Run(WindowsBrowserPorts.Read);
         ports.Children.Clear();
         ports.Children.Add(new TextBlock { Text = listeners.Length == 0 ? "Nothing is listening on this machine. Start a dev server, then scan again — or type an address above." : "Listening on this machine right now:", TextWrapping = TextWrapping.Wrap });
-        foreach (var port in listeners)
+        var own = new StackPanel { Spacing = 4 }; var ownToggle = new Button { Content = $"{TerminalDeck.Core.Brand.Name}’s own ({listeners.Count(p => p.Ours)})", HorizontalAlignment = HorizontalAlignment.Left }; own.Visibility = Visibility.Collapsed;
+        ownToggle.Click += (_, _) => own.Visibility = own.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+        foreach (var listener in listeners)
         {
+          var port = listener.Port;
           var label = new Grid { ColumnSpacing = 12 }; label.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); label.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-          label.Children.Add(new TextBlock { Text = ":" + port.ToString(System.Globalization.CultureInfo.InvariantCulture), FontSize = 13 });
+          var description = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
+          description.Children.Add(new TextBlock { Text = ":" + port.ToString(System.Globalization.CultureInfo.InvariantCulture), FontSize = 13 });
+          description.Children.Add(new TextBlock { Text = listener.Process, FontSize = 12, Opacity = .6 }); label.Children.Add(description);
           var arrow = new DeckIcon { Glyph = "\uE8A7", FontSize = 12, Opacity = .45 }; Grid.SetColumn(arrow, 1); label.Children.Add(arrow);
           var row = TextAction($"Open localhost:{port}", async () => await RunForAsync(tab, "navigate", $"http://localhost:{port}"));
           row.Content = label; row.HorizontalAlignment = row.HorizontalContentAlignment = HorizontalAlignment.Stretch; row.MinHeight = 34; row.Height = 34; row.Padding = new(12, 6, 12, 6); row.CornerRadius = new(8);
-          row.SetResourceReference(Control.BackgroundProperty, "DeckControlBrush"); ports.Children.Add(row);
+          row.SetResourceReference(Control.BackgroundProperty, "DeckControlBrush"); (listener.Ours ? own : ports).Children.Add(row);
         }
+        if (own.Children.Count > 0) { ports.Children.Add(ownToggle); ports.Children.Add(own); }
       }
-      catch (NetworkInformationException) { ports.Children.Clear(); ports.Children.Add(new TextBlock { Text = "Local servers could not be checked. Try Scan Again.", TextWrapping = TextWrapping.Wrap }); }
+      catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception) { ports.Children.Clear(); ports.Children.Add(new TextBlock { Text = "Local servers could not be checked. Try Scan Again.", TextWrapping = TextWrapping.Wrap }); }
       finally { scan.IsEnabled = true; }
     }
     scan.Click += async (_, _) => await Scan(); content.Loaded += async (_, _) => await Scan();

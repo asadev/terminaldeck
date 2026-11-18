@@ -6,6 +6,7 @@ using TerminalDeck.Core.Browser;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 using Windows.Storage.Streams;
+using Windows.Graphics.Imaging;
 using Windows.System;
 
 namespace TerminalDeck.App.Views;
@@ -109,8 +110,8 @@ public sealed partial class BrowserPane
         throw new InvalidOperationException("The page’s privacy masks could not be checked. No picture was saved.");
       return fingerprint.GetString()!;
     }
-    // A page that is not drawn (hidden tab, minimised window) never answers
-    // Page.captureScreenshot; every step has a deadline so the call ends cleanly.
+    if (tab.PrepareBackground is not null) await tab.PrepareBackground();
+    // Every stage has a deadline; privacy masks stay on the original live page.
     Task<JsonElement> Step(string method, object arguments, int seconds = 10) => tab.Model.CommandAsync(method, arguments).WaitAsync(TimeSpan.FromSeconds(seconds));
     if (!await tab.CaptureGate.WaitAsync(TimeSpan.FromSeconds(20))) throw new TimeoutException("Another picture of this page is still being taken. Try again in a moment.");
     int? contextId = null;
@@ -122,11 +123,19 @@ public sealed partial class BrowserPane
       contextId = world.GetProperty("executionContextId").GetInt32();
       var before = Fingerprint(await Step("Runtime.evaluate", new { expression = BrowserAutomation.HidePrivate, contextId, returnByValue = true }));
       JsonElement result;
-      try { result = await Step("Page.captureScreenshot", new { format = "png", captureBeyondViewport = false }, 15); }
-      catch (TimeoutException) { throw new TimeoutException("The page did not draw a picture within 15 seconds. Its window is probably hidden or minimised."); }
+      try { result = await Step("Page.captureScreenshot", new { format = "png", fromSurface = true, captureBeyondViewport = false }, 15); }
+      catch (TimeoutException) { throw new TimeoutException("The page did not draw a picture within 15 seconds. Reload the page and try again."); }
       var after = Fingerprint(await Step("Runtime.evaluate", new { expression = BrowserAutomation.CaptureFingerprint, contextId, returnByValue = true }));
       if (before != after) throw new InvalidOperationException("A protected field or page changed during capture. No picture was saved; try after the page settles.");
-      return Convert.FromBase64String(result.GetProperty("data").GetString()!);
+      var bytes = Convert.FromBase64String(result.GetProperty("data").GetString()!);
+      using var stream = new InMemoryRandomAccessStream();
+      using (var writer = new DataWriter(stream.GetOutputStreamAt(0))) { writer.WriteBytes(bytes); await writer.StoreAsync(); } stream.Seek(0);
+      var decoder = await BitmapDecoder.CreateAsync(stream);
+      if (decoder.PixelWidth == 0 || decoder.PixelHeight == 0) throw new InvalidOperationException("The browser did not draw a picture. Reload this page and try again.");
+      var sample = (await decoder.GetPixelDataAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Straight, new BitmapTransform { ScaledWidth = Math.Min(96u, decoder.PixelWidth), ScaledHeight = Math.Min(96u, decoder.PixelHeight) }, ExifOrientationMode.IgnoreExifOrientation, ColorManagementMode.DoNotColorManage)).DetachPixelData();
+      if (sample.Length == 0 || !Enumerable.Range(0, sample.Length / 4).Any(i => Math.Abs(sample[i * 4] - sample[0]) > 8 || Math.Abs(sample[i * 4 + 1] - sample[1]) > 8 || Math.Abs(sample[i * 4 + 2] - sample[2]) > 8))
+        throw new InvalidOperationException("The page has not drawn any visible content yet. No blank picture was returned. Wait for the page to load and try again.");
+      return bytes;
     }
     finally
     {

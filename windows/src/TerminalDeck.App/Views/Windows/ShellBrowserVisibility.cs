@@ -17,6 +17,7 @@ public sealed partial class ShellWindow
       // background retained browser must not disappear when another is selected.
       foreach (var surface in new[] { mainSurface }.Concat(detached.Values.Select(child => child.Surface)))
         foreach (var view in ProofTree(surface).OfType<WebView2>()) view.Visibility = Visibility.Visible;
+      browser.RefreshBackgroundPages();
     });
   }
   private async Task SelectBrowserForShellAsync(string id)

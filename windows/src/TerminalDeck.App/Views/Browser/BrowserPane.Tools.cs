@@ -10,6 +10,8 @@ public sealed partial class BrowserPane
     var command = args.GetProperty("command").GetString();
     return command switch
     {
+      "pageRequests" => JsonSerializer.SerializeToElement(new { message = tab.PageRequestNote, status = tab.Status, background = tab.ParkedForTools == true, canReview = PersonCanAnswer(tab), questions = pageQuestions.TryGetValue(tab.Id, out var questions) ? questions.Select(q => new { q.Id, q.Message }).ToArray() : [] }),
+      "localPorts" => JsonSerializer.SerializeToElement(TerminalDeck.Platform.Windows.WindowsBrowserPorts.Read()),
       "downloads" => JsonSerializer.SerializeToElement(downloads.Where(d => d.TabId == tab.Id).Select(d => new { d.Id, d.Url, d.Path, d.State, bytes = d.Operation.BytesReceived, total = d.Operation.TotalBytesToReceive })),
       "annotations" => JsonSerializer.SerializeToElement(new { on = tab.Inspecting, markers = tab.Annotations, instruction = tab.AnnotationDraft, untrusted = true }),
       "drawing" => JsonSerializer.SerializeToElement(new { marks = tab.Drawing.Marks, path = tab.CapturePath }),
@@ -20,8 +22,11 @@ public sealed partial class BrowserPane
   private async Task<JsonElement> ChangeWorkspaceAsync(BrowserTab tab, JsonElement args)
   {
     string Text(string key) => args.TryGetProperty(key, out var value) ? value.GetString() ?? "" : "";
+    if (Text("command") is "draw" or "shot" or "annotationSend" && !PersonCanAnswer(tab)) throw new InvalidOperationException("Open this browser tab to review that picture or message, then try the action again.");
     switch (Text("command"))
     {
+      case "questionReview": if (!PersonCanAnswer(tab)) throw new InvalidOperationException("The person must open this browser tab before its question can be reviewed."); ReviewPageQuestion(tab); break;
+      case "questionCancel": CancelPageQuestion(tab); break;
       case "downloadStop": downloads.Single(d => d.Id == Text("id") && d.TabId == tab.Id).Operation.Cancel(); break;
       case "downloadClear": downloads.RemoveAll(d => d.TabId == tab.Id && d.Operation.State != CoreWebView2DownloadState.InProgress); break;
       case "annotationDelete":
