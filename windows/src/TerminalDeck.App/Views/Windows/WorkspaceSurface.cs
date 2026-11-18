@@ -381,6 +381,9 @@ internal sealed partial class WorkspaceSurface : Grid
         TabInk(); CloseButton();
         if (chip.ActualWidth > 0) Fit();
       };
+      // A tab that is not selected gets its quiet rest fill from the start, not
+      // only after the next selection change (its title fade already uses it).
+      chipStyles[tab.Id]();
       var menu = new MenuFlyout();
       // Rebuilt as it opens: the split items depend on the current owner's
       // layout, which a tab switch changes without rebuilding this chip.
