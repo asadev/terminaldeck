@@ -11,7 +11,7 @@ public sealed partial class RemoteService
   private readonly object hostSecretGate = new();
   public PhonePushRelay? PushRelay()
   {
-    lock (hostSecretGate) return hostSecret is null ? null : new(PairingCode.HostId(hostSecret), (byte[])hostSecret.Clone(), new Uri("https://relay.terminaldeck.dev/"));
+    lock (hostSecretGate) return !CloudRelayAllowed || hostSecret is null ? null : new(PairingCode.HostId(hostSecret), (byte[])hostSecret.Clone(), new Uri("https://relay.terminaldeck.dev/"));
   }
   private void SetHostSecret(byte[] value)
   {
@@ -25,16 +25,24 @@ public sealed partial class RemoteService
   public async Task StartAsync()
   {
     await lifecycleGate.WaitAsync(stop.Token);
-    try { if (relay is not null && !phonesEnabled) await EndHostEpochAsync(CancellationToken.None); await StartHostCoreAsync(); }
-    catch { await EndHostEpochAsync(CancellationToken.None); throw; }
+    try { cloudLifecycle.RequestPhones(true); if (relay is not null && !phonesEnabled) await EndHostEpochAsync(CancellationToken.None); await StartHostCoreAsync(); }
+    catch { await EndHostEpochAsync(CancellationToken.None, preserveLocal: !CloudRelayAllowed); throw; }
     finally { lifecycleGate.Release(); }
   }
-  private async ValueTask EndHostEpochAsync(CancellationToken ct)
+  private async ValueTask EndHostEpochAsync(CancellationToken ct, bool preserveLocal = false)
   {
     Trust.Changed -= OnTrustChangedForLinks;
+    if (preserveLocal)
+    {
+      // Relay-originated direct links must end too; an ordinary socket reset
+      // deliberately leaves them alive. This does not touch local/SSH owners.
+      relay?.RefreshLinkDevices([], Trust.List().Select(device => device.Id).ToArray());
+      Trust.Pairing.Cancel(); webLaunch.Cancel();
+    }
     pairingStop?.Cancel(); relayRun?.Cancel();
-    if (localWeb is not null) { await localWeb.DisposeAsync(); localWeb = null; }
-    transportHub = null;
+    var keepLocal = preserveLocal && localWeb is not null;
+    if (!keepLocal && localWeb is not null) { await localWeb.DisposeAsync(); localWeb = null; }
+    if (!keepLocal) transportHub = null;
     try { await Task.WhenAll(tasks.ToArray()).WaitAsync(TimeSpan.FromSeconds(5), ct); }
     catch (Exception e) when (e is OperationCanceledException or TimeoutException or IOException or System.Net.WebSockets.WebSocketException) { }
     // Security S1 (#27): device access off for the whole app, or the app closing: withdraw every phone's TURN login now,
@@ -43,11 +51,12 @@ public sealed partial class RemoteService
       try { await relay.WithdrawLoginsAsync(TimeSpan.FromSeconds(5)); }
       catch (Exception e) when (e is not OutOfMemoryException) { System.Diagnostics.Trace.WriteLine("TURN logins not withdrawn at stop: " + e.GetType().Name); }
     relay?.Dispose(); relay = null;
-    (application as IDisposable)?.Dispose(); application = null;
+    if (keepLocal) transportHub?.SetPublisher(null);
+    else { (application as IDisposable)?.Dispose(); application = null; }
     identity?.Dispose(); identity = null;
     relayRun?.Dispose(); relayRun = null; pairingStop?.Dispose(); pairingStop = null;
     lock (hostSecretGate) { if (hostSecret is not null) CryptographicOperations.ZeroMemory(hostSecret); hostSecret = null; }
-    tasks.Clear(); relayStarted = null; phonesEnabled = false;
+    tasks.Clear(); relayStarted = null; if (!keepLocal) phonesEnabled = false;
     State = RelayConnectionState.Stopped; Changed?.Invoke();
   }
   public async ValueTask<string> ControlHostAsync(bool restart, CancellationToken ct)
@@ -55,13 +64,15 @@ public sealed partial class RemoteService
     await lifecycleGate.WaitAsync(ct);
     try
     {
+      if (restart) cloudLifecycle.RequireAllowed();
+      cloudLifecycle.RequestPhones(restart);
       await EndHostEpochAsync(ct);
       if (restart)
       {
         try { await StartHostCoreAsync(); }
-        catch { await EndHostEpochAsync(CancellationToken.None); throw; }
+        catch { await EndHostEpochAsync(CancellationToken.None, preserveLocal: !CloudRelayAllowed); throw; }
       }
-      else if (ReceiverTransportRequired?.Invoke() == true) await StartHostCoreAsync(enablePhones: false);
+      else if (CloudRelayAllowed && ReceiverTransportRequired?.Invoke() == true) await StartHostCoreAsync(enablePhones: false);
       return restart ? "Phone host restarted. Reconnect this device." : "Phone host stopped. Sessions are still running on this computer.";
     }
     finally { lifecycleGate.Release(); }
@@ -69,8 +80,8 @@ public sealed partial class RemoteService
   public async Task EnsureReceiverTransportAsync()
   {
     await lifecycleGate.WaitAsync(stop.Token);
-    try { if (relay is null && ReceiverTransportRequired?.Invoke() == true) await StartHostCoreAsync(enablePhones: false); }
-    catch { await EndHostEpochAsync(CancellationToken.None); throw; }
+    try { if (!CloudRelayAllowed) { if (relay is not null) await EndCloudRelayAsync(); return; } if (relay is null && ReceiverTransportRequired?.Invoke() == true) await StartHostCoreAsync(enablePhones: false); }
+    catch { await EndHostEpochAsync(CancellationToken.None, preserveLocal: !CloudRelayAllowed); throw; }
     finally { lifecycleGate.Release(); }
   }
   private sealed class ReceiverOnlyPhoneApplication : IRelayPhoneApplication
@@ -80,6 +91,6 @@ public sealed partial class RemoteService
     public ValueTask<PhoneApplicationReply> ReceiveAsync(string channel, ReadOnlyMemory<byte> peer, ReadOnlyMemory<byte> bytes, CancellationToken ct) => throw new ProtocolException("The phone host is stopped on this computer.");
     public ValueTask DisconnectedAsync(string channel) => ValueTask.CompletedTask;
   }
-  public object HostFacts() => new { running = phonesEnabled && relay is not null, version = AppVersion, address = McpAddress,
+  public object HostFacts() => new { running = CloudRelayAllowed && phonesEnabled && relay is not null, version = AppVersion, address = McpAddress,
     pid = Environment.ProcessId, startedAt = relayStarted?.ToUnixTimeMilliseconds(), uptimeSeconds = relayStarted is { } start ? (DateTimeOffset.UtcNow - start).TotalSeconds : (double?)null, managed = false };
 }
