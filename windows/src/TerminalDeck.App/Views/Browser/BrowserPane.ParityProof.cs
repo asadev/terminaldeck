@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Runtime.CompilerServices;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -20,7 +21,7 @@ public sealed partial class BrowserPane
   }
   // Explicit one-run fixture for the release runner. It only changes a marked
   // scratch data root and writes the exact captures used to judge the pixels.
-  private async Task RunBrowserParityProofIfRequestedAsync()
+  internal async Task RunBrowserParityProofIfRequestedAsync()
   {
     if (Environment.GetEnvironmentVariable("TD_BROWSER_PARITY_PROOF") != "1") return;
     if (!File.Exists(Path.Combine(root.DirectoryPath, ".browser-parity-proof"))) throw new IOException("Browser parity proof requires a marked scratch data folder.");
@@ -28,10 +29,10 @@ public sealed partial class BrowserPane
     var checks = new List<object>(); var errors = new List<string>();
     void Check(string name, bool passed) => checks.Add(new { name, passed });
     void Stage(string name) => File.WriteAllText(Path.Combine(output, "stage.txt"), name);
-    async Task Wait(Func<bool> condition)
+    async Task Wait(Func<bool> condition, [CallerArgumentExpression(nameof(condition))] string waitingFor = "")
     {
       var end = DateTimeOffset.UtcNow.AddSeconds(15);
-      while (!condition()) { if (DateTimeOffset.UtcNow >= end) throw new TimeoutException("Browser parity fixture did not settle."); await Task.Delay(50); }
+      while (!condition()) { if (DateTimeOffset.UtcNow >= end) throw new TimeoutException("Browser parity fixture did not settle: " + waitingFor); await Task.Delay(50); }
     }
     try
     {
@@ -39,8 +40,8 @@ public sealed partial class BrowserPane
       var app = AppWindow.GetFromWindowId(XamlRoot.ContentIslandEnvironment.AppWindowId);
       await using var fixture = new BrowserProofServer();
       Stage("open"); var page = await Core.OpenAsync(fixture.Url); var tab = tabs.Single(t => t.Id == page.Id);
-      ObserveShellPages(); ShellSelected?.Invoke(tab.Id); await Wait(() => pageSlots.ContainsKey(tab.Id));
-      await Wait(() => IsDrawn(pageSlots[tab.Id]));
+      ObserveShellPages(); ShellSelected?.Invoke(tab.Id); Stage("open-shell-slot"); await Wait(() => pageSlots.ContainsKey(tab.Id));
+      Stage("open-drawn"); await Wait(() => IsDrawn(pageSlots[tab.Id]));
       var web = tab.View.CoreWebView2;
       await tab.Model.CommandAsync("Runtime.evaluate", new { expression = "window.__tdProofIdentity='kept'; document.getElementById('target').onclick=()=>document.body.dataset.clicked='yes'" });
       Stage("bookmarks"); var bookmark = await Core.AddBookmarkAsync(tab.Profile.Id, fixture.Url, "Fixture bookmark");
