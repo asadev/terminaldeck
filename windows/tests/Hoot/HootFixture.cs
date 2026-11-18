@@ -26,11 +26,12 @@ internal sealed class Processes : IChatProcessKeeper
   private readonly ConcurrentDictionary<string, long> sequence = new();
   private readonly ConcurrentDictionary<string, bool> live = new();
   private readonly ConcurrentDictionary<string, string> leaseIds = new();
+  private readonly ConcurrentDictionary<string, string> activeLeases = new();
   public readonly ConcurrentQueue<(ChatRecord Chat, ChatMessage Message)> Sent = new();
   public bool LoseReceipt { get; set; }
   public ValueTask<ProcessObservation> ObserveAsync(SessionRecord session, CancellationToken ct) => ValueTask.FromResult(new ProcessObservation(live.GetValueOrDefault(session.Definition.Id) ? ProcessPresence.Live : ProcessPresence.Dead, session.Definition.Id));
   public ValueTask<ProcessObservation> EnsureAsync(SessionRecord session, bool resume, CancellationToken ct)
-  { live[session.Definition.Id] = true; leaseIds[session.CreationKey] = session.Definition.Id; return ObserveAsync(session, ct); }
+  { live[session.Definition.Id] = true; leaseIds[session.CreationKey] = session.Definition.Id; activeLeases[session.Definition.Id] = session.CreationKey; return ObserveAsync(session, ct); }
   public ValueTask<ChatDelivery> SendAsync(ChatRecord chat, ChatMessage message, CancellationToken ct)
   {
     Sent.Enqueue((chat, message));
@@ -39,18 +40,26 @@ internal sealed class Processes : IChatProcessKeeper
   }
   public void Emit(string chatId, string clientId, string kind, string text = "", string id = "answer")
   {
-    var n = sequence.AddOrUpdate(chatId, 1, (_, prior) => prior + 1);
-    channels.GetOrAdd(chatId, _ => Channel.CreateUnbounded<ChatSignal>()).Writer.TryWrite(new(n, kind, id, text, clientId));
+    var lease = activeLeases[chatId];
+    var n = sequence.AddOrUpdate(lease, 1, (_, prior) => prior + 1);
+    channels.GetOrAdd(lease, _ => Channel.CreateUnbounded<ChatSignal>()).Writer.TryWrite(new(n, kind, id, text, clientId));
   }
   public ValueTask InterruptAsync(ChatRecord chat, CancellationToken ct)
   { Emit(chat.Definition.Id, chat.ActiveClientId!, "complete"); return ValueTask.CompletedTask; }
   public ValueTask AnswerAsync(ChatRecord chat, string requestId, bool allow, System.Text.Json.JsonElement input, CancellationToken ct)
   { Emit(chat.Definition.Id, chat.ActiveClientId!, "approvalResolved", allow ? "Allowed" : "Refused", requestId); return ValueTask.CompletedTask; }
   public async IAsyncEnumerable<ChatSignal> WatchAsync(ChatRecord chat, long after, [EnumeratorCancellation] CancellationToken ct)
-  { await foreach (var signal in channels.GetOrAdd(chat.Definition.Id, _ => Channel.CreateUnbounded<ChatSignal>()).Reader.ReadAllAsync(ct)) yield return signal; }
+  { await foreach (var signal in channels.GetOrAdd(chat.CreationKey, _ => Channel.CreateUnbounded<ChatSignal>()).Reader.ReadAllAsync(ct)) yield return signal; }
   public ValueTask WriteAsync(string lease, ReadOnlyMemory<byte> bytes, CancellationToken ct) => ValueTask.CompletedTask;
   public ValueTask ResizeAsync(string lease, TerminalSize size, CancellationToken ct) => ValueTask.CompletedTask;
-  public ValueTask QuitAsync(string lease, CancellationToken ct) { if (leaseIds.TryGetValue(lease, out var id)) live[id] = false; return ValueTask.CompletedTask; }
+  public ValueTask QuitAsync(string lease, CancellationToken ct)
+  {
+    if (leaseIds.TryGetValue(lease, out var id) && activeLeases.GetValueOrDefault(id) == lease) live[id] = false;
+    // A retired worker cannot consume its replacement's events. Real workers
+    // have a stream per creation key, even when the stable chat id stays put.
+    channels.GetOrAdd(lease, _ => Channel.CreateUnbounded<ChatSignal>()).Writer.TryComplete();
+    return ValueTask.CompletedTask;
+  }
 }
 internal sealed class Handoff : IHootSessionHandoff
 {

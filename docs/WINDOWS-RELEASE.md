@@ -22,15 +22,50 @@ version is newer, so an old-style combined release still reaches Windows too.
 2. **Run the workflow**: Actions > **Windows release** > **Run workflow**.
    - Branch: `main`.
    - mode: `release`.
+   - checks: `all` for the normal release gate (default), or `accounts` for an explicitly scoped account release.
    - version: leave empty for the next number (for example 0.21.2.0 becomes 0.21.3.0), or type four numbers
      yourself (it must be higher than what installed apps have; the workflow refuses anything else).
    - notes: one or two lines about what changed. People see them on the release page and in the app.
-3. **Wait** (about 30-60 minutes). The run builds every project, runs every test project, builds the phone-link
-   engine, packages and signs the MSIX, then publishes. Any failure stops it before anything is published; the
+3. **Wait** (about 30-60 minutes). With `checks=all`, the run builds every project and runs every test project. With
+   `checks=accounts`, it builds the shipped app and runs the focused checks below. Both build the phone-link
+   engine, package and sign the MSIX, then publish. Any failure stops it before anything is published; the
    test results are attached to the run as `windows-check`.
 4. **Check the release**: Releases > `Terminal Deck for Windows <version>`. It has the `.msix`, the `.cer`,
    `SHA256SUMS-windows.txt` and `windows-update.json` (+ `.sig`). The run's last step prints
    "Live: installed apps are now offered <version>" and the "latest" release, which must still be a Mac `v...` tag.
+
+## Focused account release gate
+
+`checks=accounts` calls `windows/scripts/windows/check-accounts.ps1`. It builds the shipped App (keeper and
+helpers come through project references) and the five selected test projects, then invokes each test project
+**once**, with an explicit filter:
+
+| Project | Selected coverage |
+|---|---|
+| `tests/TerminalDeck.Core.Tests` | Accounts, usage, account integration, launch defaults/settings and selected chat account/recovery/permission owners |
+| `tests/Hoot` | Hoot choices, permissions, recovery selection and ready defaults |
+| `tests/TerminalDeck.Chat.ViewModel.Tests` | Chat view-model controls and idle-send state |
+| `src/TerminalDeck.Platform.Windows/Tests` | API launch refusal, account pipe switching and pure model-catalogue/capacity rules |
+| `src/TerminalDeck.App/Views/Windows/Tests` | Saved account names and session/header label rules |
+
+This gate does not invoke the whole suite, RealPc or Unix groups, global vectors, app UI proof programs or
+installed-provider sign-in tests. Platform fixtures that require a hardcoded development directory are excluded.
+The exact filters, timestamps, source commit, build results, counts and TRX paths are recorded in
+`windows/.artifacts/windows-check/accounts/<run>/receipt.json`, with `summary.txt`, build/test logs and one TRX
+per selected project. Zero selected tests is a failure. Existing PC evidence and this CI gate are separate receipts;
+the workflow does not claim to have run on the person's PC.
+
+On an authorized Windows PC, run the same focused script once:
+
+```powershell
+pwsh -NoProfile -File windows/scripts/windows/check-accounts.ps1 -Configuration Release -Platform x64 -ScratchRoot C:\TD-test
+```
+
+The default scratch base is `RUNNER_TEMP\TD-test` in CI, otherwise the user's temporary directory plus `TD-test`.
+Every invocation gets a fresh child directory. It never installs or starts the app. There is no hardcoded working
+app or user-data path. Do not rerun the gate merely to increase counts; retain the first receipt and investigate a
+failed result before selecting another run. Choosing `accounts` does not change signing, packaging, channel
+publication, point-back or the Mac/latest protections. `checks=all` remains the default for ordinary releases.
 
 Want to try first without publishing? Run with mode `dry-run` (any branch). It builds, tests and packages an
 unsigned MSIX you can download from the run for two days. Nothing is published.

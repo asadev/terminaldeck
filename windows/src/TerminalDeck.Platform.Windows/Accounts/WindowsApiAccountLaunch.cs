@@ -13,17 +13,28 @@ public static class WindowsApiAccountLaunch
   {
     if (provider is not ("claude" or "codex" or "gemini") || homeId == AccountHomes.ExistingLogin) return (environment, []);
     var connection = ApiAccountFiles.Read(root, homeId);
-    if (connection is null) return (environment, []);
+    if (connection is null)
+    {
+      if (new JsonStateStore<AccountState>(root, "accounts").Load()?.Accounts.Any(a => a.HomeId == homeId && a.Authentication == AccountAuthentication.ApiKey) == true)
+        throw new ApiAccountUnavailableException("This API account has no saved connection. Edit API key to set it up again.");
+      return (environment, []);
+    }
+    if (!ApiAccountService.CanUse(connection)) throw new ApiAccountUnavailableException();
     string? key = null;
     if (connection.RequiresKey)
     {
-      var bytes = connection.CredentialReference is null ? null
-        : new AccountCredentials(new WindowsCredentialStore(root), root).ReadAsync(connection.CredentialReference).AsTask().GetAwaiter().GetResult();
+      byte[]? bytes;
+      try
+      {
+        bytes = connection.CredentialReference is null ? null
+          : new AccountCredentials(new WindowsCredentialStore(root), root).ReadAsync(connection.CredentialReference).AsTask().GetAwaiter().GetResult();
+      }
+      catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
+      { throw new ApiAccountUnavailableException("Windows could not open this account’s saved API key. Edit API key to replace it, then check it again."); }
       key = bytes is null ? null : Encoding.UTF8.GetString(bytes);
     }
-    // A missing key starts the AI without one, so its own "not signed in" reply shows
-    // and the account card says Needs key; a status probe never fails on it.
-    if (connection.RequiresKey && key is null) return (environment, []);
+    // Never fall through to a subscription login when this account's key is absent.
+    if (connection.RequiresKey && key is null) throw new ApiAccountUnavailableException();
     var (variables, arguments) = ApiAccountEnvironment.Build(provider, connection, key);
     var result = new Dictionary<string, string>(environment, StringComparer.OrdinalIgnoreCase);
     foreach (var (name, value) in variables) result[name] = value;

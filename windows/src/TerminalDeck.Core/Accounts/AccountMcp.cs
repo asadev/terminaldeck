@@ -23,7 +23,7 @@ public static class AccountMcp
       ",\"kind\":{\"type\":\"string\",\"enum\":[\"anthropic\",\"anthropic-token\",\"openai\",\"compatible\",\"compatible-local\",\"gemini\"]},\"baseUrl\":" + S + ",\"workspaceId\":" + S + ",\"model\":" + S + ",\"key\":" + S,
       "\"action\""),
     Spec("accounts.color", McpTier.Alter, "\"accountId\":" + S + ",\"color\":{\"type\":\"string\",\"enum\":[\"blue\",\"green\",\"amber\",\"orange\",\"red\",\"purple\",\"teal\",\"pink\"]}", "\"accountId\",\"color\""),
-    Spec("settings.launch_models", McpTier.Alter, "\"action\":{\"type\":\"string\",\"enum\":[\"read\",\"set\"]},\"agent\":" + Provider + ",\"model\":" + S + ",\"effort\":{\"type\":\"string\",\"enum\":[\"low\",\"medium\",\"high\",\"xhigh\",\"max\"]}", "\"action\""),
+    Spec("settings.launch_models", McpTier.Alter, "\"action\":{\"type\":\"string\",\"enum\":[\"read\",\"set\"]},\"agent\":" + Provider + ",\"model\":" + S + ",\"effort\":{\"type\":\"string\",\"enum\":[\"low\",\"medium\",\"high\",\"xhigh\",\"max\"]},\"permissionMode\":{\"type\":[\"string\",\"null\"],\"enum\":[\"Ask\",\"Plan\",\"Auto\",\"AcceptEdits\",\"Bypass\",null]}", "\"action\""),
     Spec("sessions.new_choices", McpTier.Read, "\"agent\":" + Provider + ",\"accountId\":" + S + ",\"projectId\":" + S + ",\"query\":" + S),
   ];
   public static McpTier Tier(McpToolSpec spec, JsonElement arguments)
@@ -79,9 +79,13 @@ public static class AccountMcp
       if (T(a, "action") == "set")
       {
         var provider = T(a, "agent") ?? throw new McpRefusal("Choose claude, codex or gemini.");
-        var saved = LaunchDefaults.For(provider, general.Read());
         await c.EnsureCurrentAsync(ct);
-        general.Save(LaunchDefaults.With(general.Read(), provider, T(a, "model") ?? saved.Model, T(a, "effort") ?? saved.Effort));
+        var next = general.Read();
+        var saved = LaunchDefaults.For(provider, next);
+        if (a.TryGetProperty("model", out _) || a.TryGetProperty("effort", out _))
+          next = LaunchDefaults.With(next, provider, T(a, "model") ?? saved.Model, T(a, "effort") ?? saved.Effort);
+        if (a.TryGetProperty("permissionMode", out var permission)) next = LaunchPermissions.With(next, provider, LaunchPermissions.Parse(permission));
+        general.Save(next);
       }
       return LaunchView(general.Read());
     });
@@ -124,6 +128,6 @@ public static class AccountMcp
   private static JsonElement LaunchView(GeneralPreferences preferences) => JsonSerializer.SerializeToElement(new[] { "claude", "codex", "gemini" }.Select(p =>
   {
     var (model, effort) = LaunchDefaults.For(p, preferences);
-    return new { agent = p, model, effort, label = ModelCatalog.Label(p, model, effort) };
+    return new { agent = p, model, effort, label = ModelCatalog.Label(p, model, effort), permissionMode = LaunchPermissions.For(p, preferences).ToString(), permissionInherited = preferences.LaunchPermissions?.Any(row => row.Provider == p) != true };
   }));
 }

@@ -33,6 +33,8 @@ public sealed partial class HootPage : Grid, IDisposable
   private readonly Button resume;
   private readonly ProgressBar pending = new() { IsIndeterminate = true, Height = 3, Visibility = Visibility.Collapsed };
   private readonly Button modelChip = new() { MinHeight = 28, MaxWidth = 220 };
+  private readonly Button effortChip = new() { MinHeight = 28, MaxWidth = 120 };
+  private readonly Button permissionChip = new() { MinHeight = 28, MaxWidth = 180 };
   private readonly Button accountChip = new() { MinHeight = 28, MaxWidth = 180 };
   private readonly StackPanel dock = new() { Spacing = 8, MaxWidth = 720, HorizontalAlignment = HorizontalAlignment.Stretch };
   private readonly StackPanel sections = new() { Orientation = Orientation.Horizontal, Spacing = 4 };
@@ -55,6 +57,9 @@ public sealed partial class HootPage : Grid, IDisposable
   public IChatSessions? Chats { get; init; }
   public Func<string, ChatMcpNavigation>? McpNavigation { get; init; }
   public string? DataDirectory { get; init; }
+  public Func<Task>? AddAccount { get; init; }
+  public Func<string, Task>? EditApiAccount { get; init; }
+  public void RefreshAccountLabels() => Controls();
   // WhatsApp agents (15 Nov): the shell supplies the "WhatsApp" submenu (for Hoot's menu) and the heading chip with its
   // switch (shown only while a WhatsApp agent is attached to Hoot). Hooks, so the Hoot proof builds without them.
   public static Func<MenuFlyout, MenuFlyoutItemBase?>? WhatsAppSubmenu { get; set; }
@@ -135,15 +140,25 @@ public sealed partial class HootPage : Grid, IDisposable
     dock.Children.Add(glass);
     var chips = new Grid { ColumnSpacing = 8 };
     chips.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); chips.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-    foreach (var chip in new[] { modelChip, accountChip })
+    foreach (var chip in new[] { modelChip, accountChip, effortChip, permissionChip })
     {
       chip.Style = (Style)Application.Current.Resources["DeckNavigationButtonStyle"]; chip.MinHeight = 28; chip.Padding = new Thickness(6, 4, 6, 4); chip.FontSize = 12;
-      chip.Click += async (_, _) => await ShowSettingsAsync();
     }
+    AutomationProperties.SetAutomationId(accountChip, "hoot.account");
+    AutomationProperties.SetAutomationId(modelChip, "hoot.model");
+    AutomationProperties.SetAutomationId(effortChip, "hoot.effort");
+    AutomationProperties.SetAutomationId(permissionChip, "hoot.permission");
+    modelChip.Click += async (_, _) => await ShowModelChoicesAsync();
+    accountChip.Click += async (_, _) => await ShowAccountChoicesAsync();
+    effortChip.Click += async (_, _) => await ShowEffortChoicesAsync();
+    permissionChip.Click += (_, _) => ShowPermissionChoices();
     // The account chip, then (only while a WhatsApp agent is attached to Hoot) the WhatsApp chip and its switch.
     var accountLine = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
     accountLine.Children.Add(accountChip); if (WhatsAppChip?.Invoke() is { } whatsAppChip) accountLine.Children.Add(whatsAppChip);
-    chips.Children.Add(accountLine); SetColumn(modelChip, 1); chips.Children.Add(modelChip); dock.Children.Add(chips);
+    chips.Children.Add(accountLine); var optionLine = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+    optionLine.Children.Add(modelChip); optionLine.Children.Add(effortChip); optionLine.Children.Add(permissionChip);
+    dock.Children.Add(chips); dock.Children.Add(optionLine);
+    dock.SizeChanged += (_, _) => optionLine.Orientation = dock.ActualWidth < 480 ? Orientation.Vertical : Orientation.Horizontal;
     SetRow(dock, 3); Children.Add(dock);
     composer.PreviewKeyDown += async (_, e) => // before the multi-line TextBox adds a new line
     {
@@ -168,7 +183,7 @@ public sealed partial class HootPage : Grid, IDisposable
     Render(); Controls();
     // Hoot is set up without a setup screen: whenever the page shows with Hoot
     // unconfigured and an AI signed in (here, in Settings or a chat), connect it.
-    Loaded += async (_, _) => await ReadyIfSignedInAsync();
+    Loaded += async (_, _) => { await ReadyIfSignedInAsync(); Controls(); };
   }
   private bool AnySignedIn() => accounts().Any(a => a.SignedIn);
   private async Task ReadyIfSignedInAsync()
@@ -207,7 +222,14 @@ public sealed partial class HootPage : Grid, IDisposable
     var wide = TerminalDeck.App.Views.Agents.NewSessionPicker.Services?.Launch(hootProvider) ?? TerminalDeck.Core.Settings.LaunchDefaults.For(hootProvider, (TerminalDeck.Core.Settings.GeneralPreferences?)null);
     modelChip.Content = TerminalDeck.Core.Accounts.ModelCatalog.Label(hootProvider,
       state.Settings?.Options.Model is { Length: > 0 } chosen ? chosen : wide.Model,
-      state.Settings?.Options.Effort is { Length: > 0 } e && e != "auto" ? e : wide.Effort);
+      null);
+    var selectedEffort = state.Settings?.Options.Effort;
+    if (string.IsNullOrEmpty(selectedEffort)) selectedEffort = Chats?.List().FirstOrDefault(c => c.Definition.Id == state.ChatId)?.Definition.Options.Effort;
+    if (state.Settings is null) selectedEffort = wide.Effort;
+    effortChip.Content = string.IsNullOrEmpty(selectedEffort) ? "Not known yet" : selectedEffort == "auto" ? "Automatic" : ModelCatalog.EffortName(selectedEffort);
+    effortChip.Visibility = hootProvider == "gemini" ? Visibility.Collapsed : Visibility.Visible;
+    permissionChip.Content = ChatPermissionModes.Label(state.Settings?.PermissionMode ?? AiPermissionMode.Ask);
+    foreach (var chip in new[] { accountChip, modelChip, effortChip, permissionChip }) chip.IsEnabled = !Model.Pending && !state.Busy && state.Waiting == 0;
     accountChip.Content = accounts().FirstOrDefault(a => a.Id == state.Settings?.AccountId)?.Name ?? "Choose Coding AI";
     dock.Visibility = selectedSection == "Chat" ? Visibility.Visible : Visibility.Collapsed;
     foreach (var tab in sections.Children.OfType<Button>())

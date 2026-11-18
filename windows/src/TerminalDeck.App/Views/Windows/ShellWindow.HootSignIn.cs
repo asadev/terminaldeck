@@ -8,7 +8,7 @@ namespace TerminalDeck.App.Views
     {
       var account = Runtime.Accounts.Preferred(provider) ?? Runtime.Accounts.List(provider).FirstOrDefault()
         ?? throw new InvalidOperationException("Add an account in Coding AIs first.");
-      await Runtime.Accounts.SignInAsync(account.Id, Runtime.Root.DirectoryPath);
+      await RenewCodingAccountAsync(account.Id, Runtime.Root.DirectoryPath);
     }
   }
 }

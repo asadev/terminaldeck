@@ -36,6 +36,11 @@ public sealed class SignInRequiredException(AccountProfile account) : InvalidOpe
   public string AccountId => account.Id;
 }
 
+public sealed class ApiAccountUnavailableException(string message = "This API key is missing or was refused. Edit API key to replace it, then check it again.") : InvalidOperationException(message)
+{
+  public string ActionLabel => "Edit API key";
+}
+
 public sealed record ProviderInstallation(bool? Installed, string? Version, DateTimeOffset CheckedAt, string Note);
 public interface IAccountInstallation
 {

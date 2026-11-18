@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Automation;
 using TerminalDeck.Core.Accounts;
 using TerminalDeck.Core.Settings;
 
@@ -106,8 +107,11 @@ public sealed partial class SettingsPane
   {
     var api = account.Authentication == AccountAuthentication.ApiKey;
     var connection = api ? runtime.ApiAccounts.Read(account.Id) : null;
-    var ready = api ? connection is { Configured: true } && connection.CheckState is not ("invalid" or "no-access" or "needs-key") : account.SignedIn;
-    var state = api ? ApiAccountService.Status(connection) : account.SignedIn ? "Signed in" : "Needs sign-in";
+    var ready = api ? ApiAccountService.CanUse(connection) : account.SignedIn;
+    var state = api ? connection?.CheckState switch
+    {
+      "valid" => "Valid key", "invalid" => "Invalid key", "no-access" => "No access", "needs-key" => "Needs key", "unreadable" => "Windows could not open the key", "unavailable" => "Couldn’t check key", _ => connection?.Configured == true ? "Key not checked" : "Needs key"
+    } : account.SignedIn ? "Signed in" : "Needs sign-in";
     var plan = api ? "API key" : string.IsNullOrWhiteSpace(account.Plan) ? null : PlanName(account.Plan);
     var info = new List<string>();
     if (!api && account.Email is not null) info.Add(account.Email);
@@ -119,7 +123,8 @@ public sealed partial class SettingsPane
     void Item(string text, Func<Task> click, bool enabled = true)
     {
       var item = new MenuFlyoutItem { Text = text, IsEnabled = enabled };
-      item.Click += async (_, _) => { try { await click(); } catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException) { model.Notice = ex.Message; } };
+      item.Click += async (_, _) => { try { await click(); } catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException) { model.Notice = api ? "Couldn’t finish this API account action. Open Edit key and try again." : ex.Message; } };
+      AutomationProperties.SetAutomationId(item, "accounts.action." + account.Id + "." + (text.StartsWith("Edit key", StringComparison.Ordinal) ? "editKey" : text.StartsWith("Check key", StringComparison.Ordinal) ? "checkKey" : text.StartsWith("Sign in", StringComparison.Ordinal) ? "signIn" : text.StartsWith("Sign out", StringComparison.Ordinal) ? "signOut" : text.StartsWith("Rename", StringComparison.Ordinal) ? "rename" : text.StartsWith("Usage", StringComparison.Ordinal) ? "usage" : "remove"));
       actions.Items.Add(item);
     }
     if (api)
@@ -132,6 +137,7 @@ public sealed partial class SettingsPane
       Item(account.SignedIn || account.Email is not null ? "Sign in again…" : "Sign in…", () => SignInAccountAsync(account.Id));
       Item("Sign out…", () => SignOutAccountAsync(account.Id), account.SignedIn);
     }
+    Item("Usage…", () => ShowAccountUsageAsync(account.Id));
     Item("Rename…", () => RenameAccountAsync(account.Id));
     var colours = new MenuFlyoutSubItem { Text = "Colour" };
     foreach (var colour in AccountColors.All)
@@ -143,7 +149,20 @@ public sealed partial class SettingsPane
     actions.Items.Add(colours);
     actions.Items.Add(new MenuFlyoutSeparator());
     Item("Remove…", () => RemoveAccountAsync(account.Id));
-    return AiPageRow(account.Name, plan, AiPageMenu(actions, "Account actions"), AiPageDot(ready, state), info.Count == 0 ? null : string.Join("\n", info));
+    var controls = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+    if (api || !account.SignedIn)
+    {
+      var renew = new Button { Content = api ? "Edit key…" : account.Email is not null ? "Sign in again…" : "Sign in…", Style = AiPagePlainButton };
+      AutomationProperties.SetAutomationId(renew, "accounts.renew." + account.Id);
+      renew.Click += async (_, _) => await AiPageRunAsync(renew, () => api ? ShowApiAccountAsync(account.Provider, account.Id) : SignInAccountAsync(account.Id));
+      controls.Children.Add(renew);
+    }
+    var menu = AiPageMenu(actions, "Account actions for " + account.Name);
+    AutomationProperties.SetAutomationId(menu, "accounts.actions." + account.Id); controls.Children.Add(menu);
+    var detail = !ready || api ? state : plan;
+    var row = AiPageRow(account.Name, detail, controls, AiPageDot(ready, state), info.Count == 0 ? null : string.Join("\n", info));
+    AutomationProperties.SetAutomationId(row, "accounts.row." + account.Id);
+    return row;
   }
   private static string PlanName(string plan) => plan.ToLowerInvariant() switch
   {
@@ -179,6 +198,8 @@ public sealed partial class SettingsPane
     var feedback = new Notices.CompactNotice(); words.Children.Add(feedback);
     var dialog = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = "Remove account", Content = new ScrollViewer { Content = words, MaxHeight = 440 },
       PrimaryButtonText = attached.Count > 0 ? "Close them and remove" : "Remove", CloseButtonText = "Keep it", DefaultButton = ContentDialogButton.Close };
+    AutomationProperties.SetAutomationId(dialog, "accounts.remove.dialog");
+    AutomationProperties.SetAutomationId(feedback, "accounts.remove.outcome");
     dialog.PrimaryButtonClick += async (_, args) =>
     {
       var deferral = args.GetDeferral();
@@ -214,6 +235,9 @@ public sealed partial class SettingsPane
     var feedback = new Notices.CompactNotice();
     var form = new StackPanel { Spacing = 12 }; form.Children.Add(name); form.Children.Add(feedback);
     var dialog = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = "Rename account", Content = form, PrimaryButtonText = "Save", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Primary };
+    AutomationProperties.SetAutomationId(dialog, "accounts.rename.dialog");
+    AutomationProperties.SetAutomationId(name, "accounts.rename.name");
+    AutomationProperties.SetAutomationId(feedback, "accounts.rename.outcome");
     name.TextChanged += (_, _) => dialog.IsPrimaryButtonEnabled = !string.IsNullOrWhiteSpace(name.Text) && !name.Text.Any(char.IsControl);
     dialog.PrimaryButtonClick += async (_, args) =>
     {
@@ -231,6 +255,8 @@ public sealed partial class SettingsPane
     var explanation = Description("Sign out of " + account.Name + "? " + (account.HomeId == AccountHomes.ExistingLogin ? "This is this computer’s own " + AccountMcp.AgentName(account.Provider) + " login, not one the app keeps: your terminal and every other app using it are signed out too. " : "This signs out this account’s separate login. ") + "Its name, assignments and conversations stay saved.");
     var feedback = new Notices.CompactNotice();
     var dialog = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = "Sign out", Content = new StackPanel { Spacing = 8, Children = { explanation, feedback } }, PrimaryButtonText = account.HomeId == AccountHomes.ExistingLogin ? "Sign out on this computer" : "Sign out", CloseButtonText = "Keep it", DefaultButton = ContentDialogButton.Close };
+    AutomationProperties.SetAutomationId(dialog, "accounts.signOut.dialog");
+    AutomationProperties.SetAutomationId(feedback, "accounts.signOut.outcome");
     dialog.PrimaryButtonClick += async (_, args) =>
     {
       var deferral = args.GetDeferral();

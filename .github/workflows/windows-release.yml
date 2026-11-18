@@ -25,6 +25,11 @@ on:
         type: choice
         options: [release, dry-run, point-back]
         default: release
+      checks:
+        description: "all = normal full release gate. accounts = focused account/usage/launch/chat/Hoot gate only; no RealPc, Unix or global vectors."
+        type: choice
+        options: [all, accounts]
+        default: all
       version:
         description: "Windows version, four numbers (e.g. 0.21.5.0). Leave empty for the next one. For point-back: the earlier version to offer again."
         required: false
@@ -125,8 +130,14 @@ jobs:
         run: ./windows/src/TerminalDeck.Link.Native/build.ps1 -Out "$env:RUNNER_TEMP\link-native"
 
       - name: Build every project and run every test project
+        if: inputs.checks != 'accounts'
         shell: pwsh
         run: ./windows/scripts/windows/build-and-test.ps1 -Configuration Release -Platform x64 -LinkNative "$env:RUNNER_TEMP\link-native"
+
+      - name: Build shipped app and run focused account checks
+        if: inputs.checks == 'accounts'
+        shell: pwsh
+        run: ./windows/scripts/windows/check-accounts.ps1 -Configuration Release -Platform x64 -ScratchRoot "$env:RUNNER_TEMP\TD-test" -LinkNative "$env:RUNNER_TEMP\link-native"
 
       - name: Keep the test results
         if: always()

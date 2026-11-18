@@ -60,6 +60,7 @@ public sealed class HootViewModel : INotifyPropertyChanged, IDisposable
   public Task AnswerAsync(string id, bool allow) => RunAsync(() => hoot.AnswerAsync(id, allow));
   public Task CancelAsync(string id) => RunAsync(() => hoot.CancelBackgroundAsync(id));
   public ValueTask<IReadOnlyList<TerminalDeck.Core.Accounts.ProviderModel>> ModelsAsync(string accountId) => hoot.ModelsAsync(accountId);
+  internal ValueTask ApplySettingsAsync(HootSettings settings) => hoot.ConfigureAsync(settings);
   public Task ConfigureAsync(HootSettings settings) => RunAsync(() => hoot.ConfigureAsync(settings));
   public Task MemoryAsync(string card, string playbook) => RunAsync(() => hoot.SaveMemoryAsync(card, playbook));
   public Task BoardAsync(HootBoardRow row) => RunAsync(() => hoot.SaveBoardAsync(row));

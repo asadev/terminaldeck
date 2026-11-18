@@ -3,11 +3,73 @@ using System.Threading.Channels;
 using TerminalDeck.App.Views.Chat;
 using TerminalDeck.Core.Accounts;
 using TerminalDeck.Core.Chats;
+using TerminalDeck.Core.Storage;
 
 namespace TerminalDeck.Chat.ViewModel.Tests;
 
 public sealed class ChatViewModelTests
 {
+  [Theory]
+  [InlineData("", "")]
+  [InlineData("auto", "auto")]
+  [InlineData("xhigh", "xhigh")]
+  public async Task EffortUsesThisChatChoiceWithoutInventingAnAccountDefault(string saved, string expected)
+  {
+    var chats = DispatchProxy.Create<IChatSessions, ChatWatchProxy>(); var backend = (ChatWatchProxy)chats;
+    backend.Record = backend.Record with { Definition = backend.Record.Definition with { Options = new("fixture", saved) } };
+    await using var model = new ChatViewModel(chats, backend.Record.Definition.Id, action => action());
+    Assert.Equal(expected, model.EffectiveEffort);
+  }
+  [Fact] public async Task NamedSignedOutAccountKeepsItsChosenHeaderName()
+  {
+    var chats = DispatchProxy.Create<IChatSessions, ChatWatchProxy>(); var backend = (ChatWatchProxy)chats;
+    var account = new AccountProfile(backend.Record.Definition.AccountId, "claude", "Work subscription", "work@example.test", AccountAuthentication.Subscription, false, backend.Record.Definition.AccountHome);
+    var accounts = new AccountService(new AccountLabelState(account), [new AccountLabelProvider()]);
+    backend.AccountSource = accounts;
+    await using var model = new ChatViewModel(chats, backend.Record.Definition.Id, action => action(), accounts);
+    await model.ModelsAsync();
+    Assert.False(Assert.Single(model.Accounts).SignedIn);
+    Assert.Equal("Work subscription", model.AccountName);
+    Assert.Empty(model.Snapshot.Messages); Assert.Equal(0, backend.Sends);
+  }
+
+  [Fact] public async Task AccountRenameNotifiesHeaderWithoutAChatMessageOrWatchUpdate()
+  {
+    var chats = DispatchProxy.Create<IChatSessions, ChatWatchProxy>(); var backend = (ChatWatchProxy)chats;
+    var account = new AccountProfile(backend.Record.Definition.AccountId, "claude", "Old chosen name", null, AccountAuthentication.Subscription, false, backend.Record.Definition.AccountHome);
+    var accounts = new AccountService(new AccountLabelState(account), [new AccountLabelProvider()]);
+    backend.AccountSource = accounts;
+    await using var model = new ChatViewModel(chats, backend.Record.Definition.Id, action => action(), accounts);
+    await model.ModelsAsync();
+    var before = model.Snapshot; var observedNames = new List<string>(); var snapshotChanges = 0;
+    model.PropertyChanged += (_, change) =>
+    {
+      if (change.PropertyName == nameof(ChatViewModel.AccountName)) observedNames.Add(model.AccountName);
+      if (change.PropertyName == nameof(ChatViewModel.Snapshot)) snapshotChanges++;
+    };
+    await accounts.RenameAsync(account.Id, "Renamed subscription");
+    Assert.Equal("Renamed subscription", model.AccountName);
+    Assert.Contains("Renamed subscription", observedNames);
+    Assert.Same(before, model.Snapshot); Assert.Equal(0, snapshotChanges);
+    Assert.Empty(backend.Record.Messages); Assert.Empty(backend.Requests); Assert.Equal(0, backend.Sends);
+    Assert.False(accounts.Get(account.Id).SignedIn);
+  }
+
+  private sealed class AccountLabelState(AccountProfile account) : IStateStore<AccountState>
+  {
+    private AccountState current = new(1, [account], [], []);
+    public AccountState? Load() => current;
+    public void Save(AccountState value) => current = value;
+  }
+  private sealed class AccountLabelProvider : IAccountProvider
+  {
+    public string Provider => "claude";
+    public ValueTask<ProviderAccountStatus> StatusAsync(AccountProfile account, CancellationToken ct) => ValueTask.FromResult(new ProviderAccountStatus(false, null));
+    public ValueTask<IReadOnlyList<ProviderModel>> ModelsAsync(AccountProfile account, CancellationToken ct) => ValueTask.FromResult<IReadOnlyList<ProviderModel>>([]);
+    public ValueTask SignInAsync(AccountProfile account, string folder, CancellationToken ct) => throw new InvalidOperationException("Header tests must never sign in.");
+    public ValueTask SignOutAsync(AccountProfile account, CancellationToken ct) => throw new InvalidOperationException("Header tests must never sign out.");
+  }
+
   [Fact] public async Task ModelCatalogueFailureCannotFlashAChatSendError()
   {
     var chats = DispatchProxy.Create<IChatSessions, ChatWatchProxy>(); var backend = (ChatWatchProxy)chats;
@@ -150,6 +212,7 @@ public class ChatWatchProxy : DispatchProxy
   public int Sends;
   public bool LoseNextReply;
   public bool SignedIn = true;
+  public AccountService? AccountSource;
   public bool CatalogueFailure;
   public TaskCompletionSource? ControlGate;
   public int ControlWrites;
@@ -166,7 +229,7 @@ public class ChatWatchProxy : DispatchProxy
       nameof(IChatSessions.ReadAsync) => ValueTask.FromResult(Record),
       nameof(IChatSessions.CreateAsync) when arguments![0] is ChatDefinition definition => Created(definition),
       nameof(IChatSessions.ModelsAsync) => CatalogueFailure ? ValueTask.FromException<IReadOnlyList<ProviderModel>>(new IOException("Catalogue read failed")) : ValueTask.FromResult<IReadOnlyList<ProviderModel>>([]),
-      nameof(IChatSessions.Accounts) => new AccountProfile[] { new(Record.Definition.AccountId, "claude", "Synthetic", null, AccountAuthentication.Subscription, SignedIn, Record.Definition.AccountHome) },
+      nameof(IChatSessions.Accounts) => AccountSource?.List(Record.Definition.Provider) ?? new AccountProfile[] { new(Record.Definition.AccountId, "claude", "Synthetic", null, AccountAuthentication.Subscription, SignedIn, Record.Definition.AccountHome) },
       nameof(IChatSessions.WatchAsync) => Watch((CancellationToken)arguments![1]!),
       nameof(IChatSessions.ReconnectAsync) => ValueTask.CompletedTask,
       nameof(IChatSessions.SetOptionsAsync) => SetOptions((ChatOptions)arguments![1]!),

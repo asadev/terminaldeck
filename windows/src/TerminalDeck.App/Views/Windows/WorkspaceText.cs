@@ -5,7 +5,7 @@ public static class WorkspaceText
 {
   public static string AccountIdentity(string? provider, bool signedIn, string? email, string? name) =>
     string.Equals(provider, "shell", StringComparison.OrdinalIgnoreCase) ? "" :
-    signedIn ? !string.IsNullOrWhiteSpace(name) ? name : !string.IsNullOrWhiteSpace(email) ? email : "Not signed in" : "Not signed in";
+    !string.IsNullOrWhiteSpace(name) ? name : signedIn ? "AI account" : "Not signed in";
 
   public static string MiddlePath(string value, double width, Func<string, double> measure)
   {

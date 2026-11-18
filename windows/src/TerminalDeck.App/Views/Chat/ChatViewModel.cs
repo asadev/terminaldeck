@@ -19,6 +19,7 @@ public sealed partial class ChatViewModel : INotifyPropertyChanged, IAsyncDispos
   private readonly Action draftChanged;
   private readonly Action<string> controlRequested;
   private readonly Action sideChanged;
+  private readonly Action accountLabelsChanged;
   public ChatSideQuestionState SideQuestion => draftBuffer.SideQuestion;
   public event Action<string>? ControlRequested;
   public string? RequestedModel { get; private set; }
@@ -31,9 +32,8 @@ public sealed partial class ChatViewModel : INotifyPropertyChanged, IAsyncDispos
   public bool ModelIsFallback => SelectedModelId.Length == 0 && AvailableModels.FirstOrDefault(m => m.IsDefault) is null;
   public string DefaultModelName => AvailableModels.FirstOrDefault(m => m.IsDefault)?.Name ?? AvailableModels.FirstOrDefault()?.Name ??
     TerminalDeck.Core.Agents.AgentSeats.ProviderName(Snapshot.Definition.Provider) + " default model";
-  public string EffectiveEffort => Snapshot.Definition.Options.Effort is { Length: > 0 } chosen && chosen != "auto" ? chosen :
-    (AvailableModels.FirstOrDefault(m => m.Id == SelectedModelId) ?? AvailableModels.FirstOrDefault(m => m.IsDefault))?.Efforts?.Contains("xhigh") == true ? "xhigh" :
-    Snapshot.Definition.Provider == "codex" ? "medium" : "high";
+  // A model's available levels do not establish what this conversation launched with.
+  public string EffectiveEffort => Snapshot.Definition.Options.Effort;
   public IReadOnlyList<ProviderModel> AvailableModels { get; private set; } = [];
   public bool ChangingControl { get; private set; }
   public string? ControlNotice { get; private set; }
@@ -60,12 +60,14 @@ public sealed partial class ChatViewModel : INotifyPropertyChanged, IAsyncDispos
   public void ApplyDraft(string text, long expectedRevision) => draftBuffer.Apply(text, expectedRevision);
   public string DataDirectory => chats.DataRoot?.DirectoryPath ?? Path.Combine(Path.GetTempPath(), "deck-chat-preview");
   public string AttachmentPreviewDirectory => Path.Combine(chats.DataRoot?.DirectoryPath ?? throw new InvalidOperationException("This chat has no private attachment folder."), "attachment-previews");
-  public string AccountName => chats.Accounts(Id).FirstOrDefault(a => a.Id == Snapshot.Definition.AccountId) is { } account ? account.SignedIn ? account.Name : "Not signed in" : "Not signed in";
+  public string AccountName => chats.Accounts(Id).FirstOrDefault(a => a.Id == Snapshot.Definition.AccountId)?.Name ?? "Unavailable account";
   public IReadOnlyList<AccountProfile> Accounts => chats.Accounts(Id);
   public event PropertyChangedEventHandler? PropertyChanged;
   public ChatViewModel(IChatSessions chats, string id, Action<Action> dispatch, AccountService? accountModels = null)
   {
     this.accountModels = accountModels;
+    accountLabelsChanged = () => dispatch(() => { if (!lifetime.IsCancellationRequested) Changed(nameof(AccountName)); });
+    if (accountModels is not null) accountModels.Changed += accountLabelsChanged;
     this.chats = chats; this.dispatch = dispatch; Id = id;
     draftBuffer = ChatDraftWorkspace.Open(id); draftChanged = () => dispatch(() => Changed(nameof(Draft))); draftBuffer.Changed += draftChanged;
     sideChanged = () => dispatch(() => Changed(nameof(SideQuestion))); draftBuffer.SideQuestion.Changed += sideChanged;
@@ -238,5 +240,5 @@ public sealed partial class ChatViewModel : INotifyPropertyChanged, IAsyncDispos
   public ValueTask<byte[]> ReadImageAsync(ChatMedia media) => chats.ReadImageAsync(Id, media, lifetime.Token);
   public void RemoveAttachment(string id) { Attachments.RemoveAll(a => a.Id == id); Changed(nameof(Attachments)); }
   public async ValueTask DisposeAsync()
-  { draftBuffer.SideQuestion.Changed -= sideChanged; draftBuffer.ControlRequested -= controlRequested; draftBuffer.Changed -= draftChanged; lifetime.Cancel(); await watching; lifetime.Dispose(); }
+  { if (accountModels is not null) accountModels.Changed -= accountLabelsChanged; draftBuffer.SideQuestion.Changed -= sideChanged; draftBuffer.ControlRequested -= controlRequested; draftBuffer.Changed -= draftChanged; lifetime.Cancel(); await watching; lifetime.Dispose(); }
 }

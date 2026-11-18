@@ -140,7 +140,7 @@ public static class ApiKeyCheck
       using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct); deadline.CancelAfter(TimeSpan.FromSeconds(20));
       using var response = await http.SendAsync(request, deadline.Token);
       if (response.IsSuccessStatusCode) return ("valid", null);
-      var reason = await Reason(response, deadline.Token);
+      var reason = await Reason(response, key, deadline.Token);
       return response.StatusCode switch
       {
         HttpStatusCode.Unauthorized => ("invalid", reason),
@@ -152,8 +152,8 @@ public static class ApiKeyCheck
     catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
     { return ("unavailable", "The service could not be reached. Check the connection and the Base URL."); }
   }
-  // The provider's own sentence ("API key expired"), never the key or headers.
-  private static async Task<string?> Reason(HttpResponseMessage response, CancellationToken ct)
+  // Keep only fixed-word reasons; a compatible server can echo keys or endpoints.
+  private static async Task<string?> Reason(HttpResponseMessage response, string? key, CancellationToken ct)
   {
     try
     {
@@ -162,8 +162,14 @@ public static class ApiKeyCheck
       using var document = JsonDocument.Parse(text);
       var error = document.RootElement.TryGetProperty("error", out var e) ? e : document.RootElement;
       var message = error.ValueKind == JsonValueKind.Object && error.TryGetProperty("message", out var m) ? m.GetString() : error.ValueKind == JsonValueKind.String ? error.GetString() : null;
-      return message is { Length: > 0 and <= 300 } ? message : null;
+      // Compatible servers can echo request values. Never persist or display a key.
+      if (!string.IsNullOrEmpty(key) && message?.Contains(key, StringComparison.Ordinal) == true) return null;
+      if (message is not { Length: > 0 and <= 300 }) return null;
+      if (message.Contains("expired", StringComparison.OrdinalIgnoreCase)) return "The API key has expired. Replace it and check again.";
+      if (message.Contains("credit", StringComparison.OrdinalIgnoreCase) || message.Contains("billing", StringComparison.OrdinalIgnoreCase)) return "Check this account’s API billing.";
+      if (message.Contains("permission", StringComparison.OrdinalIgnoreCase) || message.Contains("access", StringComparison.OrdinalIgnoreCase)) return "This key does not have access. Check its permissions.";
+      return null;
     }
-    catch (JsonException) { return null; }
+    catch (Exception ex) when (ex is JsonException or InvalidOperationException) { return null; }
   }
 }

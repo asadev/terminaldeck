@@ -17,6 +17,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
   public ChatViewModel Model { get; }
   private readonly Func<nint> currentWindowHandle;
   private readonly ChatNavigation? navigation;
+  private readonly Func<Task> signInCurrentAccount;
   // The frame, the conversation column and the box are shared with the New session page (ChatFrame).
   private readonly StackPanel messages = ChatFrame.Column();
   private readonly StackPanel pending = new() { Spacing = 8 };
@@ -42,7 +43,8 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     this.currentWindowHandle = currentWindowHandle ?? (() => ownerWindowHandle);
     ChatFrame.Layout(this);
     Model = new(chats, chatId, action => DispatcherQueue.TryEnqueueHandled(() => action()), accountModels);
-    if (navigation?.SignIn is { } signIn) Model.SignInRequested = () => signIn(Model.Snapshot.Definition.AccountId);
+    signInCurrentAccount = () => chats.SignInAsync(chatId).AsTask();
+    Model.SignInRequested = () => RenewAccountAsync(Model.Snapshot.Definition.AccountId);
     var heading = new Grid { ColumnSpacing = 12, Height = 0, MaxWidth = 688, HorizontalAlignment = HorizontalAlignment.Stretch };
     heading.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
     heading.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); title.Visibility = Visibility.Collapsed; heading.Children.Add(title);
@@ -169,7 +171,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     AutomationProperties.SetName(stop, Model.Snapshot.Stopping ? "Stopping…" : "Stop the current answer"); stop.IsEnabled = !Model.Snapshot.Stopping;
     stop.Visibility = Model.Snapshot.Busy ? Visibility.Visible : Visibility.Collapsed;
     var modelText = Model.SelectedModelName;
-    var modelChip = ChipText(modelText); var fallbackReason = Model.AccountName == "Not signed in" ? "Sign in to read this AI's models." : Model.AvailableModels.Count == 0 ? "Read models from Coding AIs." : "";
+    var modelChip = ChipText(modelText); var fallbackReason = Model.Accounts.FirstOrDefault(a => a.Id == Model.Snapshot.Definition.AccountId) is not { SignedIn: true } ? "Connect this account to read its models." : Model.AvailableModels.Count == 0 ? "Read models from Coding AIs." : "";
     if (Model.ModelIsFallback && fallbackReason.Length > 0) { modelChip.Opacity = 0.6; ToolTipService.SetToolTip(model, modelText + " · " + fallbackReason); }
     else ToolTipService.SetToolTip(model, "Model: " + modelText);
     model.Content = modelChip;
@@ -299,7 +301,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
       var name = navigation?.AgentName ?? ChatAppearance.ProviderName(Model.Snapshot.Definition.Provider);
       var empty = ChatAppearance.Empty("Ask " + name + " anything in this session.", Model.Snapshot.Definition.Provider);
       if (Model.Accounts.FirstOrDefault(a => a.Id == Model.Snapshot.Definition.AccountId) is not { SignedIn: true })
-        empty.Children.Add(Button("Sign in", () => Model.SignInAsync()));
+        empty.Children.Add(AccountRenewalButton());
       desired.Add(empty);
     }
     var retained = new HashSet<UIElement>(desired);
@@ -398,9 +400,9 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
       actions.Children.Add(Button("Switch account", () => { ShowAccounts(); return Task.CompletedTask; }));
       if (Model.Snapshot.Messages.Any(m => m.State == ChatMessageState.Failed)) actions.Children.Add(Button("Retry message", () => Model.RetryAsync()));
     }
-    else if (text.StartsWith("Not signed in", StringComparison.Ordinal))
+    else if (text.StartsWith("Not signed in", StringComparison.Ordinal) || Model.Accounts.FirstOrDefault(a => a.Id == Model.Snapshot.Definition.AccountId)?.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey && text.Contains("API key", StringComparison.OrdinalIgnoreCase))
     {
-      actions.Children.Add(Button("Sign in", () => Model.SignInAsync()));
+      actions.Children.Add(AccountRenewalButton());
       if (Model.Snapshot.Messages.Any(m => m.State == ChatMessageState.Failed)) actions.Children.Add(Button("Retry message", () => Model.RetryAsync()));
     }
     else if (Model.Snapshot.Messages.Any(m => ChatSessions.Unconfirmed(Model.Snapshot, m)) || text.Contains("connect", StringComparison.OrdinalIgnoreCase) || text.Contains("may have reached", StringComparison.Ordinal))
@@ -411,6 +413,8 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     }
     else if (Model.Error is not null) actions.Children.Add(Button("Dismiss", () => { Model.ClearError(); return Task.CompletedTask; }));
     else actions.Children.Add(Button("Retry", () => Model.RetryAsync()));
+    if (Model.Accounts.FirstOrDefault(a => a.Id == Model.Snapshot.Definition.AccountId)?.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey &&
+        text.Contains("connect", StringComparison.OrdinalIgnoreCase)) actions.Children.Add(AccountRenewalButton());
     // A "Dismiss" action already clears the error; never show a second close control.
     var notice = new Notices.CompactNotice { Message = text, Severity = InfoBarSeverity.Error, ActionButton = actions.Children.Count > 0 ? actions : null, Scope = this, OverlayRow = 1, IsOpen = true, IsClosable = !actions.Children.OfType<Button>().Any(b => Equals(b.Content, "Dismiss")) };
     AutomationProperties.SetAutomationId(notice, "chat.error"); problem.Children.Add(notice);
@@ -502,6 +506,30 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     }
     menu.ShowAt(effort);
   }
+  private Button AccountRenewalButton()
+  {
+    var selected = Model.Accounts.FirstOrDefault(a => a.Id == Model.Snapshot.Definition.AccountId);
+    var button = Button(selected?.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey ? "Edit key…" : "Sign in again…", () => Model.SignInAsync());
+    AutomationProperties.SetAutomationId(button, "chat.accounts.renew");
+    return button;
+  }
+  private async Task RenewAccountAsync(string accountId)
+  {
+    var selected = Model.Accounts.FirstOrDefault(a => a.Id == accountId);
+    if (selected?.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey)
+    {
+      if (navigation?.EditApiAccount is { } edit) await edit(accountId);
+      else navigation?.OpenCodingAis();
+      return;
+    }
+    if (navigation?.SignIn is { } signIn) await signIn(accountId);
+    else
+    {
+      // Without a shell callback only the current chat's own sign-in is available.
+      if (accountId == Model.Snapshot.Definition.AccountId) await signInCurrentAccount();
+      else navigation?.OpenCodingAis();
+    }
+  }
   private void ShowAccounts(FrameworkElement? anchor = null)
   {
     if (!account.IsEnabled)
@@ -513,21 +541,34 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     var menu = new MenuFlyout();
     foreach (var choice in Model.Accounts)
     {
-      var item = new ToggleMenuFlyoutItem { Text = choice.Name + (choice.SignedIn ? "" : " · Not signed in"), IsChecked = choice.Id == Model.Snapshot.Definition.AccountId };
+      var item = new ToggleMenuFlyoutItem { Text = choice.Name + (choice.SignedIn ? "" : choice.Authentication == TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey ? " · Needs key" : " · Needs sign-in"), IsChecked = choice.Id == Model.Snapshot.Definition.AccountId };
       item.Click += async (_, _) =>
       {
         if (!choice.SignedIn)
         {
-          if (navigation?.SignIn is not { } signIn) { await Model.SignInAsync(); return; }
-          try { await signIn(choice.Id); }
+          try { await RenewAccountAsync(choice.Id); }
           catch (TerminalDeck.Core.Accounts.SignInCancelledException) { return; }
+          catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException or UnauthorizedAccessException)
+          { controlFeedback.Text = "Couldn’t connect this account. Open Coding AIs and try again."; controlFeedback.Visibility = Visibility.Visible; return; }
           if (!Model.Accounts.Any(a => a.Id == choice.Id && a.SignedIn)) return;
         }
         await Model.SetAccountAsync(choice.Id);
-      }; menu.Items.Add(item);
+      }; AutomationProperties.SetAutomationId(item, "chat.accounts.choose." + choice.Id); menu.Items.Add(item);
     }
     if (navigation is not null)
-    { var add = new MenuFlyoutItem { Text = "Add account…" }; add.Click += (_, _) => navigation.OpenCodingAis(); menu.Items.Add(add); }
+    {
+      var add = new MenuFlyoutItem { Text = "Add account…" };
+      AutomationProperties.SetAutomationId(add, "chat.accounts.add");
+      add.Click += async (_, _) =>
+      {
+        await Model.RunAsync(async () =>
+        {
+          if (navigation.AddAccount is { } addAccount) await addAccount(Model.Snapshot.Definition.Provider);
+          else navigation.OpenCodingAis();
+        });
+      };
+      menu.Items.Add(add);
+    }
     menu.ShowAt(anchor ?? this);
   }
   private async Task PickImagesAsync()
