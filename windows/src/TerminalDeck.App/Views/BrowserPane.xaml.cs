@@ -152,15 +152,15 @@ public sealed partial class BrowserPane : UserControl
       profileEnvironments[path] = environment;
     }
     pageEnvironments[id] = environment;
-    var view = new WebView2(); SurfaceHost.Children.Add(view);
+    var view = new WebView2(); RetainBrowserPage(id, view);
     var controller = environment.CreateCoreWebView2ControllerOptions();
     controller.ProfileName = "Deck"; controller.IsInPrivateModeEnabled = isolated || !Privacy.Read().PersistSignIns;
     try { await view.EnsureCoreWebView2Async(environment, controller); }
-    catch { SurfaceHost.Children.Remove(view); view.Close(); throw; }
+    catch { ReleaseRetainedPage(id); view.Close(); throw; }
     if (view.CoreWebView2.Profile.IsInPrivateModeEnabled != (isolated || !Privacy.Read().PersistSignIns))
-    { SurfaceHost.Children.Remove(view); view.Close(); throw new IOException("The browser profile did not apply its sign-in persistence setting. Try opening it again."); }
-    ct.ThrowIfCancellationRequested();
-    if (disposed) { view.Close(); throw new IOException("The browser is closing."); }
+    { ReleaseRetainedPage(id); view.Close(); throw new IOException("The browser profile did not apply its sign-in persistence setting. Try opening it again."); }
+    if (ct.IsCancellationRequested) { ReleaseRetainedPage(id); view.Close(); ct.ThrowIfCancellationRequested(); }
+    if (disposed) { ReleaseRetainedPage(id); view.Close(); throw new IOException("The browser is closing."); }
     view.CoreWebView2.Settings.IsStatusBarEnabled = false;
     view.CoreWebView2.Settings.IsPasswordAutosaveEnabled = false;
     view.CoreWebView2.Settings.IsGeneralAutofillEnabled = false;

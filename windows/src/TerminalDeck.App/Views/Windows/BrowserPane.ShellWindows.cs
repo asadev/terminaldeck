@@ -135,10 +135,11 @@ public sealed partial class BrowserPane
     var status = new Notices.CompactNotice { Scope = panel };
     var lastStatus = "";
     var failure = StartView(tab);
-    var page = new Grid(); SurfaceHost.Children.Remove(tab.View);
-    var viewport = new Grid(); viewport.Children.Add(tab.View); pageSlots[id] = viewport;
+    var page = new Grid();
+    var viewport = new Grid(); pageSlots[id] = viewport;
     viewport.Loaded += (_, _) => { TrackBrowserRoot(panel); RefreshBackgroundPages(); };
     viewport.Unloaded += (_, _) => DispatcherQueue.TryEnqueueHandled(() => RefreshBackgroundPages());
+    viewport.LayoutUpdated += (_, _) => RefreshBackgroundPage(tab);
     var fitted = new Viewbox { Child = viewport, Stretch = Microsoft.UI.Xaml.Media.Stretch.Uniform, StretchDirection = StretchDirection.DownOnly, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     page.Children.Add(fitted); page.Children.Add(failure); Grid.SetRow(page, 3); panel.Children.Add(page);
     void FitViewport()
@@ -300,9 +301,9 @@ public sealed partial class BrowserPane
     // Handover belongs to the requested page. Overlay its content without
     // reserving a row or shifting that page's toolbar.
     Canvas.SetZIndex(HandoverBar, 1000);
-    if (shellViews.TryGetValue(tabId, out var panel))
+    if (retainedPages.TryGetValue(tabId, out var retained))
     {
-      Grid.SetRow(HandoverBar, 3); panel.Children.Add(HandoverBar);
+      Grid.SetRow(HandoverBar, 0); retained.Host.Children.Add(HandoverBar);
     }
     else if (Content is Grid engine) { Grid.SetRow(HandoverBar, 4); engine.Children.Add(HandoverBar); }
   }

@@ -136,16 +136,16 @@ public sealed partial class BrowserPane
     dialog.UpdateLayout(); var content = (FrameworkElement)dialog.Content;
     await File.WriteAllBytesAsync(path, await RenderPngAsync(content, (int)content.ActualWidth, (int)content.ActualHeight));
   }
-  private static async Task ProofFrameAsync(FrameworkElement frame, BrowserTab tab, string path)
+  private async Task ProofFrameAsync(FrameworkElement frame, BrowserTab tab, string path)
   {
     frame.UpdateLayout();
-    if (tab.View.Parent is not Panel parent) throw new InvalidOperationException("The fixture WebView has no panel parent.");
+    if (!pageSlots.TryGetValue(tab.Id, out var parent)) throw new InvalidOperationException("The fixture WebView has no workspace placeholder.");
     using var stream = new InMemoryRandomAccessStream(); await tab.View.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, stream); stream.Seek(0);
     var bitmap = new BitmapImage(); await bitmap.SetSourceAsync(stream);
     var image = new Image { Visibility = tab.View.Visibility, Source = bitmap, Stretch = Stretch.Fill, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch };
-    var index = parent.Children.IndexOf(tab.View); parent.Children.RemoveAt(index); parent.Children.Insert(index, image);
+    var opacity = tab.View.Opacity; tab.View.Opacity = 0; parent.Children.Add(image);
     try { frame.UpdateLayout(); await File.WriteAllBytesAsync(path, await RenderPngAsync(frame, (int)frame.ActualWidth, (int)frame.ActualHeight)); }
-    finally { parent.Children.Remove(image); parent.Children.Insert(index, tab.View); }
+    finally { parent.Children.Remove(image); tab.View.Opacity = opacity; }
   }
 }
 

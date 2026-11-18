@@ -1,6 +1,8 @@
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Windows.Foundation;
 using TerminalDeck.App.Shell;
 
 namespace TerminalDeck.App.Views;
@@ -15,22 +17,50 @@ public sealed partial class BrowserPane
   private readonly Dictionary<string, BrowserParking> parkedPages = [];
   private readonly Dictionary<string, Grid> pageSlots = [];
   private readonly HashSet<XamlRoot> browserRoots = [];
+  private readonly Dictionary<string, BrowserParking> retainedPages = [];
   private sealed class BrowserParking
   {
     private readonly Panel owner;
-    private readonly Canvas layer = new() { Width = 1, Height = 1, Opacity = 0, IsHitTestVisible = false, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
-    public Grid Host { get; } = new();
-    public BrowserParking(XamlRoot xamlRoot, ElementTheme theme)
+    private readonly Canvas layer = new();
+    private Matrix transform;
+    public XamlRoot Root { get; }
+    public Grid Host { get; } = new() { Width = 1280, Height = 800, Opacity = 0, IsHitTestVisible = false };
+    public BrowserParking(XamlRoot xamlRoot, WebView2 view)
     {
+      Root = xamlRoot;
       owner = xamlRoot.Content as Panel ?? throw new InvalidOperationException("This browser window has no retained page host.");
-      Host.RequestedTheme = theme;
-      // A transparent, noninteractive layer stays loaded on the original root.
-      // Its child has finite bounds; it never covers or captures input from the person.
-      Microsoft.UI.Xaml.Automation.AutomationProperties.SetAccessibilityView(layer, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+      // This is the WebView's only parent, attached before initialization. A
+      // workspace placeholder supplies its geometry; the live control never unloads.
       Grid.SetRowSpan(layer, int.MaxValue); Grid.SetColumnSpan(layer, int.MaxValue);
-      layer.Children.Add(Host); owner.Children.Add(layer);
+      Host.Children.Add(view); layer.Children.Add(Host); owner.Children.Add(layer);
     }
-    public void Close() { layer.Children.Clear(); owner.Children.Remove(layer); }
+    public void Place(Grid slot, bool visible, double width, double height)
+    {
+      if (Host.Width != width || Host.Height != height)
+      {
+        Host.Width = width; Host.Height = height;
+        Host.Clip = new RectangleGeometry { Rect = new Rect(0, 0, width, height) };
+      }
+      if (visible)
+      {
+        if (!ReferenceEquals(slot.XamlRoot, Root)) throw new InvalidOperationException("This browser page cannot move to another window without losing its live document.");
+        var coordinates = slot.TransformToVisual(Root.Content);
+        var origin = coordinates.TransformPoint(new(0, 0)); var x = coordinates.TransformPoint(new(1, 0)); var y = coordinates.TransformPoint(new(0, 1));
+        var next = new Matrix { M11 = x.X - origin.X, M12 = x.Y - origin.Y, M21 = y.X - origin.X, M22 = y.Y - origin.Y, OffsetX = origin.X, OffsetY = origin.Y };
+        if (!next.Equals(transform)) { transform = next; Host.RenderTransform = new MatrixTransform { Matrix = next }; }
+      }
+      Host.Opacity = visible ? 1 : 0; Host.IsHitTestVisible = visible;
+    }
+    public void Close() { owner.Children.Remove(layer); layer.Children.Clear(); }
+  }
+  private BrowserParking RetainBrowserPage(string id, WebView2 view)
+  {
+    var retained = new BrowserParking(XamlRoot ?? throw new InvalidOperationException("The browser has no window root."), view);
+    retainedPages.Add(id, retained); return retained;
+  }
+  private void ReleaseRetainedPage(string id)
+  {
+    if (retainedPages.Remove(id, out var retained)) retained.Close();
   }
   private static bool IsDrawn(FrameworkElement element)
   {
@@ -74,28 +104,12 @@ public sealed partial class BrowserPane
     parkingChanging = true;
     try
     {
-    if (shown && parkedPages.Remove(tab.Id, out var parked))
-    {
-      parked.Host.Children.Remove(tab.View); slot.Children.Add(tab.View); tab.View.Visibility = Visibility.Visible; parked.Close();
-    }
-    else if (!shown && !parkedPages.ContainsKey(tab.Id))
-    {
-      var parking = new BrowserParking(tab.View.XamlRoot ?? slot.XamlRoot ?? throw new InvalidOperationException("The browser page has no window root."), tab.View.ActualTheme);
-      ResizeParking(parking, width, height);
-      parking.Host.Loaded += (_, _) => ResizeParking(parking, parking.Host.Width, parking.Host.Height);
-      var previous = tab.View.Parent as Panel; previous?.Children.Remove(tab.View);
-      try { parking.Host.Children.Add(tab.View); }
-      catch { previous?.Children.Add(tab.View); parking.Close(); throw; }
-      tab.View.Visibility = Visibility.Visible; parkedPages[tab.Id] = parking;
-    }
-    else if (!shown && parkedPages.TryGetValue(tab.Id, out var retained)) ResizeParking(retained, width, height);
+      if (!retainedPages.TryGetValue(tab.Id, out var retained)) return;
+      if (shown) parkedPages.Remove(tab.Id); else parkedPages[tab.Id] = retained;
+      retained.Place(slot, shown && !tab.Failed && (tab.Address.Length > 0 || tab.NativePopup), width, height);
+      tab.View.IsTabStop = shown;
     }
     finally { parkingChanging = false; }
-  }
-  private static void ResizeParking(BrowserParking parking, double width, double height)
-  {
-    if (parking.Host.Width == width && parking.Host.Height == height) return;
-    parking.Host.Width = width; parking.Host.Height = height;
   }
   private async Task PrepareBackgroundPageAsync(BrowserTab tab)
   {
@@ -111,7 +125,6 @@ public sealed partial class BrowserPane
   }
   private void CloseBackgroundPage(BrowserTab tab)
   {
-    if (parkedPages.Remove(tab.Id, out var parked)) { parked.Host.Children.Remove(tab.View); parked.Close(); }
-    pageSlots.Remove(tab.Id);
+    parkedPages.Remove(tab.Id); ReleaseRetainedPage(tab.Id); pageSlots.Remove(tab.Id);
   }
 }

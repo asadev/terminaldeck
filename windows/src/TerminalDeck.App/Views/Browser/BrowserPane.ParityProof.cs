@@ -42,14 +42,14 @@ public sealed partial class BrowserPane
       Stage("open"); var page = await Core.OpenAsync(fixture.Url); var tab = tabs.Single(t => t.Id == page.Id);
       ObserveShellPages(); ShellSelected?.Invoke(tab.Id); Stage("open-shell-slot"); await Wait(() => pageSlots.ContainsKey(tab.Id));
       Stage("open-drawn"); await Wait(() => IsDrawn(pageSlots[tab.Id]));
-      var web = tab.View.CoreWebView2; var pageRoot = tab.View.XamlRoot;
+      var web = tab.View.CoreWebView2; var pageRoot = tab.View.XamlRoot; var pageParent = tab.View.Parent;
       await tab.Model.CommandAsync("Runtime.evaluate", new { expression = "window.__tdProofIdentity='kept'; document.getElementById('target').onclick=()=>document.body.dataset.clicked='yes'" });
       Stage("bookmarks"); var bookmark = await Core.AddBookmarkAsync(tab.Profile.Id, fixture.Url, "Fixture bookmark");
       Check("bookmark round trip", Core.Bookmarks(tab.Profile.Id).Any(b => b.Id == bookmark.Id)); await Core.ShowBookmarkBarAsync(tab.Profile.Id, true);
       Stage("background"); var other = await Core.OpenAsync(fixture.Url + "next"); ObserveShellPages(); ShellSelected?.Invoke(other.Id);
       Stage("background-other-drawn"); await Wait(() => pageSlots.TryGetValue(other.Id, out var otherSlot) && IsDrawn(otherSlot));
       Stage("background-original-parked"); await Wait(() => parkedPages.ContainsKey(tab.Id));
-      Check("hidden page retains its original XamlRoot and controller", ReferenceEquals(pageRoot, tab.View.XamlRoot) && ReferenceEquals(web, tab.View.CoreWebView2));
+      Check("hidden page retains its original parent, XamlRoot and controller", ReferenceEquals(pageParent, tab.View.Parent) && ReferenceEquals(pageRoot, tab.View.XamlRoot) && ReferenceEquals(web, tab.View.CoreWebView2));
       var state = await Core.PerformAsync(tab.Id, BrowserPageAction.Read, JsonSerializer.SerializeToElement(new { selector = "h1" }));
       Check("hidden tab read", state.GetRawText().Contains("Browser parity fixture", StringComparison.Ordinal));
       await Core.PerformAsync(tab.Id, BrowserPageAction.Step, JsonSerializer.SerializeToElement(new { verb = "type", selector = "#ordinary", value = "Background typed text" }));
