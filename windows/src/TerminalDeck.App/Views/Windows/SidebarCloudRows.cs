@@ -9,7 +9,7 @@ namespace TerminalDeck.App.Shell;
 
 /// One session on another of his machines, as the side panel lists it. `Ref` routes (never shown); `MachineName` and
 /// `MachineOn` are for the session's own page ("Runs on Mac mini"), never drawn on the row.
-public sealed record SidebarCloudRow(string Ref, string? SessionId, string Name, bool Chat, string MachineName, bool MachineOn, bool NeedsYou, double LastUsedAt);
+public sealed record SidebarCloudRow(string Ref, string? SessionId, string Name, bool Chat, string MachineName, bool MachineOn, bool NeedsYou, double LastUsedAt, string State = "");
 
 public static class SidebarRowLook
 {
@@ -46,7 +46,7 @@ public static class SidebarCloudRows
       var machine = row.Machine is { } m && machines.TryGetValue(m, out var known) ? known : null;
       var machineName = FirstText(machine?.Name, row.MachineName) ?? "another computer";
       var on = machine?.On ?? row.MachineOn ?? false;
-      rows.Add(new(row.Ref, row.SessionId, FirstText(row.Name) ?? Untitled, IsChat(row.Kind), ReachMachineName(machineName), on, on && SidebarRowLook.NeedsYou(row.Status), row.LastUsedAt ?? 0));
+      rows.Add(new(row.Ref, row.SessionId, FirstText(row.Name) ?? Untitled, IsChat(row.Kind), ReachMachineName(machineName), on, on && SidebarRowLook.NeedsYou(row.Status), row.LastUsedAt ?? 0, row.Status ?? ""));
     }
     return rows;
   }

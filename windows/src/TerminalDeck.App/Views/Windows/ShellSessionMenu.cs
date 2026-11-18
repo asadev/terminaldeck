@@ -11,12 +11,14 @@ public sealed partial class ShellWindow
   private readonly HashSet<string> deletingSessions = [];
   private MenuFlyout SessionMenu(SessionDraft row)
   {
-    var menu = new MenuFlyout();
+    var menu = DeckMenu.CreateFor(Root);
     void Add(string label, Func<Task> action, bool enabled = true)
     {
       var item = new MenuFlyoutItem { Text = label, IsEnabled = enabled };
       item.Click += async (_, _) => { try { await action(); } catch (Exception ex) when (ex is not OutOfMemoryException) { Model.Notice = ex is ArgumentException or InvalidOperationException ? ex.Message : "The session action could not finish. Try again."; } }; menu.Items.Add(item);
     }
+    Add("Earlier chats", () => ShowResumeHistoryAsync(Root, row.Folder, null));
+    if (row.State == "held") Add("Reopen", () => ReopenSidebarSessionAsync(row));
     Add(sidebar.Read.SessionPins.Contains(row.Id) ? "Unpin" : "Pin", () => { sidebar.PinSession(row.Id, !sidebar.Read.SessionPins.Contains(row.Id)); return Task.CompletedTask; });
     Add("Open in new window", () => { PopSession(row.Id); return Task.CompletedTask; });
     if (windowState.Tabs.Any(t => t.Owner == row.Id && t.Host != "main")) Add("Move back to main window", () => { DockOwner(row.Id); return Task.CompletedTask; });

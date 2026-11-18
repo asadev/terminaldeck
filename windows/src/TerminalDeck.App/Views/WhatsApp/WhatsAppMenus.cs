@@ -98,30 +98,22 @@ public sealed class WhatsAppChip : StackPanel
     if (look is null) return;
     if (separated) Children.Add(new TextBlock { Text = "·", VerticalAlignment = VerticalAlignment.Center });
 
-    var glyph = new DeckIcon { Glyph = "whatsapp", FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
-    glyph.SetResourceReference(Control.ForegroundProperty, "DeckSecondaryInkBrush");
-    var name = new TextBlock { Text = look.Name, FontSize = 11, MaxWidth = 140, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
-    // Off: the chip is drawn in secondary colour (the agent stays attached).
-    if (!look.Sending) name.SetResourceReference(TextBlock.ForegroundProperty, "DeckSecondaryInkBrush");
-    var label = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-    label.Children.Add(glyph); label.Children.Add(name);
-    var list = new MenuFlyout();
-    list.Opening += (_, _) => WhatsAppMenus.Fill(list.Items, here, store);
-    WhatsAppMenus.Fill(list.Items, here, store);
-    var chip = new Button { Content = label, Flyout = list, FontSize = 11, MinWidth = 0, Height = 24, MinHeight = 24, Padding = new Thickness(6, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
-    chip.Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"];
-    chip.Width = double.NaN; chip.HorizontalAlignment = HorizontalAlignment.Left;
-    ToolTipService.SetToolTip(chip, look.Help); AutomationProperties.SetName(chip, "WhatsApp: " + look.Name);
+    var glyph = new DeckIcon { Glyph = "whatsapp", FontSize = 10.5, VerticalAlignment = VerticalAlignment.Center };
+    glyph.SetResourceReference(Control.ForegroundProperty, look.Sending ? "DeckSidebarSelectionInkBrush" : "DeckSecondaryInkBrush");
+    var list = DeckMenu.CreateFor(this);
+    void Fill()
+    {
+      WhatsAppMenus.Fill(list.Items, here, store);
+      // Sending is the first choice; selecting an agent follows it.
+      var send = list.Items.OfType<ToggleMenuFlyoutItem>().FirstOrDefault(i => i.Text == WhatsAppWords.Send);
+      if (send is not null) { list.Items.Remove(send); list.Items.Insert(0, send); list.Items.Insert(1, new MenuFlyoutSeparator()); }
+    }
+    list.Opening += (_, _) => Fill(); Fill();
+    var chip = new Button { Content = glyph, Flyout = list, Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"], Width = 18, MinWidth = 18, Height = 18, MinHeight = 18, Padding = new(0), CornerRadius = new(5), VerticalAlignment = VerticalAlignment.Center, BorderThickness = new(look.Sending ? 0 : 0.5) };
+    chip.SetResourceReference(Control.BackgroundProperty, look.Sending ? "AccentFillColorDefaultBrush" : "DeckTransparentBrush");
+    chip.SetResourceReference(Control.BorderBrushProperty, "DeckSecondaryInkBrush");
+    ToolTipService.SetToolTip(chip, look.Help); AutomationProperties.SetName(chip, "WhatsApp: " + look.Name + (look.Sending ? ", sending" : ", off"));
     AutomationProperties.SetAutomationId(chip, "whatsapp.chip.button");
     Children.Add(chip);
-
-    // THE SWITCH: right after the chip, mini, no label; only while an agent is attached here.
-    var toggle = new ToggleSwitch { IsOn = look.Sending, OnContent = "", OffContent = "", MinWidth = 40, Width = 40 };
-    var agentId = look.AgentId;
-    toggle.Toggled += async (_, _) => { if (toggle.IsOn != shown?.Sending) await store.SetSendingAsync(toggle.IsOn, agentId); };
-    AutomationProperties.SetName(toggle, WhatsAppWords.Send); AutomationProperties.SetAutomationId(toggle, "whatsapp.chip.send");
-    var mini = new Viewbox { Child = toggle, Height = 18, VerticalAlignment = VerticalAlignment.Center, Stretch = Stretch.Uniform };
-    ToolTipService.SetToolTip(mini, WhatsAppWords.Send);
-    Children.Add(mini);
   }
 }

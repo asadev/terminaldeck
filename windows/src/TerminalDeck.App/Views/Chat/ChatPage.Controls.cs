@@ -78,7 +78,7 @@ public sealed partial class ChatPage
     { control.Width = control.Height = control.MinWidth = control.MinHeight = 26; control.CornerRadius = new CornerRadius(8); }
     var more = new Button { Content = "More", MinHeight = 32 };
     AutomationProperties.SetName(more, "Chat actions");
-    var menu = new MenuFlyout();
+    var menu = DeckMenu.CreateFor(this);
     void Item(string name, Func<Task> action)
     { var item = new MenuFlyoutItem { Text = name }; item.Click += async (_, _) => await action(); menu.Items.Add(item); }
     Item("Side question…", ShowSideQuestionAsync);
@@ -219,7 +219,7 @@ public sealed partial class ChatPage
   }
   private void ShowPermissions()
   {
-    var menu = new MenuFlyout();
+    var menu = DeckMenu.CreateFor(this);
     foreach (var mode in ChatPermissionModes.Supported(Model.Snapshot.Definition.Provider))
     {
       var item = new ToggleMenuFlyoutItem { Text = ChatPermissionModes.Label(mode) + " — " + ChatPermissionModes.Explain(mode), IsChecked = mode == Model.ShownPermission };

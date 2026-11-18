@@ -19,7 +19,7 @@ internal static class ChatAppearance
   public static string ProviderName(string provider) => provider switch
   { "claude" => "Claude Code", "codex" => "Codex", "gemini" => "Gemini", _ => provider };
   public static string EffortName(string effort) => effort switch
-  { "xhigh" => "Extra high", "auto" => "Automatic", "" => "Not known yet", _ => char.ToUpperInvariant(effort[0]) + effort[1..] };
+  { "xhigh" => "Extra high", "auto" => "Automatic", "" or "unknown" => "Effort", _ => char.ToUpperInvariant(effort[0]) + effort[1..] };
   public static void IconButton(Button button, string glyph, string label, bool accent = false)
   {
     if (!accent) button.Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"];

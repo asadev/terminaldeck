@@ -74,6 +74,53 @@ public sealed class SessionKeeper
     finally { gate.Release(); }
   }
 
+  // Reopen targets one held row. Observe its lease first: a lost launch reply
+  // must adopt the existing process, never create a second conversation.
+  public async ValueTask<SessionRecord> ReopenAsync(string id, CancellationToken cancellationToken = default)
+  {
+    await gate.WaitAsync(cancellationToken);
+    try
+    {
+      if (updating) throw new InvalidOperationException("The app is updating. Reopen this session after the update.");
+      var row = RawGet(id);
+      if (row.State != SessionState.Held) return WithReplay(row);
+      if (row.PendingAccount is not null) throw new InvalidOperationException("This session's account switch is still being recovered.");
+      var observation = await processes.ObserveAsync(row, cancellationToken);
+      if (observation.Presence != ProcessPresence.Dead)
+      {
+        Remember(row, observation); var adopted = Apply(row, observation); Commit(adopted, "status"); return WithReplay(adopted);
+      }
+      var next = row;
+      if (row.HasStarted)
+      {
+        var definition = row.Definition.Provider != "shell" ? FollowConversation(row, observation) : row.Definition;
+        var resume = definition.Provider != "shell" && definition.ConversationId is not null && CanResume(definition);
+        if (definition.Provider != "shell" && !resume)
+          throw new InvalidOperationException("This saved conversation is unavailable. Open Earlier chats to choose one.");
+        next = FollowLogin(row with { Definition = definition with { InitialPrompt = null } }) with
+        { CreationKey = Guid.NewGuid().ToString("N"), State = SessionState.Starting, HasStarted = false, Resume = resume, LeaseIdentity = null };
+        Commit(next, "status");
+      }
+      return WithReplay(await EnsureAsync(next.Resume ? FollowLogin(next) : next, next.Resume, cancellationToken));
+    }
+    finally { gate.Release(); }
+  }
+
+  public async ValueTask ForgetHeldAsync(string id, CancellationToken cancellationToken = default)
+  {
+    await gate.WaitAsync(cancellationToken);
+    try
+    {
+      var row = RawGet(id);
+      if (row.State != SessionState.Held) throw new InvalidOperationException("Choose a not-reopened session.");
+      var observed = await processes.ObserveAsync(row, cancellationToken);
+      if (observed.Presence != ProcessPresence.Dead) throw new InvalidOperationException("This session may still be running. Reopen it before closing it.");
+      // Retain the replay and conversation in history; only retire the held row.
+      Commit(row with { State = SessionState.Exited, LeaseIdentity = null }, "exit");
+    }
+    finally { gate.Release(); }
+  }
+
   public async ValueTask RecoverAsync(CancellationToken cancellationToken = default)
   {
     await gate.WaitAsync(cancellationToken);

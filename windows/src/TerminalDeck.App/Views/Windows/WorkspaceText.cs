@@ -5,7 +5,13 @@ public static class WorkspaceText
 {
   public static string AccountIdentity(string? provider, bool signedIn, string? email, string? name) =>
     string.Equals(provider, "shell", StringComparison.OrdinalIgnoreCase) ? "" :
-    !string.IsNullOrWhiteSpace(name) ? name : signedIn ? "AI account" : "Not signed in";
+    !string.IsNullOrWhiteSpace(name) ? ShortAccount(name) : !string.IsNullOrWhiteSpace(email) ? ShortAccount(email) : signedIn ? "AI account" : "Not signed in";
+
+  public static string ShortAccount(string value) => value.Contains('@') ? value.Split('@')[0] : value;
+
+  public static string HomePath(string path, string home) => path.Equals(home, StringComparison.OrdinalIgnoreCase) ? "~" :
+    path.StartsWith(home.TrimEnd('\\', '/') + "\\", StringComparison.OrdinalIgnoreCase) || path.StartsWith(home.TrimEnd('\\', '/') + "/", StringComparison.OrdinalIgnoreCase)
+      ? "~" + path[home.TrimEnd('\\', '/').Length..] : path;
 
   public static string MiddlePath(string value, double width, Func<string, double> measure)
   {

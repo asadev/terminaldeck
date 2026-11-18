@@ -95,7 +95,7 @@ public sealed partial class ShellWindow
     surface.Batch = work => { renderBatch++; try { work(); } finally { if (--renderBatch == 0) RenderWindows(); } };
     surface.IsModalOpen = () => host == "main" ? IsShellModalOpen(Root.XamlRoot) : detached.TryGetValue(host, out var child) && IsShellModalOpen(child.Root.XamlRoot);
     surface.BrowserIdentity = tab => tab.Kind == "browser" ? browser.ShellIdentity(tab.Subject) : null;
-    surface.ProjectIdentity = tab => Model.Sessions.FirstOrDefault(s => s.Id == tab.Subject)?.ProjectId is { } id && Runtime.Projects.List().FirstOrDefault(p => p.Id == id) is { } project
+    surface.ProjectIdentity = tab => Model.Sessions.FirstOrDefault(s => s.Id == tab.Subject)?.ProjectId is { } id && id != ProjectIdentity.IndependentId && Runtime.Projects.List().FirstOrDefault(p => p.Id == id) is { } project
       ? ShellProjectPicture(project, 14) : null;
     surface.AccountBadge = WindowAccountBadge;
     surface.UsageMeter = WindowUsageMeter;
@@ -132,7 +132,12 @@ public sealed partial class ShellWindow
   {
     var path = WindowFolder(tab);
     var serverId = Runtime.Sessions.FirstOrDefault(s => s.Definition.Id == tab.Subject)?.Definition.ServerId;
-    if (serverId is null) return path;
+    if (serverId is null)
+    {
+      var draft = Model.Sessions.FirstOrDefault(s => s.Id == tab.Subject);
+      var project = Runtime.Projects.List().FirstOrDefault(p => p.Id == draft?.ProjectId && p.Id != ProjectIdentity.IndependentId);
+      return project?.Name ?? WorkspaceText.HomePath(path, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+    }
     var server = Runtime.Servers.List(TerminalDeck.Core.Servers.ServerCaller.Person).FirstOrDefault(s => s.Id == serverId);
     return (server?.Name ?? "Server unavailable") + " · " + path;
   }
@@ -143,7 +148,7 @@ public sealed partial class ShellWindow
     var account = Runtime.Accounts.List().FirstOrDefault(a => a.Id == accountId);
     var provider = Runtime.Sessions.FirstOrDefault(s => s.Definition.Id == tab.Subject)?.Definition.Provider ?? Model.Sessions.FirstOrDefault(s => s.Id == tab.Subject)?.Provider;
     if (!string.Equals(provider, "shell", StringComparison.OrdinalIgnoreCase) && accountId is not null && account is null) return "Unavailable account";
-    return tab.Kind == "chat" && account is not null ? account.Name : WorkspaceText.AccountIdentity(provider, account?.SignedIn == true, account?.Email, account?.Name);
+    return WorkspaceText.AccountIdentity(provider, account?.SignedIn == true, account?.Email, account?.Name);
   }
   private string? WindowAccountBadge(WorkspaceTab tab)
   {
@@ -218,7 +223,7 @@ public sealed partial class ShellWindow
       for (var i = 0; i < values.Length; i++)
       { var at = list.IndexOf(values[i]); if (at < 0) list.Insert(i, values[i]); else if (at != i) list.Move(at, i); }
     }
-    SyncRows(sidebarSessions, sidebar.Sort(rows.Where(r => !IsHistory(r) && !sidebar.IsArchived(r.Id)), r => r.Id).ToArray());
+    SyncRows(sidebarSessions, sidebar.Sort(rows.Where(r => !IsHistory(r) && r.State != "held" && !sidebar.IsArchived(r.Id)), r => r.Id).ToArray());
     SyncRows(archivedSessions, rows.Where(r => r.Presentation == SessionPresentation.Chat && sidebar.IsArchived(r.Id)).ToArray());
     ArchivedSessions.Visibility = archivedSessions.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     ArchivedChatsToggle.Content = (ArchivedChatRows.Visibility == Visibility.Visible ? "⌄ " : "› ") + "Archived chats (" + archivedSessions.Count + ")";
@@ -228,15 +233,16 @@ public sealed partial class ShellWindow
       var row = new Grid(); row.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
       // The same one-line row as the running sessions (DESIGN-SESSION-ROWS.md): type icon and name only.
       var selected = Model.Page == ShellPage.Sessions && Model.Selected == chat;
-      var open = new Button { Content = SidebarSimpleRow(chat.TypeGlyph, chat.Title, SidebarRowLook.NeedsYou(chat.State), selected), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch, Style = (Style)Application.Current.Resources["DeckSidebarActionStyle"] };
+      var open = new Button { Content = SidebarSimpleRow(chat.TypeGlyph, chat.Title, SidebarRowLook.NeedsYou(chat.State), selected, chat.State), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch, Style = (Style)Application.Current.Resources["DeckSidebarActionStyle"] };
       Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(open, chat.Title);
       if (selected) open.SetResourceReference(Control.BackgroundProperty, "DeckSidebarSelectionBrush");
       open.Click += (_, _) => SelectSessionWindow(chat); row.Children.Add(open);
       var restore = new Button { Content = "Restore", Style = (Style)Application.Current.Resources["DeckSidebarActionStyle"], FontSize = 12 };
       restore.Click += (_, _) => SidebarGuard(() => sidebar.ArchiveChat(chat.Id, false)); Grid.SetColumn(restore, 1); row.Children.Add(restore); ArchivedChatRows.Children.Add(row);
     }
+    RenderNotReopenedRows(rows.Where(r => r.State == "held").ToArray());
     RenderCloudSessionRows();
-    EmptySidebar.Visibility = sidebarSessions.Count == 0 && CloudSessionRows.Children.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    EmptySidebar.Visibility = sidebarSessions.Count == 0 && CloudSessionRows.Children.Count == 0 && NotReopenedRows.Children.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     RefreshProjectRows(); SyncNavigation();
   }
   private string renderedProjects = "";
