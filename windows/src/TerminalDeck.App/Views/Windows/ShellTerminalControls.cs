@@ -23,8 +23,9 @@ public sealed partial class ShellWindow
       ToolTipService.SetToolTip(model, context.Model is null ? "Choose the model for this terminal" : "Model from the last reply: " + (context.ModelLabel ?? context.Model));
     }
     void Changed() => controls.DispatcherQueue.TryEnqueue(Refresh);
-    controls.Loaded += (_, _) => { Runtime.Changed += Changed; Refresh(); };
-    controls.Unloaded += (_, _) => Runtime.Changed -= Changed;
+    void UsageChanged(string id) { if (id == tab.Subject) Changed(); }
+    controls.Loaded += (_, _) => { Runtime.Changed += Changed; Runtime.Usage.Changed += UsageChanged; Refresh(); };
+    controls.Unloaded += (_, _) => { Runtime.Changed -= Changed; Runtime.Usage.Changed -= UsageChanged; };
     Refresh();
     async Task Pick(string control, string value)
     {
