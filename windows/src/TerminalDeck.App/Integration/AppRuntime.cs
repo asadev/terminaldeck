@@ -271,6 +271,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
   {
     KeeperSessionTools.Register(Door, () => Keeper);
     new TerminalDeck.Core.Code.CodeMcp(new(), new(), CopyGitHub).Register(Door);
+    new TerminalDeck.Core.Agents.AgentLibraryTools(Projects, Agents, ProjectSessions).Register(Door);
     var projectTools = new ProjectsAgentsMcp(Projects, Agents, ProjectFolders, ProjectSessions, Accounts, ProjectAgentPages);
     chatTools = new ChatMcpTools(Chats, General.NewChatPermission);
     McpToolHandler start = async (c, a, ct) =>

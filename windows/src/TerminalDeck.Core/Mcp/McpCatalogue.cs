@@ -51,6 +51,7 @@ public static class McpCatalogue
     foreach (var spec in TerminalDeck.Core.Code.CodeBackupTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Cloud.CloudProjectSecretFilesTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.WhatsApp.WhatsAppTools.Specs) result[spec.Id] = spec;
+    foreach (var spec in TerminalDeck.Core.Agents.AgentLibraryTools.Specs) result[spec.Id] = spec;
     return result.Values.ToArray();
   }
   public static McpTier EffectiveTier(McpToolSpec spec, JsonElement arguments, bool ownsSession = false)
@@ -70,6 +71,7 @@ public static class McpCatalogue
       "quality.fix" => action == "preview" ? McpTier.Read : McpTier.Alter,
       "accounts.install" => action == "state" ? McpTier.Read : McpTier.Alter,
       "accounts.sign_in_flow" => action is null or "state" ? McpTier.Read : McpTier.Alter,
+      "agents.library" => action is "save" or "assign" ? McpTier.Alter : McpTier.Read,
       "tasks.agents" => arguments.GetProperty("do").GetString() == "list" ? McpTier.Read : McpTier.Alter,
       "remote.workspace" => arguments.TryGetProperty("projects", out _) ? McpTier.Alter : McpTier.Read,
       "mcp.callers" => action == "list" ? McpTier.Read : McpTier.Alter,
