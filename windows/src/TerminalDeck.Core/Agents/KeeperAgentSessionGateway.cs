@@ -31,7 +31,12 @@ public sealed class KeeperAgentSessionGateway(
     Validate(plan);
     if (plan.Mode == "chat") return await chat!(plan, ct);
     var definition = Definition(plan); var row = await terminal(definition, ct);
-    if (row.Definition != definition) throw new InvalidOperationException("The session service returned a different launch. Check the session list before trying again.");
+    // The keeper names a fresh local Claude conversation before spawning it. That
+    // declared identity is the only launch field it may add during confirmation.
+    var confirmed = row.DeclaredConversation && definition.Provider == "claude" && definition.Purpose is null &&
+      definition.ServerId is null && definition.ConversationId is null && Guid.TryParseExact(row.Definition.ConversationId, "D", out _)
+      ? row.Definition with { ConversationId = null } : row.Definition;
+    if (confirmed != definition) throw new InvalidOperationException("The session service returned a different launch. Check the session list before trying again.");
     return new(row.Definition.Id, "terminal");
   }
   public static SessionDefinition Definition(AgentLaunchPlan plan)
