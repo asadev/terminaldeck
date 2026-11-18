@@ -112,7 +112,7 @@ public sealed class HootTests
   public async Task AccountAndPermissionChangesKeepTheBackingChatAndNextTurnUsesNewAccount(string effort)
   {
     await using var f = new Fixture(); await f.Ready();
-    await f.Hoot.ConfigureAsync(f.Hoot.Read().Settings! with { Options = new("fixture", effort) });
+    await f.Hoot.ConfigureAsync(f.Hoot.Read().Settings! with { Options = new("", effort) });
     var first = await f.Say(); f.Complete(first); await Fixture.Wait(f.Hoot, s => !s.Busy);
     var before = f.Hoot.Read(); var account = await f.Accounts.CreateAsync("claude", "Second fixture", TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey);
     await f.Accounts.SetApiStateAsync(account.Id, true, Guid.NewGuid().ToString("N"));
