@@ -606,8 +606,10 @@ internal sealed partial class WorkspaceSurface : Grid
           folderChip = Views.Chat.ChatBar.ProjectChip(folderName);
           if (ProjectIdentity?.Invoke(tab) is null)
           {
-            var folderLabel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
-            folderLabel.Children.Add(new TerminalDeck.App.Views.DeckIcon { Glyph = "\uE8B7", FontSize = 12 }); folderLabel.Children.Add(new TextBlock { Text = folderName, FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis }); folderChip.Content = folderLabel;
+            var label = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
+            label.Children.Add(new TerminalDeck.App.Views.DeckIcon { Glyph = "\uE8B7", FontSize = 12 });
+            label.Children.Add(new TextBlock { Text = folderName, FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis });
+            folderChip.Content = label;
           }
           ToolTipService.SetToolTip(folderChip, folderName); AutomationProperties.SetName(folderChip, "Project folder: " + folderName);
           folderChip.Click += (_, _) => ShowInfo(folderChip); location.Children.Add(folderChip);
