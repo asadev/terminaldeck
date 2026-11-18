@@ -4,6 +4,7 @@ using TerminalDeck.Core.Chats;
 using TerminalDeck.Core.Mcp;
 using TerminalDeck.Core.Settings;
 using TerminalDeck.Core.Storage;
+using TerminalDeck.Core.Tests.Accounts;
 using TerminalDeck.Core.Tests.Chats;
 using TerminalDeck.Core.Tests.Mcp;
 using TerminalDeck.Core.Tests.Sessions;
