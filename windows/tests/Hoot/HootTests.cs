@@ -114,7 +114,12 @@ public sealed class HootTests
     await using var f = new Fixture(); await f.Ready();
     await f.Hoot.ConfigureAsync(f.Hoot.Read().Settings! with { Options = new("", effort) });
     var first = await f.Say(); f.Complete(first); await Fixture.Wait(f.Hoot, s => !s.Busy);
-    var before = f.Hoot.Read(); var account = await f.Accounts.CreateAsync("claude", "Second fixture", TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey);
+    var before = f.Hoot.Read();
+    // Creation resolves blank/auto to launch defaults. Set an explicit reset on
+    // the existing chat, then prove switching keeps that exact effective choice.
+    await f.Chats.SetOptionsAsync(before.ChatId!, f.Chats.Get(before.ChatId!).Definition.Options with { Effort = effort });
+    Assert.Equal(effort, f.Chats.Get(before.ChatId!).Definition.Options.Effort);
+    var account = await f.Accounts.CreateAsync("claude", "Second fixture", TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey);
     await f.Accounts.SetApiStateAsync(account.Id, true, Guid.NewGuid().ToString("N"));
     var updated = before.Settings! with { AccountId = account.Id, PermissionMode = AiPermissionMode.Plan };
     await f.Hoot.ConfigureAsync(updated);
@@ -124,6 +129,32 @@ public sealed class HootTests
     Assert.Equal(account.Id, f.Process.Sent.Last().Chat.Definition.AccountId);
     Assert.Equal(AiPermissionMode.Plan, f.Process.Sent.Last().Chat.Definition.PermissionMode);
     Assert.Equal(effort, f.Process.Sent.Last().Chat.Definition.Options.Effort);
+    f.Complete(next); await Fixture.Wait(f.Hoot, s => !s.Busy);
+  }
+  [Theory]
+  [InlineData("")]
+  [InlineData("auto")]
+  public async Task AccountSwitchKeepsResolvedLaunchEffortEvenWhenTheAppDefaultChanges(string effort)
+  {
+    await using var f = new Fixture(); await f.Ready();
+    await f.Hoot.ConfigureAsync(f.Hoot.Read().Settings! with { Options = new("", effort) });
+    var first = await f.Say(); f.Complete(first); await Fixture.Wait(f.Hoot, s => !s.Busy);
+    var before = f.Hoot.Read();
+    var effective = f.Chats.Get(before.ChatId!).Definition.Options;
+    Assert.Equal("xhigh", effective.Effort);
+    var defaults = new TerminalDeck.Core.Settings.GeneralSettings(new TerminalDeck.Core.Storage.JsonStateStore<TerminalDeck.Core.Settings.GeneralPreferences>(TerminalDeck.Core.Storage.AppDataRoot.Explicit(f.Folder), "general-settings"));
+    defaults.Save(TerminalDeck.Core.Settings.LaunchDefaults.With(defaults.Read(), "claude", effective.Model, "high"));
+    var account = await f.Accounts.CreateAsync("claude", "Resolved effort target", TerminalDeck.Core.Accounts.AccountAuthentication.ApiKey);
+    await f.Accounts.SetApiStateAsync(account.Id, true, Guid.NewGuid().ToString("N"));
+    await f.Hoot.ConfigureAsync(before.Settings! with { AccountId = account.Id, PermissionMode = AiPermissionMode.Plan });
+    Assert.Equal(before.ChatId, f.Hoot.Read().ChatId);
+    Assert.Equal(before.ConversationId, f.Hoot.Read().ConversationId);
+    Assert.Equal(before.Lines, f.Hoot.Read().Lines);
+    Assert.Single(f.Process.Sent);
+    Assert.Equal(effective, f.Chats.Get(before.ChatId!).Definition.Options);
+    var next = await f.Say("Keep the launched effort");
+    Assert.Equal(account.Id, f.Process.Sent.Last().Chat.Definition.AccountId);
+    Assert.Equal(effective, f.Process.Sent.Last().Chat.Definition.Options);
     f.Complete(next); await Fixture.Wait(f.Hoot, s => !s.Busy);
   }
   [Fact] public async Task ArchivedBackingChatKeepsItsSelfControlFence()
