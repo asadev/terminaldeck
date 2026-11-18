@@ -2,13 +2,12 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using TerminalDeck.App.Shell;
-using Windows.Graphics;
 
 namespace TerminalDeck.App.Views;
 
-// A page keeps its original WebView/controller and cookie store. A separate
-// non-activating window gives Chromium a finite drawing surface while the
-// session tab or the owning application window is hidden.
+// A page keeps its original WebView/controller and cookie store. A finite host
+// on that same XamlRoot retains its drawing size while its workspace pane is
+// hidden. WinUI WebView2 cannot move into another window's XamlRoot.
 public sealed partial class BrowserPane
 {
   private static Microsoft.Web.WebView2.Core.CoreWebView2EnvironmentOptions BrowserEnvironmentOptions() => new() { AreBrowserExtensionsEnabled = true, AdditionalBrowserArguments = "--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows" };
@@ -18,17 +17,20 @@ public sealed partial class BrowserPane
   private readonly HashSet<XamlRoot> browserRoots = [];
   private sealed class BrowserParking
   {
-    public Window Window { get; } = new();
+    private readonly Panel owner;
+    private readonly Canvas layer = new() { Width = 1, Height = 1, Opacity = 0, IsHitTestVisible = false, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
     public Grid Host { get; } = new();
-    public BrowserParking(ElementTheme theme)
+    public BrowserParking(XamlRoot xamlRoot, ElementTheme theme)
     {
-      Host.RequestedTheme = theme; Window.Content = Host;
-      var app = Window.AppWindow; app.IsShownInSwitchers = false;
-      var presenter = OverlappedPresenter.Create(); presenter.SetBorderAndTitleBar(false, false); presenter.IsResizable = false; presenter.IsMaximizable = false; presenter.IsMinimizable = false;
-      app.SetPresenter(presenter); app.MoveAndResize(new RectInt32(-32000, -32000, 1280, 800));
-      // Show(false) supplies an HWND without activating it or exposing a tab in Alt-Tab.
-      app.Show(false);
+      owner = xamlRoot.Content as Panel ?? throw new InvalidOperationException("This browser window has no retained page host.");
+      Host.RequestedTheme = theme;
+      // A transparent, noninteractive layer stays loaded on the original root.
+      // Its child has finite bounds; it never covers or captures input from the person.
+      Microsoft.UI.Xaml.Automation.AutomationProperties.SetAccessibilityView(layer, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+      Grid.SetRowSpan(layer, int.MaxValue); Grid.SetColumnSpan(layer, int.MaxValue);
+      layer.Children.Add(Host); owner.Children.Add(layer);
     }
+    public void Close() { layer.Children.Clear(); owner.Children.Remove(layer); }
   }
   private static bool IsDrawn(FrameworkElement element)
   {
@@ -74,16 +76,17 @@ public sealed partial class BrowserPane
     {
     if (shown && parkedPages.Remove(tab.Id, out var parked))
     {
-      parked.Host.Children.Remove(tab.View); slot.Children.Add(tab.View); tab.View.Visibility = Visibility.Visible; parked.Window.Close();
+      parked.Host.Children.Remove(tab.View); slot.Children.Add(tab.View); tab.View.Visibility = Visibility.Visible; parked.Close();
     }
     else if (!shown && !parkedPages.ContainsKey(tab.Id))
     {
-      var parking = new BrowserParking(tab.View.ActualTheme);
+      var parking = new BrowserParking(tab.View.XamlRoot ?? slot.XamlRoot ?? throw new InvalidOperationException("The browser page has no window root."), tab.View.ActualTheme);
       ResizeParking(parking, width, height);
       parking.Host.Loaded += (_, _) => ResizeParking(parking, parking.Host.Width, parking.Host.Height);
-      if (tab.View.Parent is Panel parent) parent.Children.Remove(tab.View);
-      parking.Host.Children.Add(tab.View); tab.View.Visibility = Visibility.Visible;
-      parkedPages[tab.Id] = parking;
+      var previous = tab.View.Parent as Panel; previous?.Children.Remove(tab.View);
+      try { parking.Host.Children.Add(tab.View); }
+      catch { previous?.Children.Add(tab.View); parking.Close(); throw; }
+      tab.View.Visibility = Visibility.Visible; parkedPages[tab.Id] = parking;
     }
     else if (!shown && parkedPages.TryGetValue(tab.Id, out var retained)) ResizeParking(retained, width, height);
     }
@@ -91,10 +94,8 @@ public sealed partial class BrowserPane
   }
   private static void ResizeParking(BrowserParking parking, double width, double height)
   {
-    var scale = parking.Host.XamlRoot?.RasterizationScale ?? 1;
-    if (parking.Host.Width == width && parking.Host.Height == height && parking.Window.AppWindow.Size.Width == (int)Math.Ceiling(width * scale) && parking.Window.AppWindow.Size.Height == (int)Math.Ceiling(height * scale)) return;
+    if (parking.Host.Width == width && parking.Host.Height == height) return;
     parking.Host.Width = width; parking.Host.Height = height;
-    parking.Window.AppWindow.Resize(new SizeInt32((int)Math.Ceiling(width * scale), (int)Math.Ceiling(height * scale)));
   }
   private async Task PrepareBackgroundPageAsync(BrowserTab tab)
   {
@@ -110,7 +111,7 @@ public sealed partial class BrowserPane
   }
   private void CloseBackgroundPage(BrowserTab tab)
   {
-    if (parkedPages.Remove(tab.Id, out var parked)) { parked.Host.Children.Remove(tab.View); parked.Window.Close(); }
+    if (parkedPages.Remove(tab.Id, out var parked)) { parked.Host.Children.Remove(tab.View); parked.Close(); }
     pageSlots.Remove(tab.Id);
   }
 }
