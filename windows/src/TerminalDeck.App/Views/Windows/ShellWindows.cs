@@ -51,6 +51,14 @@ public sealed partial class ShellWindow
     mainSurface = MakeSurface("main"); WorkspaceHeader.Content = mainSurface.Header;
     SessionPicture.Projects = Runtime.Projects;
     BrowserEngineHost.Children.Add(browser);
+    // Browser proof only: the real page rebuild that once moved focus onto a parked page.
+    browser.OpenAgentsAtWorkForProof = async () =>
+    {
+      ShowAgentsForProof(); await Task.Delay(600);
+      static IEnumerable<DependencyObject> Tree(DependencyObject node) { yield return node; for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++) foreach (var child in Tree(VisualTreeHelper.GetChild(node, i))) yield return child; }
+      var atWork = Tree(Agents).OfType<Microsoft.UI.Xaml.Controls.Primitives.ToggleButton>().First(b => Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(b) == "At work view");
+      atWork.Focus(FocusState.Pointer); await Task.Delay(100); atWork.IsChecked = true; await Task.Delay(1200);
+    };
     // The 1x1 engine host keeps the legacy pane's own toolbar in the tree. It took
     // first keyboard focus at launch and showed a stray "Reload page" tooltip over
     // the sidebar; shell browser tabs draw their own toolbar, so collapse this one.

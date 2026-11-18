@@ -2,9 +2,13 @@
   "part": "B",
   "checks": [
     {
-      "project": "src\\TerminalDeck.App\\Views\\Windows\\Tests\\TerminalDeck.Shell.Tests.csproj",
+      "project": "tests\\TerminalDeck.Core.Tests\\TerminalDeck.Core.Tests.csproj",
       "names": [
-        "WorkspaceTabSizingTests"
+        "TerminalDeck.Core.Tests.Browser.BrowserBookmarksTests",
+        "TerminalDeck.Core.Tests.Browser.BrowserLocalPortsTests",
+        "TerminalDeck.Core.Tests.Browser.BrowserTests",
+        "TerminalDeck.Core.Tests.Browser.BrowserWorkspaceTests",
+        "TerminalDeck.Core.Tests.Browser.W13IntegrationTests"
       ]
     }
   ]
