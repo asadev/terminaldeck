@@ -50,7 +50,7 @@ public sealed class BrowserPrivacyPage : StackPanel
     var clearWords = new TextBlock { Text = "Clear…" };
     clearWords.SetResourceReference(TextBlock.ForegroundProperty, "DeckStatusFailedBrush");
     clear.Content = clearWords; AutomationProperties.SetName(clear, "Clear sign-ins and website data");
-    SignInRows = [
+    SignInRows = (FrameworkElement[])[
       SettingsPanel.SettingRow("Keep sign-ins between app launches", "", keep),
       SettingsPanel.SettingRow("Offer to save passwords", "", save),
       SettingsPanel.SettingRow("Profile", "The profile the rows below and the saved passwords belong to.", profile),

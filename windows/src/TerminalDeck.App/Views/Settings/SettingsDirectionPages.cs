@@ -110,7 +110,7 @@ public sealed partial class SettingsPane
       finally { check.IsEnabled = true; }
     };
     updates.Children.Add(check);
-    return DirectionPage([
+    return DirectionPage(((string? Heading, string? Help, FrameworkElement[] Rows)[])[
       ("Sessions", null, rows.ToArray()),
       ("This PC", null, new[] { SettingsPanel.SettingRow("Keep this PC awake while " + TerminalDeck.Core.Brand.Name + " is open", "Prevents idle sleep while the app is open. Closing the app releases its request; Windows still controls manual sleep and lid actions.", Toggle(current.KeepAwake, value => runtime.General.Save(runtime.General.Read() with { KeepAwake = value }))) }),
       ("Updates", null, new[] { SettingsPanel.SettingRow("Check for updates", "", updates) })
@@ -120,7 +120,7 @@ public sealed partial class SettingsPane
   // Notifications (Mac, 15 Nov): one group, three rows. Other saved choices keep working as they are.
   private FrameworkElement NotificationSettings()
   {
-    if (runtime.Notifications is not { } owner) return DirectionPage([(null, null, new[] { SettingsPanel.SettingRow("Notifications are starting…", "", null) })]);
+    if (runtime.Notifications is not { } owner) return DirectionPage(((string? Heading, string? Help, FrameworkElement[] Rows)[])[(null, null, new[] { SettingsPanel.SettingRow("Notifications are starting…", "", null) })]);
     ToggleSwitch Switch(bool value, Func<TerminalDeck.Core.Notifications.NotificationPreferences, bool, TerminalDeck.Core.Notifications.NotificationPreferences> change)
     {
       var toggle = new ToggleSwitch { IsOn = value, OnContent = "", OffContent = "", MinWidth = 40 };
@@ -146,7 +146,7 @@ public sealed partial class SettingsPane
       catch (Exception ex) when (ex is not OutOfMemoryException) { directionStatus.Text = "Windows could not send a test notification. See Privacy."; }
       finally { send.IsEnabled = true; }
     };
-    return DirectionPage([(null, null, new[] {
+    return DirectionPage(((string? Heading, string? Help, FrameworkElement[] Rows)[])[(null, null, new[] {
       SettingsPanel.SettingRow("When a session finishes", "Shows a Windows notification when a session finishes its work.", finished),
       SettingsPanel.SettingRow("Play a sound", "Plays the chosen sound with a notification.", playing),
       SettingsPanel.SettingRow("Test notification", "Sends one test notification to this PC.", send)
@@ -169,7 +169,7 @@ public sealed partial class SettingsPane
     {
       if (!await Windows.System.Launcher.LaunchUriAsync(new Uri("ms-settings:notifications"))) throw new InvalidOperationException("Windows could not open its notification settings.");
     }));
-    return DirectionPage([("This PC's permissions",
+    return DirectionPage(((string? Heading, string? Help, FrameworkElement[] Rows)[])[("This PC's permissions",
       "Windows decides what " + TerminalDeck.Core.Brand.Name + " may do on this PC. Open takes you to the place in Windows Settings where you can change it.",
       new[] { SettingsPanel.SettingRow("Notifications", "", controls) })]);
   }
@@ -218,7 +218,7 @@ public sealed partial class SettingsPane
       });
       parts.Children.Add(part);
     }
-    return DirectionPage([
+    return DirectionPage(((string? Heading, string? Help, FrameworkElement[] Rows)[])[
       ("New sessions start with", "Shared with Coding AIs. Used when an agent or task has no explicit choice; running sessions keep their choices.", AgentLaunchDefaultRows()),
       ("Defaults", null, new[] {
         SettingsPanel.SettingRow("Helper AI", "The coding AI used when a hand asks for help.", helper),
@@ -373,7 +373,7 @@ public sealed partial class SettingsPane
     // Every row inside its group's card, one line each (15 Nov).
     var privacy = PrivacyBrowser is { } privacyBrowser ? new BrowserPrivacyPage(privacyBrowser) : null;
     if (privacy is not null) profiles.AddRange(privacy.SignInRows);
-    var result = DirectionPage([("Pages", null, rows.ToArray()),
+    var result = DirectionPage(((string? Heading, string? Help, FrameworkElement[] Rows)[])[("Pages", null, rows.ToArray()),
       ("Cookies and sign-ins", "Each profile is a separate set of logins and cookies. Shared tabs keep sign-ins between app launches.", profiles.ToArray())], bottom: privacy);
     if (loadProblem is not null) directionStatus.Text = loadProblem;
     return result;
@@ -391,7 +391,7 @@ public sealed partial class SettingsPane
       rows.Add(SettingsPanel.SettingRow("Connect a task system", "Choose an existing HTTP MCP server that offers tasks.", DirectionAction("Connect…", () => EditTaskSystemAsync(null))));
     }
     else rows.Add(SettingsPanel.SettingRow("Connected task systems", "Task services are starting. Reopen this page when they are ready.", null));
-    return DirectionPage([
+    return DirectionPage(((string? Heading, string? Help, FrameworkElement[] Rows)[])[
       ("Task agents", null, new[] { SettingsPanel.SettingRow("Agent defaults", "Shared instructions, helper AI and hand limits live in Agents.", DirectionAction("Agents", () => { select("agent-defaults"); return Task.CompletedTask; })) }),
       ("Connected task systems", null, rows.ToArray())
     ]);

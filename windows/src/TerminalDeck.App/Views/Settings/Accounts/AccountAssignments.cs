@@ -32,7 +32,7 @@ public sealed partial class SettingsPane
     switchAll.Click += async (_, _) => await ShowBulkSwitchAsync(providers[picker.SelectedIndex]);
     // Every row inside a card (15 Nov): the choices in one card, the uses in the next.
     var rows = new StackPanel();
-    stack.Children.Add(Settings.SettingsPanel.GroupRows([
+    stack.Children.Add(Settings.SettingsPanel.GroupRows((FrameworkElement[])[
       Settings.SettingsPanel.SettingRow("AI", "", picker),
       Padded(filter),
       Padded(switchAll)]));

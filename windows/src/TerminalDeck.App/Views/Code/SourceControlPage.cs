@@ -110,8 +110,8 @@ public sealed class SourceControlPage : CodePage
     var kind = CodeUi.Words(GitRules.ChangeLabel(file.Kind, file.Code)[..1], 11, true);
     ToolTipService.SetToolTip(kind, GitRules.ChangeLabel(file.Kind, file.Code));
     UIElement toggle = group == GitFileGroup.Staged
-      ? CodeUi.IconAction("", "Unstage " + file.Path, () => ChangeAsync(root, () => git.UnstageAsync(root.Folder, [file.Path])))
-      : CodeUi.IconAction("", "Stage " + file.Path, () => ChangeAsync(root, () => git.StageAsync(root.Folder, [file.Path])));
+      ? CodeUi.IconAction("", "Unstage " + file.Path, () => ChangeAsync(root, () => git.UnstageAsync(root.Folder, (string[])[file.Path])))
+      : CodeUi.IconAction("", "Stage " + file.Path, () => ChangeAsync(root, () => git.StageAsync(root.Folder, (string[])[file.Path])));
     var cells = CodeUi.Columns((names, CodeUi.Star), (counts, CodeUi.Auto), (kind, CodeUi.Auto), (toggle, CodeUi.Auto));
     var isSelected = selected is { } s && s.RootKey == root.Key && s.File.Id == file.Id;
     var row = CodeUi.Row(cells, GitRules.RowTitle(file), isSelected);
@@ -231,8 +231,8 @@ public sealed class SourceControlPage : CodePage
       stack.Children.Add(new ScrollViewer { Content = lines, HorizontalScrollMode = ScrollMode.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
     }
     var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-    if (file.Group != GitFileGroup.Staged) actions.Children.Add(CodeUi.Action("Stage", () => ChangeAsync(root, () => git.StageAsync(root.Folder, [file.Path])), glyph: ""));
-    else actions.Children.Add(CodeUi.Action("Unstage", () => ChangeAsync(root, () => git.UnstageAsync(root.Folder, [file.Path])), glyph: ""));
+    if (file.Group != GitFileGroup.Staged) actions.Children.Add(CodeUi.Action("Stage", () => ChangeAsync(root, () => git.StageAsync(root.Folder, (string[])[file.Path])), glyph: ""));
+    else actions.Children.Add(CodeUi.Action("Unstage", () => ChangeAsync(root, () => git.UnstageAsync(root.Folder, (string[])[file.Path])), glyph: ""));
     stack.Children.Insert(1, actions);
     var card = CodeUi.Card(stack, 12); card.VerticalAlignment = VerticalAlignment.Stretch; return card;
   }

@@ -5,7 +5,7 @@ internal sealed record DeckIconDefinition(string Name, string MacSymbol, string 
 
 internal static class DeckIconCatalog
 {
-  internal static IReadOnlyList<DeckIconDefinition> All { get; } = [
+  internal static IReadOnlyList<DeckIconDefinition> All { get; } = (DeckIconDefinition[])[
     new("terminal", "terminal", "\uE756", "M3,2.5 H13 Q14.5,2.5 14.5,4 V12 Q14.5,13.5 13,13.5 H3 Q1.5,13.5 1.5,12 V4 Q1.5,2.5 3,2.5 Z M4.5,5.5 L7,8 L4.5,10.5 M9,10.5 H11.5"),
     new("chat", "bubble.left", "\uE8F2 \uE90A", "M4,2.5 H12 Q14.5,2.5 14.5,5 V9.5 Q14.5,12 12,12 H6 L2.5,14 V11 Q1.5,10.5 1.5,9 V5 Q1.5,2.5 4,2.5 Z"),
     new("split", "rectangle.split.2x1", "\uE89F", "M3,2.5 H13 Q14.5,2.5 14.5,4 V12 Q14.5,13.5 13,13.5 H3 Q1.5,13.5 1.5,12 V4 Q1.5,2.5 3,2.5 Z M8,2.5 V13.5"),

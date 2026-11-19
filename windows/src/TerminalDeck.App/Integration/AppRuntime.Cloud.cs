@@ -109,7 +109,7 @@ public sealed partial class AppRuntime
   {
     var folder = CloudAccountFolder(subject);
     CloudProjectFolders.Installed ??= new CloudProjectFolders(Path.Combine(Root.DirectoryPath, "cloud", "project-folders.json"),
-      Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), [Root.DirectoryPath]);
+      Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), (string[])[Root.DirectoryPath]);
     var trustMode = new CloudTrustModeStore(WindowsCloudTrustStore.TrustMode(Root));
     CloudMemoryAdapter? memory = null;
     var records = new CloudRecordsForAccount(folder, subject, deviceId, Projects, Agents, CloudProjectFolders.Installed,
@@ -129,11 +129,11 @@ public sealed partial class AppRuntime
     // 7C-4: tasks and settings, in their own record store (the Mac keeps them apart from projects and agents).
     var kinds = new CloudKindsForAccount(folder, subject, deviceId, TerminalDeck.Core.Tasks.TaskStore.At(Root), Projects,
       CloudSettingsOwner.ForWindows(General, TerminalAppearance), () => trustMode.Load() == CloudTrustMode.Account,
-      settingFamilies: [WhatsAppSettings.CloudFamily()]);
+      settingFamilies: (CloudSettingFamily[])[WhatsAppSettings.CloudFamily()]);
     kinds.ConfigureDeleteRule(announce.DeleteRuleIsOpen, CloudDeviceName, () => CloudSync?.ServiceNow);
     // 7C-3: AI instruction files last (AppRuntime.CloudBootFiles.cs).
     var bootFiles = (CloudBootFilesAdapter)CloudBootFilesOwner(subject, deviceId, () => trustMode.Load() == CloudTrustMode.Account, announce);
-    var owners = new List<ICloudSyncAdapter>([.. records.Adapters, memory, .. kinds.Adapters, bootFiles]);
+    var owners = new List<ICloudSyncAdapter>((ICloudSyncAdapter[])[.. records.Adapters, memory, .. kinds.Adapters, bootFiles]);
     // Lane F: the Cloud folder and artifacts, on the account's ONE Bin.
     owners.AddRange(CloudFilesOwners(subject, deviceId, announce, CloudBin.ForAccount(folder), () => CloudSync?.ServiceNow));
     StartCloudHousekeeping(announce, folder);

@@ -40,7 +40,7 @@ public sealed class DevicePage : UserControl
     Tag = device?.Name ?? "Device";
     if (device is null || !AccountPages.SignedIn(snapshot))
     {
-      body.Children.Add(SettingsPanel.GroupRows([SettingsPanel.LinkRow("This device is no longer in your account", null, null, null, () => open("profile"))]));
+      body.Children.Add(SettingsPanel.GroupRows((FrameworkElement[])[SettingsPanel.LinkRow("This device is no longer in your account", null, null, null, () => open("profile"))]));
       return;
     }
     var name = new TextBox { Text = device.Name, Width = 220, MinHeight = 24, Padding = new(6, 1, 6, 1), BorderThickness = new(0), CornerRadius = new(6), FontSize = 13, TextAlignment = TextAlignment.Right, MaxLength = 128, IsEnabled = !working };
@@ -83,7 +83,7 @@ public sealed class DevicePage : UserControl
     {
       var trust = new Button { Content = CloudPageText.TrustNew, IsEnabled = !working };
       trust.Click += async (_, _) => await CompareAndTrustAsync(deviceId);
-      body.Children.Add(SettingsPanel.GroupRows([SettingsPanel.SettingRow("Trust this device", "Its changes wait until you trust it here. Compare its code on both devices first.", trust)]));
+      body.Children.Add(SettingsPanel.GroupRows((FrameworkElement[])[SettingsPanel.SettingRow("Trust this device", "Its changes wait until you trust it here. Compare its code on both devices first.", trust)]));
     }
     if (pressProblem is { } problem) body.Children.Add(AccountPages.Problem(problem));
   }

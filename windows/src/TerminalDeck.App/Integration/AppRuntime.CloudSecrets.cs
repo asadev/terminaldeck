@@ -62,7 +62,7 @@ public sealed partial class AppRuntime
       deleteGate: () => CloudSecretsDeleteRuleOpen(), deleteStamp: serviceNow, deleteDevice: () => deviceId, deleteMacName: DeviceName,
       witness: CloudDeleteWitnessSlot.Shared);
     CloudProjectSecretFilesHolder.Shared.Store = files; CloudProjectSecretFilesHolder.Shared.StateRoot = fileState;
-    cloudSecretStores = [serversOwner, api, mcp, ssh, whatsapp, files];
+    cloudSecretStores = (ICloudSecretsStore[])[serversOwner, api, mcp, ssh, whatsapp, files];
     return cloudSecretStores;
   }
 }

@@ -218,7 +218,7 @@ internal static class W7Proof
     var root = AppDataRoot.Explicit(Path.Combine(window.Runtime.Root.DirectoryPath, "fake-chat")); Directory.CreateDirectory(root.DirectoryPath);
     var tools = Path.Combine(root.DirectoryPath, "tools"); var entry = Path.Combine(tools, "node_modules", "@anthropic-ai", "claude-code", "cli.js"); Directory.CreateDirectory(Path.GetDirectoryName(entry)!);
     File.Copy(Path.Combine(AppContext.BaseDirectory, "Verification", "w7-fake-claude.cjs"), entry, true);
-    var accounts = new AccountService(new JsonStateStore<AccountState>(root, "accounts"), [new FakeAccount()]); var account = accounts.List().FirstOrDefault() ?? await accounts.CreateAsync("claude", "Fake CLI · no real sign-in");
+    var accounts = new AccountService(new JsonStateStore<AccountState>(root, "accounts"), (IAccountProvider[])[new FakeAccount()]); var account = accounts.List().FirstOrDefault() ?? await accounts.CreateAsync("claude", "Fake CLI · no real sign-in");
     var process = new WindowsChatProcessKeeper(root, window.Runtime.KeeperExecutable, tools, KeeperCredentials.GetOrCreate(root));
     await using var core = new ChatSessions(new ChatHistory(root), process, accounts);
     using var stop = new CancellationTokenSource(); var serving = new ChatSessionsPipeServer(root, core, KeeperCredentials.GetOrCreate(root)).RunAsync(stop.Token);

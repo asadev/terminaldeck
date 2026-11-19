@@ -134,7 +134,7 @@ public sealed record WhatsAppRowLook(string Name, WhatsAppDot Dot, string? Secon
     // A paused row says "Paused" before its pop-up; otherwise the waiting words, or who answers.
     var secondary = refused is not null ? null : agent.Sending ? agent.State.Words() ?? agent.AnsweredElsewhereWords : WhatsAppWords.Paused;
     return new(agent.Name, dot, secondary, refused, refused is null, agent.Receiver.Title,
-      [agent.Sending ? WhatsAppWords.Pause : WhatsAppWords.Resume, WhatsAppWords.Rename, WhatsAppWords.ReplaceKey, MenuSeparator, WhatsAppWords.Remove]);
+      (string[])[agent.Sending ? WhatsAppWords.Pause : WhatsAppWords.Resume, WhatsAppWords.Rename, WhatsAppWords.ReplaceKey, MenuSeparator, WhatsAppWords.Remove]);
   }
 }
 
@@ -149,7 +149,7 @@ public static class WhatsAppMenu
 {
   public static IReadOnlyList<WhatsAppMenuEntry> Entries(IReadOnlyList<WhatsAppAgentProfile> agents, WhatsAppReceiver here)
   {
-    if (agents.Count == 0) return [new(WhatsAppMenuEntryKind.AddAgent, WhatsAppWords.AddFromMenu)];
+    if (agents.Count == 0) return (WhatsAppMenuEntry[])[new(WhatsAppMenuEntryKind.AddAgent, WhatsAppWords.AddFromMenu)];
     var entries = agents.Select(a => new WhatsAppMenuEntry(WhatsAppMenuEntryKind.Agent, a.Name, a.Id, a.Receiver.SameTarget(here))).ToList();
     entries.Add(new(WhatsAppMenuEntryKind.Separator, ""));
     if (agents.Attached(here).FirstOrDefault() is { } attached)

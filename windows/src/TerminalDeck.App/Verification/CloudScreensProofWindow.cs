@@ -155,7 +155,7 @@ internal sealed partial class CloudScreensProofWindow : Window
     await Page("cloud-chat", async () =>
     {
       var machines = new Dictionary<string, CloudSessionsRead.Machine> { ["m-studio"] = new("m-studio", "Studio Mac", false, true, "macos"), ["m-air"] = new("m-air", "MacBook Air", true, true, "macos") };
-      var rows = SidebarCloudRows.From([
+      var rows = SidebarCloudRows.From((global::TerminalDeck.Core.Cloud.CloudSessionsRead.Row[])[
         new("r-off", "s-off", "Fix the login page", 2, Kind: "chat", Machine: "m-studio"),
         new("r-on", "s-on", "Write the release notes", 1, Kind: "chat", Machine: "m-air")], machines, []);
       foreach (var row in rows)
@@ -212,7 +212,7 @@ internal sealed partial class CloudScreensProofWindow : Window
     {
       ("Plan the launch", true, false, true), ("Fix the login page", true, true, false), ("Build the website", false, false, false), ("PowerShell", false, false, false)
     };
-    var other = SidebarCloudRows.From([new("r1", "s9", "Review the store listing", 1, Kind: "terminal", Machine: "m1")],
+    var other = SidebarCloudRows.From((global::TerminalDeck.Core.Cloud.CloudSessionsRead.Row[])[new("r1", "s9", "Review the store listing", 1, Kind: "terminal", Machine: "m1")],
       new Dictionary<string, CloudSessionsRead.Machine> { ["m1"] = new("m1", "Studio Mac", true, true, "macos") }, []);
     foreach (var (name, chat, needs, selected) in sessions.Concat(other.Select(o => (o.Name, o.Chat, o.NeedsYou, false))))
     {
@@ -255,7 +255,7 @@ internal sealed partial class CloudScreensProofWindow : Window
     long Ago(double hours) => now - (long)(hours * 3_600_000);
     CloudContentsRow R(CloudContentsKind kind, string name, string[] folder, double hours, long? bytes = null, string? detail = null, bool secret = false) =>
       new(kind + ":" + name, kind, name, folder, Ago(hours), "Studio Mac", bytes, CloudItemState.InSync, detail, IsSecret: secret);
-    var memory = new ProofSource(CloudContentsKind.Memory, [
+    var memory = new ProofSource(CloudContentsKind.Memory, (CloudContentsRow[])[
       R(CloudContentsKind.Memory, "Plan for the launch", ["Website"], 1, 2_400), R(CloudContentsKind.Memory, "Design review", ["Website"], 2, 1_100),
       R(CloudContentsKind.Memory, "Old pricing ideas", ["Website"], 30, 800), R(CloudContentsKind.Memory, "Kept notes", ["Website"], 50, 600),
       R(CloudContentsKind.Memory, "Who does what", ["Website", "Lead"], 5, 900), R(CloudContentsKind.Memory, "Store screenshots", ["Mobile app"], 20, 3_000),
@@ -263,26 +263,26 @@ internal sealed partial class CloudScreensProofWindow : Window
       marks: [("Memory:Old pricing ideas", CloudLocalMark.NotOnThisPc), ("Memory:Kept notes", CloudLocalMark.OnlyOnThisPc)],
       groups: withBin ? Groups(now) : []);
     contents.Register(memory);
-    contents.Register(new ProofSource(CloudContentsKind.Projects, [R(CloudContentsKind.Projects, "Website", [], 3), R(CloudContentsKind.Projects, "Mobile app", [], 9)]));
-    contents.Register(new ProofSource(CloudContentsKind.Agents, [R(CloudContentsKind.Agents, "Lead", ["Website"], 4), R(CloudContentsKind.Agents, "Reviewer", ["Website"], 8)], cloudOnly: false));
-    contents.Register(new ProofSource(CloudContentsKind.Tasks, [
+    contents.Register(new ProofSource(CloudContentsKind.Projects, (CloudContentsRow[])[R(CloudContentsKind.Projects, "Website", [], 3), R(CloudContentsKind.Projects, "Mobile app", [], 9)]));
+    contents.Register(new ProofSource(CloudContentsKind.Agents, (CloudContentsRow[])[R(CloudContentsKind.Agents, "Lead", ["Website"], 4), R(CloudContentsKind.Agents, "Reviewer", ["Website"], 8)], cloudOnly: false));
+    contents.Register(new ProofSource(CloudContentsKind.Tasks, (CloudContentsRow[])[
       R(CloudContentsKind.Tasks, "Write the launch post", [], 1, detail: "To do"), R(CloudContentsKind.Tasks, "Fix the login page", [], 3, detail: "In progress"),
       R(CloudContentsKind.Tasks, "Ship version 1.2", [], 30, detail: "Done")], cloudOnly: false));
-    contents.Register(new ProofSource(CloudContentsKind.Settings, [
+    contents.Register(new ProofSource(CloudContentsKind.Settings, (CloudContentsRow[])[
       R(CloudContentsKind.Settings, "Appearance", ["General"], 40, detail: "Dark"), R(CloudContentsKind.Settings, "Sounds", ["Notifications"], 60, detail: "On"),
       R(CloudContentsKind.Settings, "Reopen sessions after a restart", ["General"], 70, detail: "On")], removals: false));
-    contents.Register(new ProofSource(CloudContentsKind.Passwords, [
+    contents.Register(new ProofSource(CloudContentsKind.Passwords, (CloudContentsRow[])[
       R(CloudContentsKind.Passwords, "github.com · sam.rivera", [], 12, secret: true), R(CloudContentsKind.Passwords, "store.example.com · sam", [], 48, secret: true),
       R(CloudContentsKind.Passwords, "Mobile app .env", [], 72, secret: true)]));
     // C-6: every place has something to show.
-    contents.Register(new ProofSource(CloudContentsKind.InstructionFiles, [
+    contents.Register(new ProofSource(CloudContentsKind.InstructionFiles, (CloudContentsRow[])[
       R(CloudContentsKind.InstructionFiles, "CLAUDE.md", ["Website"], 6, 3_200), R(CloudContentsKind.InstructionFiles, "AGENTS.md", ["Mobile app"], 30, 1_400)]));
-    contents.Register(new ProofSource(CloudContentsKind.Artifacts, [
+    contents.Register(new ProofSource(CloudContentsKind.Artifacts, (CloudContentsRow[])[
       R(CloudContentsKind.Artifacts, "Launch checklist.html", [], 4, 18_000), R(CloudContentsKind.Artifacts, "Pricing table.html", [], 28, 9_500)]));
-    contents.Register(new ProofSource(CloudContentsKind.CloudFolder, [
+    contents.Register(new ProofSource(CloudContentsKind.CloudFolder, (CloudContentsRow[])[
       R(CloudContentsKind.CloudFolder, "Logo.svg", ["Designs"], 10, 12_000), R(CloudContentsKind.CloudFolder, "Brand colours.pdf", ["Designs"], 34, 220_000),
       R(CloudContentsKind.CloudFolder, "Interview notes.txt", [], 52, 4_100)]));
-    contents.Register(new ProofSource(CloudContentsKind.Sessions, [
+    contents.Register(new ProofSource(CloudContentsKind.Sessions, (CloudContentsRow[])[
       R(CloudContentsKind.Sessions, "Fix the login page", ["Website"], 1), R(CloudContentsKind.Sessions, "Write the release notes", ["Mobile app"], 3),
       R(CloudContentsKind.Sessions, "Plan the launch", ["Website"], 24)], cloudOnly: false));
     return contents;
@@ -292,7 +292,7 @@ internal sealed partial class CloudScreensProofWindow : Window
   {
     CloudDeleteItem Note(string name, string place = "p-website") => new("bin:" + place + ":" + name, "memory", name, place);
     CloudBinGroup G(string id, CloudDeleteBy by, string device, double hours, params CloudDeleteItem[] items) => new(id, by, device, null, null, now - (long)(hours * 3_600_000), items);
-    return [
+    return (CloudBinGroup[])[
       G("g1", CloudDeleteBy.Person, "Studio Mac", 2, Note("Old landing copy")),
       G("g2", CloudDeleteBy.Ai, "MacBook Air", 5, Note("Draft FAQ")),
       G("g3", CloudDeleteBy.Person, "Studio Mac", 26, [.. Enumerable.Range(1, 12).Select(i => Note("Note " + i))]),

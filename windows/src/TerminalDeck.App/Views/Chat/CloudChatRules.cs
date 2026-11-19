@@ -40,7 +40,7 @@ public static class CloudChatRules
   }
 
   /// The permission card's two answers; nothing else is sent to the other machine.
-  public static readonly IReadOnlyList<string> PermissionAnswers = ["Deny", "Allow"];
+  public static readonly IReadOnlyList<string> PermissionAnswers = (string[])["Deny", "Allow"];
 
   private static string? Text(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 }

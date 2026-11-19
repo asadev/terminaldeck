@@ -206,7 +206,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     // Consecutive tool steps fold into one row. While Find has words, every step stands alone so a
     // match can be scrolled to.
     var segments = searchBar.Visibility == Visibility.Visible && searchBox.Text.Length > 0
-      ? visible.Select(r => new ChatSegment<ChatRow>([r], false)).ToArray() : ChatToolRuns.Segments(visible);
+      ? visible.Select(r => new ChatSegment<ChatRow>((ChatRow[])[r], false)).ToArray() : ChatToolRuns.Segments(visible);
     foreach (var segment in segments)
     {
       if (segment.IsRun) { AddToolRun(segment.Items, desired); continue; }

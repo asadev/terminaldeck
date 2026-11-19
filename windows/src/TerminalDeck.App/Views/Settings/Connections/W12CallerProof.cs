@@ -32,14 +32,14 @@ public sealed partial class ShellWindow
       rename.Invoke(); await Task.Delay(100);
       var dialog = CallerDialog(); SettingsTree(dialog).OfType<TextBox>().Single().Text = "Audit renamed app";
       InvokeW12(dialog, "Save"); await Task.Delay(150);
-      check("Renaming an app key keeps its existing credential", new CallerConnectionFiles(dataRoot).Names([firstId])[firstId] == "Audit renamed app" && Runtime.Door.Authenticate(first.Token) == first.Id);
+      check("Renaming an app key keeps its existing credential", new CallerConnectionFiles(dataRoot).Names((string[])[firstId])[firstId] == "Audit renamed app" && Runtime.Door.Authenticate(first.Token) == first.Id);
       await Runtime.Door.CallAsync(first.Id, "mcp.callers", JsonSerializer.SerializeToElement(new { action = "rename", name = "Audit MCP name" }));
       var listed = await Runtime.Door.CallAsync(first.Id, "mcp.callers", JsonSerializer.SerializeToElement(new { action = "list" }));
       check("App-key name reads and rename work through the real MCP door without returning the token", listed.GetArrayLength() == 1 && listed[0].GetProperty("Name").GetString() == "Audit MCP name" && !listed.GetRawText().Contains(first.Token, StringComparison.Ordinal));
       var refused = false;
       try { await Runtime.Door.CallAsync(other.Id, "mcp.callers", JsonSerializer.SerializeToElement(new { action = "rename", callerId = firstId, name = "Wrong app" })); }
       catch (McpRefusal) { refused = true; }
-      check("An app cannot rename another app's key", refused && new CallerConnectionFiles(dataRoot).Names([firstId])[firstId] == "Audit MCP name");
+      check("An app cannot rename another app's key", refused && new CallerConnectionFiles(dataRoot).Names((string[])[firstId])[firstId] == "Audit MCP name");
       await settingsPanel.SelectAsync("outside-ai-apps");
       await CaptureSettingsAsync(settingsWindowRoot!, Path.Combine(output, "outside-app-keys-dark.png"));
       await InvokeCallerMenuAsync("Audit MCP name", "Revoke…"); dialog = CallerDialog();

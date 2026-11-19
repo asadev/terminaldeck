@@ -73,7 +73,7 @@ public sealed class SignInPage : UserControl
       catch (Exception error) when (error is not OutOfMemoryException) { problem = "Could not sign out. Try again."; }
       finally { working = false; Render(); }
     };
-    body.Children.Add(SettingsPanel.GroupRows([SettingsPanel.SettingRow("", "", signOut)]));
+    body.Children.Add(SettingsPanel.GroupRows((FrameworkElement[])[SettingsPanel.SettingRow("", "", signOut)]));
     if (problem is not null) body.Children.Add(AccountPages.Problem(problem));
   }
 

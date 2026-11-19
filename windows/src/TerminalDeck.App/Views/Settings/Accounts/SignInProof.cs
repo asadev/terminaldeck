@@ -33,7 +33,7 @@ public sealed partial class ShellWindow
       Check("TEST Default stays in scratch home", home.StartsWith(dataRoot.DirectoryPath, StringComparison.OrdinalIgnoreCase) && account.HomeId != AccountHomes.ExistingLogin);
       var status = await Runtime.Accounts.InstallationAsync(account.Id);
       Check("Real Claude installation and version found", status.Installed == true && status.Version is not null);
-      var launch = planner.Resolve("claude", ["--version"], new Dictionary<string, string>(), dataRoot.DirectoryPath);
+      var launch = planner.Resolve("claude", (string[])["--version"], new Dictionary<string, string>(), dataRoot.DirectoryPath);
       Check("Official native Claude path found", string.Equals(launch.Executable, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "claude.exe"), StringComparison.OrdinalIgnoreCase));
       await File.WriteAllTextAsync(Path.Combine(output, "detection.json"), JsonSerializer.Serialize(new { executable = launch.Executable, status.Version, scratchHome = home }));
       var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

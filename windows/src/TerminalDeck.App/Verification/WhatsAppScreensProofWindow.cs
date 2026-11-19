@@ -93,8 +93,8 @@ internal sealed class WhatsAppScreensProofWindow : Window
   ];
 
   private static WhatsAppReceiverChoices Choices() => WhatsAppReceiverChoices.From(
-    [("proof-lead", "Lead", "Website"), ("proof-review", "Reviewer", "Website"), ("proof-store", "Store writer", "Mobile app")],
-    [("s-login", "Fix the login page"), ("s-notes", "Write the release notes"), ("s-site", "Build the website")]);
+    ((string Id, string Name, string Project)[])[("proof-lead", "Lead", "Website"), ("proof-review", "Reviewer", "Website"), ("proof-store", "Store writer", "Mobile app")],
+    ((string Id, string Name)[])[("s-login", "Fix the login page"), ("s-notes", "Write the release notes"), ("s-site", "Build the website")]);
 
   private static async Task<WhatsAppAgentsStore> Store(IEnumerable<WhatsAppAgentProfile> agents)
   {

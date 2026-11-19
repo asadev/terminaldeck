@@ -90,7 +90,7 @@ public sealed partial class ProfilePage
     manage.MinWidth = 28; manage.Padding = new(4); manage.IsEnabled = !sentRemovals.Contains(device.DeviceId);
     AutomationProperties.SetAutomationId(manage, pending ? "settings.profile.device.undo" : "settings.profile.device.menu");
     AutomationProperties.SetName(manage, pending ? "Undo sign out of " + device.Name : "Manage " + device.Name);
-    if (pending) manage.Click += (_, _) => CancelRemoval([device]);
+    if (pending) manage.Click += (_, _) => CancelRemoval((CloudDeviceRow[])[device]);
     else
     {
       var menu = DeckMenu.CreateFor(this);
@@ -106,7 +106,7 @@ public sealed partial class ProfilePage
       if (!device.ThisDevice)
       {
         var remove = new MenuFlyoutItem { Text = account.Snapshot.DeviceRows.Any(d => d.DeviceId == device.DeviceId) ? "Sign out" : "Remove" };
-        remove.Click += (_, _) => QueueRemoval([device]);
+        remove.Click += (_, _) => QueueRemoval((CloudDeviceRow[])[device]);
         menu.Items.Add(remove);
       }
       manage.Flyout = menu;

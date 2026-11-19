@@ -83,7 +83,7 @@ public sealed partial class AppRuntime
     if (Artifacts is not null) Artifacts.Changed += FeedCloudArtifacts;
     Projects.Changed += FeedProjectFolderRoots;
     FeedCloudArtifacts();
-    return [owner, artifacts.Owner, projectFolders];
+    return (ICloudSyncAdapter[])[owner, artifacts.Owner, projectFolders];
   }
 
   /// Project key -> this PC's folder of that project: the instruction files' project mapping (one folder per project),

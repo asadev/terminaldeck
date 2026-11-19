@@ -30,7 +30,7 @@ internal static class ServersParityFixture
   private sealed class FixtureHost(nint windowHandle) : IServerPageHost
   {
     public nint WindowHandle => windowHandle;
-    public IReadOnlyList<ServerAiAppChoice> AiApps => [new("parity-hoot", "Hoot")];
+    public IReadOnlyList<ServerAiAppChoice> AiApps => (ServerAiAppChoice[])[new("parity-hoot", "Hoot")];
     public void OpenSession(string id) => throw new ServerRefusal("Appearance fixture cannot open real sessions.");
     public Task OpenWebsiteAsync(string url) => throw new ServerRefusal("Appearance fixture cannot open external websites.");
   }
@@ -54,20 +54,20 @@ internal static class ServersParityFixture
     ], false));
     public ValueTask<ServerFileContent> ReadAsync(string id, string path, ServerCaller caller, CancellationToken ct = default) => ValueTask.FromResult(new ServerFileContent(path, Convert.ToBase64String(Encoding.UTF8.GetBytes("# Deployment\n\nAppearance fixture. No server connected.\n")), false));
     public ValueTask<IReadOnlyList<ServerApp>> AppsAsync(string id, ServerCaller caller, CancellationToken ct = default) => ValueTask.FromResult<IReadOnlyList<ServerApp>>(
-    [
+    (ServerApp[])[
       new("parity-web", "Web", "example/web:stable", "running", "Up 3 days", "127.0.0.1:8080 → 80/tcp"),
       new("parity-api", "API", "example/api:stable", "running", "Up 3 days", "127.0.0.1:3000 → 3000/tcp"),
       new("parity-worker", "Worker", "example/worker:stable", "exited", "Exited 2 hours ago", "")
     ]);
     public ValueTask<ServerHealth> HealthAsync(string id, ServerCaller caller, CancellationToken ct = default) => ValueTask.FromResult(new ServerHealth(27, 4L * 1024 * 1024 * 1024, 16L * 1024 * 1024 * 1024, 40L * 1024 * 1024 * 1024, 100L * 1024 * 1024 * 1024, 1.1, .8, .7, 8, DateTimeOffset.UtcNow));
     public ValueTask<IReadOnlyList<ServerCodingAi>> CodingAisAsync(string id, ServerCaller caller, CancellationToken ct = default) => ValueTask.FromResult<IReadOnlyList<ServerCodingAi>>(
-    [
+    (ServerCodingAi[])[
       new("claude", "Claude Code", true, "/home/deploy/.local/bin/claude", "2.1.0", "yes", false, null, false),
       new("codex", "Codex", true, "/home/deploy/.local/bin/codex", "0.99.0", "no", false, null, true),
       new("gemini", "Gemini", false, "", "", "unknown", true, "Install for this SSH user. Sign-in stays on the server.", false, true, false)
     ]);
     public ValueTask<IReadOnlyList<ServerWebsite>> WebsitesAsync(string id, ServerCaller caller, CancellationToken ct = default) => ValueTask.FromResult<IReadOnlyList<ServerWebsite>>(
-    [
+    (ServerWebsite[])[
       new("site:www.example.test", "www.example.test", "nginx · HTTPS", "https://www.example.test/"),
       new("site:api.example.test", "api.example.test", "nginx · HTTPS", "https://api.example.test/"),
       new("site:*.preview.example.test", "*.preview.example.test", "Wildcard configuration", null)

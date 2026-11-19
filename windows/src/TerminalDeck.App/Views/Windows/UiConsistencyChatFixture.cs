@@ -80,7 +80,7 @@ public class UiConsistencyChatSessionProxy : DispatchProxy
       "ReadAsync" => ValueTask.FromResult(snapshot),
       "List" => new ChatRecord[] { snapshot },
       "Accounts" => new AccountProfile[] { account! },
-      "ModelsAsync" => ValueTask.FromResult<IReadOnlyList<ProviderModel>>([new("gpt-6.1", "GPT-6.1", 200000, Efforts: ["low", "medium", "high", "xhigh"])]),
+      "ModelsAsync" => ValueTask.FromResult<IReadOnlyList<ProviderModel>>((ProviderModel[])[new("gpt-6.1", "GPT-6.1", 200000, Efforts: ["low", "medium", "high", "xhigh"])]),
       "WatchAsync" => Watch(snapshot, (CancellationToken)args![1]!),
       _ => throw new InvalidOperationException("Visual proof only: " + name + " cannot deliver, change accounts or start a provider.")
     };

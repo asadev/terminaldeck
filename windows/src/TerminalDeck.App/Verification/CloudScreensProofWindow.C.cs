@@ -39,8 +39,8 @@ internal sealed partial class CloudScreensProofWindow
     var skillRoot = Path.Combine(folder, ".agents", "skills");
     var skillFolder = Path.Combine(skillRoot, "release-check"); Directory.CreateDirectory(skillFolder);
     await File.WriteAllTextAsync(Path.Combine(skillFolder, "SKILL.md"), "---\nname: Release check\ndescription: Check the package before release.\n---\nRead the release notes and package manifest.");
-    var skills = AgentSkills.Find([skillRoot]);
-    using var model = new AgentsViewModel(agents, projects) { Sessions = () => [new("fixture-chat", "Review the release notes", "codex", folder, "working", website.Id, "release-review", "chat")] };
+    var skills = AgentSkills.Find((string[])[skillRoot]);
+    using var model = new AgentsViewModel(agents, projects) { Sessions = () => (ProjectSession[])[new("fixture-chat", "Review the release notes", "codex", folder, "working", website.Id, "release-review", "chat")] };
     var agentPage = new AgentsPage(model, new ProofNavigation());
     Check("Agents at-work fixture derives one live busy hand", model.Activity(agents.Get("release-review")) is { Live: 1, Busy: 1 });
     Check("Skills are read only from the explicit scratch project", skills.Count == 1 && skills[0].Folder == skillFolder);
@@ -60,7 +60,7 @@ internal sealed partial class CloudScreensProofWindow
     Check("Viewing efficiency controls writes no default policy", policy is null);
     var at = DateTimeOffset.UtcNow;
     var ledger = new AgentBudgetLedger(new JsonStateStore<AgentUsageLedgerState>(data, "c-proof-agent-usage"));
-    await ledger.ObserveAsync(new("fixture-chat", "release-review", "fixture-task", false, at, [new("fixture-request", at, 80), new("fixture-request", at, 80)], true, false));
+    await ledger.ObserveAsync(new("fixture-chat", "release-review", "fixture-task", false, at, (AgentUsageSample[])[new("fixture-request", at, 80), new("fixture-request", at, 80)], true, false));
     var totals = await ledger.MonthlyAsync("release-review", false, at);
     Check("Budget ledger counts repeated usage only once", totals.Tokens == 80);
     Check("Budget warning uses the real eighty-percent policy", AgentBudgetPolicy.Monthly(new(MonthlyTokens: 100), totals, false).Warning is not null);

@@ -116,7 +116,7 @@ public sealed class FilesPage : CodePage
       {
         var full = ProjectFiles.Resolve(root.Folder, entry.RelPath);
         Windows.Storage.IStorageItem item = entry.IsDir ? await Windows.Storage.StorageFolder.GetFolderFromPathAsync(full) : await Windows.Storage.StorageFile.GetFileFromPathAsync(full);
-        args.Data.SetStorageItems([item]); args.Data.SetText(full); args.Data.RequestedOperation = DataPackageOperation.Copy;
+        args.Data.SetStorageItems((global::Windows.Storage.IStorageItem[])[item]); args.Data.SetText(full); args.Data.RequestedOperation = DataPackageOperation.Copy;
       }
       catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { args.Cancel = true; }
       finally { deferral.Complete(); }

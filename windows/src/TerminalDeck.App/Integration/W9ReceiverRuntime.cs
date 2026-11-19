@@ -183,7 +183,7 @@ public sealed partial class AppRuntime
     .SelectMany(p => p.Folders.Select(f => new ArtifactFolder(f, p.Name + " · " + Path.GetFileName(f), p.Id))).ToArray();
   private string? ReceiverProjectForFolder(string folder) => Projects.List().Where(p => p.IsOpen)
     .FirstOrDefault(p => p.Folders.Any(f => ProjectPaths.Contains(f, folder)))?.Id;
-  private string ReceiverSessionProject(string id, string folder) => Projects.GroupSessions([new(id, "", "", folder, "")]).Single().ProjectId;
+  private string ReceiverSessionProject(string id, string folder) => Projects.GroupSessions((ProjectSession[])[new(id, "", "", folder, "")]).Single().ProjectId;
   private IReadOnlyList<ReceiverDestination> ReceiverDestinations()
   {
     var rows = new List<ReceiverDestination>();

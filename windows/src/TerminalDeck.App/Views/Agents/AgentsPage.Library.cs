@@ -87,7 +87,7 @@ public sealed partial class AgentsPage
     {
       var folders = Model.Projects.List().Where(p => projectFilter is null || p.Id == projectFilter).SelectMany(p => p.Folders).ToArray();
       var roots = AgentSkills.Roots(folders);
-      librarySkills = await Task.Run(() => roots.SelectMany(root => AgentSkills.Find([root])).GroupBy(s => s.Folder, StringComparer.OrdinalIgnoreCase).Select(g => g.First()).OrderBy(s => s.Name, StringComparer.CurrentCultureIgnoreCase).ToArray());
+      librarySkills = await Task.Run(() => roots.SelectMany(root => AgentSkills.Find((string[])[root])).GroupBy(s => s.Folder, StringComparer.OrdinalIgnoreCase).Select(g => g.First()).OrderBy(s => s.Name, StringComparer.CurrentCultureIgnoreCase).ToArray());
     }
     finally { libraryReading = false; if (IsLoaded && grouping == "Skills") Render(); }
   }

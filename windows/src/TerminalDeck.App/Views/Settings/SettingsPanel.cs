@@ -321,7 +321,7 @@ public sealed partial class SettingsPanel : Grid
     }
     tiles.Loaded += (_, _) => RefreshChoice();
     tiles.ActualThemeChanged += (_, _) => RefreshChoice();
-    return Page(GroupRows([tiles]));
+    return Page(GroupRows((FrameworkElement[])[tiles]));
   }
 
   // A small drawing of the app's window in that look: a rail and a page with three lines.

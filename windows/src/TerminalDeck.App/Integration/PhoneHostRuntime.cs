@@ -24,7 +24,7 @@ public sealed partial class AppRuntime
     {
       var state = Hoot.Read();
       if (!PhoneHootGrants.Allows(device, state) || state.Settings is not { } settings) throw new PhoneRefusal("unauthorized", "Hoot is no longer shared with this phone.");
-      return PhoneWorkspacePaths.Require(requested ?? settings.Folder, [settings.Folder], false);
+      return PhoneWorkspacePaths.Require(requested ?? settings.Folder, (string[])[settings.Folder], false);
     }
     return PhoneWorkspacePaths.Require(requested ?? host.Folders(device).FirstOrDefault() ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), host.Folders(device), device.Access == PhoneAccess.Full);
   }

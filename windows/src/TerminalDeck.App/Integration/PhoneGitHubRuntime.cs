@@ -30,7 +30,7 @@ public sealed partial class AppRuntime
         {
           var current = await CopyGitHub.AuthAsync(ct);
           if (current.Source == "environment") throw new InvalidOperationException("GitHub is supplied by this computer's environment. Remove it there to disconnect.");
-          var result = await new CodeProcessRunner(PhoneGithubEnvironment()).RunAsync("gh", ["auth", "logout", "--hostname", "github.com"], Root.DirectoryPath, TimeSpan.FromSeconds(20), ct, "Y\n");
+          var result = await new CodeProcessRunner(PhoneGithubEnvironment()).RunAsync("gh", (string[])["auth", "logout", "--hostname", "github.com"], Root.DirectoryPath, TimeSpan.FromSeconds(20), ct, "Y\n");
           if (!result.Ok) throw new IOException("GitHub could not sign out. Check its sign-in on this computer.");
         }
         return;

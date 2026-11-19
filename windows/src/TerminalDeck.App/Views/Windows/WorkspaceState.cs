@@ -5,8 +5,8 @@ namespace TerminalDeck.App.Shell;
 public sealed record WorkspaceTab(string Id, string Owner, string Subject, string Kind, string Title, string Host = "main", bool CustomTitle = false, bool ExplicitPage = false);
 public sealed record PaneTree(string? Tab = null, PaneTree? First = null, PaneTree? Second = null, bool Vertical = false, double Ratio = 0.5, string? EmptyId = null)
 {
-  public IEnumerable<string> EmptyIds => EmptyId is { } id ? [id] : (First?.EmptyIds ?? []).Concat(Second?.EmptyIds ?? []);
-  public IEnumerable<string> Tabs => EmptyId is not null ? [] : Tab is not null ? [Tab] : (First?.Tabs ?? []).Concat(Second?.Tabs ?? []);
+  public IEnumerable<string> EmptyIds => EmptyId is { } id ? (string[])[id] : (First?.EmptyIds ?? []).Concat(Second?.EmptyIds ?? []);
+  public IEnumerable<string> Tabs => EmptyId is not null ? [] : Tab is not null ? (string[])[Tab] : (First?.Tabs ?? []).Concat(Second?.Tabs ?? []);
   public PaneTree? Remove(string id)
   {
     if (EmptyId is not null) return EmptyId == id ? null : this;
