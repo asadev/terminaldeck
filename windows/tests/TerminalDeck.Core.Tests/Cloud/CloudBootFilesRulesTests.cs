@@ -20,6 +20,9 @@ public sealed class CloudBootFilesRulesTests
       (p, "CLAUDE.md"), (p, "AGENTS.md"), (p, "GEMINI.md"), (p, ".claude/agents/reviewer.md"), (p, ".claude/skills/review/SKILL.md"),
       (p, ".claude/skills/review/scripts/run.sh"), (p, ".claude/commands/ship.md"), (p, ".claude/commands/team/ship.md"), (p, ".agents/skills/x/SKILL.md"),
       (p, ".codex/skills/y/SKILL.md"), (p, ".gemini/skills/z/SKILL.md"), (p, ".claude/skills/café/SKILL.md"),
+      // Setup travels (19 Nov): settings, guards, rules and every AI's agents.
+      (p, ".claude/settings.json"), (p, ".claude/hooks/never-commands.py"), (p, ".claude/rules/style.md"), (p, ".codex/hooks.json"), (p, ".codex/config.toml"),
+      (p, ".codex/agents/decker.toml"), (p, ".gemini/settings.json"), (p, ".gemini/agents/decker.md"), (p, ".gemini/commands/ship.toml"), (p, ".agents/notes.md"),
       (CloudBootFilesPlaceKind.Claude, "CLAUDE.md"), (CloudBootFilesPlaceKind.Claude, "agents/a.md"), (CloudBootFilesPlaceKind.Claude, "skills/s/SKILL.md"),
       (CloudBootFilesPlaceKind.Claude, "commands/c.md"), (CloudBootFilesPlaceKind.Codex, "AGENTS.md"), (CloudBootFilesPlaceKind.Codex, "skills/s/SKILL.md"),
       (CloudBootFilesPlaceKind.Gemini, "GEMINI.md"), (CloudBootFilesPlaceKind.Gemini, "skills/s/SKILL.md"), (CloudBootFilesPlaceKind.Agents, "skills/s/SKILL.md")
@@ -40,8 +43,9 @@ public sealed class CloudBootFilesRulesTests
     var path = CloudBootFilesRefusal.Path;
     (CloudBootFilesPlaceKind, string, CloudBootFilesRefusal)[] refused =
     [
-      (p, "claude.md", notListed), (p, "src/CLAUDE.md", notListed), (p, "README.md", notListed), (p, ".claude/settings.json", notListed),
-      (p, ".claude/settings.local.json", notListed), (p, ".mcp.json", notListed), (p, ".Claude/skills/x/SKILL.md", notListed), (p, ".claude/skills", notListed),
+      (p, "claude.md", notListed), (p, "src/CLAUDE.md", notListed), (p, "README.md", notListed), (p, ".claude/settings.local.json", never),
+      (p, "CLAUDE.local.md", never), (p, ".claude/hooks/x.local", never), (p, ".codex/other.json", notListed), (c, "hooks/pre.sh", notListed),
+      (p, ".mcp.json", notListed), (p, ".Claude/skills/x/SKILL.md", notListed), (p, ".claude/skills", notListed),
       (p, ".claude/agent-memory/r/MEMORY.md", notListed), (x, "CLAUDE.md", notListed),
       (c, "projects/-Users-x-app/memory/MEMORY.md", notListed), (c, "projects/-Users-x-app/chat.jsonl", notListed), (c, "settings.json", notListed),
       (c, ".credentials.json", notListed), (c, "history.jsonl", notListed), (x, "memories/m.md", notListed), (x, "sessions/2026/s.jsonl", notListed),
@@ -155,7 +159,7 @@ public sealed class CloudBootFilesRulesTests
   {
     const string project = "file/project/7031/";
     foreach (var key in new[] { project + ".claude/skills/../../../outside.md", project + "../outside.md", project + ".claude/skills/x/..",
-      project + ".claude/settings.json", project + ".claude/settings.local.json", project + ".mcp.json", project + ".claude/skills/review/settings.json",
+      project + "CLAUDE.local.md", project + ".claude/settings.local.json", project + ".mcp.json", project + ".codex/auth.json", project + ".claude/skills/review/settings.json",
       project + ".claude/skills/review/hooks/pre.md", project + ".claude/agents/hooks.json", project + ".claude/skills/review/mcp.json",
       project + ".claude/skills/review/auth.json", project + ".claude/skills/review/.env", project + ".claude/skills/review/.credentials.json",
       "file/home/claude/73797374656d/projects/-Users-x-app/memory/MEMORY.md", "file/home/claude/73797374656d/.credentials.json",

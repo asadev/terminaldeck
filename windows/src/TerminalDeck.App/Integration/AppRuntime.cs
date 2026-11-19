@@ -126,9 +126,11 @@ public sealed partial class AppRuntime : IAsyncDisposable
     {
       if (handover.Active) throw new IOException("Terminal Deck is updating. Your sessions reopen after the update.");
       Keeper = await KeeperConnection.AttachAsync(Root, KeeperExecutable);
+      Keeper.Opening = OpeningInFolder;
       if (Chats is null)
       {
         Chats = await WindowsChatSessionsClient.ConnectAsync(Root, KeeperCredentials.GetOrCreate(Root));
+        Chats.Opening = OpeningInFolder;
         Chats.SignInRequested = Accounts.SignInAsync;
         Chats.Changed += () => { Agents.ReconcileSessions(ProjectSessions()); RetireStaleChatTools(); usage?.ChatsChanged(); Changed?.Invoke(); };
       }

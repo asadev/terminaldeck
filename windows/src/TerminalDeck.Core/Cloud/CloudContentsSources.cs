@@ -143,11 +143,16 @@ public sealed class CloudBootFilesContentsSource(Func<IReadOnlyList<CloudBootFil
     return Task.FromResult<IReadOnlyList<CloudContentsRow>>(rows);
   }
 
-  /// The listed files of a place that exist on this PC: its named files, and the files of its listed folders (skills,
-  /// agents, commands) at most `MaximumFolderDepth` deep, never a refused one.
-  private static IEnumerable<string> Present(CloudBootFilesPlace place)
+  /// The listed files of a place that exist on this PC: its named files and setup files, and the files of its listed
+  /// folders (skills, agents, commands, hooks, rules) at most `MaximumFolderDepth` deep, never a refused one and never a
+  /// setup file that stays on this PC because it holds a password or key.
+  private static IEnumerable<string> Present(CloudBootFilesPlace place) => Listed(place).Where(relative =>
+    !CloudBootFilesFormat.SecretChecked(place.Kind, relative)
+    || CloudBootFilesDisk.Read(place.Root, relative).Bytes is not { } held || !CloudBootFilesFormat.HoldsSecret(place.Kind, relative, held));
+  private static IEnumerable<string> Listed(CloudBootFilesPlace place)
   {
     foreach (var name in CloudBootFilesFormat.Files(place.Kind)) yield return name;
+    foreach (var path in CloudBootFilesFormat.SetupFiles(place.Kind)) yield return path;
     foreach (var folder in CloudBootFilesFormat.Folders(place.Kind))
     {
       var full = CloudFolderDisk.Full(place.Root, folder);

@@ -3,16 +3,22 @@ using System.Text.Json;
 namespace TerminalDeck.Core.Cloud;
 
 // AI instruction files travelling on Windows (7C-3, inventory row I09, domain `brain/files/i09`): a project's CLAUDE.md,
-// AGENTS.md, GEMINI.md and its `.claude/agents|skills|commands`, `.agents/skills`, `.codex/skills`, `.gemini/skills`
-// text files, by the Mac's own list (CloudBootFilesFormat). Record shapes, ids and the rules are the Mac's
+// AGENTS.md, GEMINI.md, its setup files (`.claude/settings.json`, `.codex/hooks.json`, `.codex/config.toml`,
+// `.gemini/settings.json`) and the text files of its `.claude/agents|skills|commands|hooks|rules`, `.agents`,
+// `.codex/agents|skills`, `.gemini/agents|commands|hooks|skills` folders (setup travels, 19 Nov), by the Mac's own list
+// (CloudBootFilesFormat). Record shapes, ids and the rules are the Mac's
 // (td-mac-next BackendCloudBootFiles*.swift). The rules kept here on purpose:
 // - Places: ONLY a project's folder on this PC, given by the project list (`projectFolders`, 7C-2). The Mac does not
 //   sync the AI tools' own home folders (~/.claude, ~/.codex, ~/.gemini) in this version (NativeCloudBoot.swift), so
 //   Windows does not either: a home record that arrives is kept and waits, and nothing is written into a home folder.
 //   A project with no folder on this PC waits too ("no chosen folder"); a folder is never guessed. Agent instruction
 //   text is not a boot file: it travels with the agents (I10, 7C-2).
-// - Never sent and never written: settings, hooks, MCP, permission and sign-in files, hidden names, links, anything
-//   that is not text or is larger than 1 MB. An arriving record naming one is refused before a byte is kept.
+// - Never sent and never written: one device's own files (`.local` in the name), MCP, permission and sign-in files,
+//   hidden names, links, anything that is not text or is larger than 1 MB. An arriving record naming one is refused
+//   before a byte is kept. A setup file whose text holds a key, token or password stays on this PC: it is not sent, and
+//   one that arrives holding one is not written (`CloudBootFilesFormat.HoldsSecret`).
+// - One setup for every AI (`SetupKeeper`, the app's AiSetupKeeper): before a project's files are looked at, its skills,
+//   rule files, agents and guards are made the same for Claude, Codex and Gemini, so what it made travels in this look.
 // - First copy (rule J): nothing is sent before the whole feed was read once. A file this PC never agreed on with the
 //   Cloud is a first saved copy and loses: where the Cloud already holds that path, the Cloud's text is used here and
 //   this PC's text is kept and listed; it is never sent over the account's version.
@@ -40,6 +46,13 @@ public sealed partial class CloudBootFilesAdapter : ICloudSyncAdapter, ICloudDel
   private IReadOnlyDictionary<string, string>? foldersNow;
   private State state;
   private bool dirty;
+
+  /// Runs before each project folder is looked at (the app sets AiSetupKeeper.Align). Null in tests.
+  public Action<string>? SetupKeeper { get; set; }
+  /// Setup files left on this PC in the last look because their text holds a password or key.
+  public int SecretHeldCount { get; private set; }
+  /// The Cloud page's line for them, or null when there are none.
+  public string? SecretHeldLine => SecretHeldCount > 0 ? CloudBootFilesFormat.SecretLine(SecretHeldCount) : null;
 
   /// `projectFolders`: project id (the id every device shares) → this PC's folder for that project's instruction files,
   /// null or missing = the project's files wait. `userProfile`: the folder whose AI homes a project folder may never be
@@ -242,12 +255,16 @@ public sealed partial class CloudBootFilesAdapter : ICloudSyncAdapter, ICloudDel
     var operations = new List<CloudOperation>();
     sentIntents.Clear();
     operations.AddRange(Intents(stampNow));
+    var secretHeld = 0;
     foreach (var (projectId, folder) in Folders())
     {
       if (string.IsNullOrEmpty(folder) || FolderRefused(folder)) continue;
       var root = Path.GetFullPath(folder);
       var sourceId = CloudBootFilesFormat.SourceId(CloudBootFilesPlaceKind.Project, projectId);
       if (!CloudBootFilesFormat.ValidSourceId(sourceId)) continue;
+      // One setup for every AI first (19 Nov): what arrived and what changed here is made the same for every AI, so the
+      // files it made travel in this same look. It writes only its own marked files and never throws for a file.
+      SetupKeeper?.Invoke(root);
       var walk = CloudBootFilesDisk.Scan(root, CloudBootFilesPlaceKind.Project);
       foreach (var entry in walk.Files)
       {
@@ -257,6 +274,9 @@ public sealed partial class CloudBootFilesAdapter : ICloudSyncAdapter, ICloudDel
         var stamp = entry.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":" + entry.ModifiedTicks.ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (ps.Stamp == stamp && ps.Head is not null && ps.Base == ps.Head.Hash) continue;
         if (CloudBootFilesDisk.Read(root, entry.Relative).Bytes is not { } bytes || !CloudBootFilesFormat.IsText(bytes)) continue;
+        // A setup file holding a password or key stays on this PC (counted); it stays in the walk, so it is never read
+        // as removed either.
+        if (CloudBootFilesFormat.HoldsSecret(CloudBootFilesPlaceKind.Project, entry.Relative, bytes)) { secretHeld++; continue; }
         var hash = CloudMemoryFormat.Hash(bytes);
         if (Reappeared(pk, root, entry.Relative, bytes, hash)) continue;
         ps.Stamp = stamp;
@@ -284,6 +304,7 @@ public sealed partial class CloudBootFilesAdapter : ICloudSyncAdapter, ICloudDel
       operations.AddRange(await DeleteRulePassAsync(sourceId, root, walk, stampNow, ct));
     }
     state.LastLook = localNow();
+    SecretHeldCount = secretHeld;
     var staged = state;
     state = JsonSerializer.Deserialize<State>(before)!;
     return new CloudCapture(operations, () => { state = staged; Save(); CommitDeletePass(); });
@@ -416,6 +437,13 @@ public sealed partial class CloudBootFilesAdapter : ICloudSyncAdapter, ICloudDel
     var ps = PathOf(pk);
     // An earlier version of what this PC already uses: nothing to do.
     if (ps.Head is { } current && (current.Version == a.Version || IsAncestor(pk, a.Version, current.Version))) { Settle(a); return; }
+    // A setup file that holds a password or key is never written from plain records (the sender holds it back too).
+    if (CloudBootFilesFormat.HoldsSecret(CloudBootFilesPlaceKind.Project, a.Relative, body))
+    {
+      Settle(a);
+      AddLine("refused", a, "it holds a password or key; it is not written on this PC", null);
+      return;
+    }
     if (MarkedArrival(a, root, body)) return;
     var found = CloudBootFilesDisk.Read(root, a.Relative);
     if (found.Blocked is { } blocked) { a.Waiting = "blocked:" + blocked; return; }

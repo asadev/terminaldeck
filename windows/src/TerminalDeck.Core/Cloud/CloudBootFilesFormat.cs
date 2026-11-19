@@ -95,13 +95,37 @@ public static class CloudBootFilesFormat
     CloudBootFilesPlaceKind.Gemini => ["GEMINI.md"],
     _ => []
   };
+  /// Setup travels (Asad, 19 Nov 2026: "the guard should be traveling"): a project's hooks, rules and each AI's agents
+  /// too, and the whole shared `.agents` folder (Codex and Gemini read skills from `.agents/skills`). The Mac's list
+  /// (CloudBootFilesRules.folders), in the same order.
   public static IReadOnlyList<string> Folders(CloudBootFilesPlaceKind kind) => kind switch
   {
-    CloudBootFilesPlaceKind.Project => [".claude/agents", ".claude/skills", ".claude/commands", ".agents/skills", ".codex/skills", ".gemini/skills"],
+    CloudBootFilesPlaceKind.Project => [".claude/agents", ".claude/skills", ".claude/commands", ".claude/hooks", ".claude/rules", ".agents",
+      ".codex/agents", ".codex/skills", ".gemini/agents", ".gemini/commands", ".gemini/hooks", ".gemini/skills"],
     CloudBootFilesPlaceKind.Claude => ["agents", "skills", "commands"],
     _ => ["skills"]
   };
-  /// Settings, hooks, MCP, permissions and sign-in files, by name (letter case ignored), also inside a listed folder.
+  /// Setup files of a project by exact path: each AI's project settings (where its hooks, the guards, live) and the
+  /// project's Codex configuration. They travel like any boot file; one that holds a password or key stays on this PC
+  /// (`HoldsSecret`, asked when it is sent and again before it is written).
+  public static IReadOnlyList<string> SetupFiles(CloudBootFilesPlaceKind kind) =>
+    kind == CloudBootFilesPlaceKind.Project ? [".claude/settings.json", ".codex/hooks.json", ".codex/config.toml", ".gemini/settings.json"] : [];
+  private static readonly string[] SecretCheckedFolders = [".claude/hooks/", ".claude/rules/", ".codex/", ".gemini/hooks/", ".gemini/commands/"];
+  /// Paths whose text is checked for a key, token or password before they travel: the setup files and everything under
+  /// the hook folders and the Codex folder (scripts and settings, where a key is most likely to be written).
+  public static bool SecretChecked(CloudBootFilesPlaceKind kind, string relative) =>
+    kind == CloudBootFilesPlaceKind.Project && (SetupFiles(kind).Contains(relative, StringComparer.Ordinal)
+      || SecretCheckedFolders.Any(f => relative.StartsWith(f, StringComparison.Ordinal)));
+  /// A setup file whose text holds a password, key or token: never sent as plain text and never written from plain
+  /// records; it stays on its device (the app's one detector, the Mac's BackendSharedRedact.containsKnownSecret).
+  public static bool HoldsSecret(CloudBootFilesPlaceKind kind, string relative, byte[] bytes) =>
+    SecretChecked(kind, relative) && CloudArtifactSecrets.ContainsKnownSecret(Encoding.UTF8.GetString(bytes));
+  /// The coverage line for setup files left on this PC because they hold a password or key (the Mac's words, "this PC").
+  public static string SecretLine(int count) => count == 1
+    ? "1 settings or guard file holds a password or key and stays on this PC."
+    : count.ToString(CultureInfo.InvariantCulture) + " settings or guard files hold a password or key and stay on this PC.";
+  /// Settings, hooks, MCP, permissions and sign-in files, by name (letter case ignored), inside a listed folder (the
+  /// four setup files above travel by their exact path only).
   public static readonly IReadOnlySet<string> NeverFileNames = new HashSet<string>
   {
     "settings.json", "settings.local.json", "managed-settings.json", "hooks.json", "mcp.json", "mcp_config.json", "mcp-config.json",
@@ -150,7 +174,11 @@ public static class CloudBootFilesFormat
   public static CloudBootFilesRefusal? Refusal(CloudBootFilesPlaceKind kind, string relative)
   {
     if (!CleanRelative(relative) || Parts(relative) is not { } pieces) return CloudBootFilesRefusal.Path;
+    // One device's own files by name (`settings.local.json`, `CLAUDE.local.md`, `x.local`): never travel.
+    var last = pieces[^1].ToLowerInvariant();
+    if (last.Contains(".local.", StringComparison.Ordinal) || last.EndsWith(".local", StringComparison.Ordinal)) return CloudBootFilesRefusal.Never;
     if (pieces.Length == 1 && Files(kind).Contains(pieces[0], StringComparer.Ordinal)) return null;
+    if (SetupFiles(kind).Contains(relative, StringComparer.Ordinal)) return null;
     string[]? below = null;
     foreach (var folder in Folders(kind))
     {
