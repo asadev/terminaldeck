@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -84,6 +85,38 @@ public static class CloudProjectFoldersRules
   private static bool RegularFile(string path) => Attributes(path) is { } a && (a & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0;
   /// A folder with `.git` in it (a folder, or the file of a worktree) is a code checkout.
   public static bool IsCheckout(string folder) => Attributes(Path.Combine(folder, ".git")) is not null;
+
+  /// A project whose folder is itself a code checkout (`.git` at its root): every file git TRACKS stays (it comes from
+  /// GitHub; Asad, 19 Nov: "we are not uploading the code ... code is going already to GitHub"). Untracked files travel
+  /// (local notes, pictures, a local `.env`, uploads). Read once per look with `git ls-files -z --full-name` (no network).
+  /// Null when git cannot answer (not installed, refused, too slow): then nothing of that project travels in that look
+  /// (never code by mistake). Paths are from the project folder, `/`-separated; letter case is ignored (Windows names).
+  public static IReadOnlySet<string>? TrackedFiles(string projectRoot)
+  {
+    var start = new ProcessStartInfo("git") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+      RedirectStandardInput = true, StandardOutputEncoding = new UTF8Encoding(false) };
+    foreach (var argument in new[] { "-C", projectRoot, "ls-files", "-z", "--full-name" }) start.ArgumentList.Add(argument);
+    start.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+    try
+    {
+      using var process = Process.Start(start);
+      if (process is null) return null;
+      process.StandardInput.Close();
+      var output = process.StandardOutput.ReadToEndAsync();
+      var error = process.StandardError.ReadToEndAsync();
+      if (!process.WaitForExit(60_000))
+      {
+        process.Kill(entireProcessTree: true);
+        return null;
+      }
+      process.WaitForExit();
+      // The process has ended, so both reads are complete; this runs on the look's own thread, never the screen's.
+      _ = error.GetAwaiter().GetResult();
+      if (process.ExitCode != 0) return null;
+      return output.GetAwaiter().GetResult().Split('\0', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+    catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or IOException or NotSupportedException) { return null; }
+  }
 
   /// Null when the file at `relative` (`<key>/<folder>/<path>`) travels. Asked on the sending device and on arrival.
   public static CloudFolderSkip? Refusal(string relative)
@@ -178,9 +211,16 @@ public sealed class CloudFolderRoots
     foreach (var (key, root) in All.OrderBy(p => p.Key, StringComparer.Ordinal))
     {
       if (!CloudProjectFoldersRules.RealFolder(root)) continue;
+      // The project folder is a code checkout itself: what git tracks never travels.
+      IReadOnlySet<string>? tracked = null;
+      if (CloudProjectFoldersRules.IsCheckout(root))
+      {
+        if (CloudProjectFoldersRules.TrackedFiles(root) is not { } files) { walk.MarkUnreliable(); continue; }
+        tracked = files;
+      }
       foreach (var name in CloudProjectFoldersRules.Folders(root))
       {
-        walk.Merge(CloudFolderWalk.Run(Path.Combine(root, name), kind, key + "/" + name + "/"));
+        walk.Merge(CloudFolderWalk.Run(Path.Combine(root, name), kind, key + "/" + name + "/", tracked, name + "/"));
         if (walk.Files.Count > kind.MaximumFiles) { walk.MarkUnreliable(); return walk; }
       }
     }

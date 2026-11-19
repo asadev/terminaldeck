@@ -135,6 +135,41 @@ public sealed class ProjectFoldersTravelTests
   }
 
   [Fact]
+  public async Task In_a_project_that_is_a_code_checkout_tracked_files_stay_and_untracked_ones_travel()
+  {
+    using var f = new CloudFolderFixture();
+    var project = Project(f, "a");
+    Directory.CreateDirectory(project);
+    void Git(params string[] arguments)
+    {
+      var start = new System.Diagnostics.ProcessStartInfo("git") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+      foreach (var argument in new[] { "-C", project, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false" }.Concat(arguments))
+        start.ArgumentList.Add(argument);
+      using var process = System.Diagnostics.Process.Start(start)!;
+      var output = process.StandardOutput.ReadToEndAsync(); var error = process.StandardError.ReadToEndAsync();
+      process.WaitForExit();
+      Assert.True(process.ExitCode == 0, "git " + string.Join(' ', arguments) + ": " + error.GetAwaiter().GetResult() + output.GetAwaiter().GetResult());
+    }
+    Write(f, "a", "src/app.ts", Text("code\n"));
+    Write(f, "a", "docs/guide.md", Text("in git\n"));
+    Git("init", "-q");
+    Git("add", "src/app.ts", "docs/guide.md");
+    Git("commit", "-q", "-m", "x");
+    // Not in git: they travel (the never list still applies).
+    Write(f, "a", "src/.env", Text("LOCAL=1\n"));
+    Write(f, "a", "docs/evidence.png", [0x89, 0x50, 0, 1]);
+    Write(f, "a", "storage/upload.pdf", Text("%PDF\n"));
+    Write(f, "a", "src/web/node_modules/p/index.js", Text("pkg\n"));
+    Assert.Equal(new[] { "docs/guide.md", "src/app.ts" }, CloudProjectFoldersRules.TrackedFiles(project)!.Order(StringComparer.Ordinal));
+    var a = Owner(f, "a", f.DeviceA);
+    await f.Settle(a);
+    var prefix = "file/projects/" + Key + "/";
+    var paths = CloudFolderFixture.Journal(a).Select(op => op.Source.RecordId).Where(id => id.StartsWith(prefix, StringComparison.Ordinal))
+      .Select(id => id[prefix.Length..]).Distinct().Order(StringComparer.Ordinal);
+    Assert.Equal(new[] { "docs/evidence.png", "src/.env", "storage/upload.pdf" }, paths);
+  }
+
+  [Fact]
   public async Task A_first_upload_goes_in_steps_and_never_waits_for_a_day_cap()
   {
     using var f = new CloudFolderFixture();

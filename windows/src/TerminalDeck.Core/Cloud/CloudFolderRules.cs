@@ -192,7 +192,9 @@ public sealed class CloudFolderWalk
 
   public static CloudFolderWalk Run(string root) => Run(root, CloudFileKind.CloudFolder);
   /// `kind` gives the rules (path rule, size, count); `under` is put before every path (a project folder's key/name/).
-  public static CloudFolderWalk Run(string root, CloudFileKind kind, string under = "")
+  /// `tracked`: paths (from the project folder, with `trackedPrefix` before this root's own paths) that git tracks; they
+  /// are left out (they come from GitHub).
+  public static CloudFolderWalk Run(string root, CloudFileKind kind, string under = "", IReadOnlySet<string>? tracked = null, string trackedPrefix = "")
   {
     var walk = new CloudFolderWalk();
     var projects = kind.PathRule is not null;
@@ -227,6 +229,7 @@ public sealed class CloudFolderWalk
           pending.Push((child.FullName, relative));
           continue;
         }
+        if (tracked is not null && tracked.Contains(trackedPrefix + relative[under.Length..])) { walk.Skip(CloudFolderSkip.Rebuildable, relative); continue; }
         if (child is not FileInfo file) { walk.Skip(CloudFolderSkip.NotAFile, relative); continue; }
         // Windows (Decker, 15 Nov): Explorer's own files are never sent from this PC. One that arrived is kept as any file.
         // (Project folders leave them out by their own rule, as the system's scratch.)
