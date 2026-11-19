@@ -26,7 +26,14 @@ public sealed class KeeperClient(IKeeperConnector connector, ReadOnlyMemory<byte
   // An AI hook named the conversation this terminal is in now.
   public ValueTask<KeeperResponse> UpdateConversationAsync(string id, string conversation, CancellationToken ct = default)
     => SendAsync(new() { Secret = credential, Operation = "conversation", Instance = Current(), Id = id, Conversation = conversation }, ct);
-  public ValueTask<KeeperResponse> CreateAsync(SessionDefinition definition, CancellationToken cancellationToken = default) => SendAsync(new() { Secret = credential, Operation = "create", Instance = Current(), Launch = definition }, cancellationToken);
+  /// Told the folder of every session about to open (the app: one setup for every AI, AiSetupKeeper.AlignSoon). Must
+  /// return at once; it never stops the start.
+  public Action<string>? Opening { get; set; }
+  public ValueTask<KeeperResponse> CreateAsync(SessionDefinition definition, CancellationToken cancellationToken = default)
+  {
+    Opening?.Invoke(definition.Cwd);
+    return SendAsync(new() { Secret = credential, Operation = "create", Instance = Current(), Launch = definition }, cancellationToken);
+  }
   public ValueTask<KeeperResponse> ForgetHeldAsync(string id, CancellationToken ct = default)
     => SendAsync(new() { Secret = credential, Operation = "forget-held", Instance = Current(), Id = id }, ct);
   public ValueTask<KeeperResponse> ReopenAsync(string id, CancellationToken ct = default)

@@ -7,7 +7,7 @@ public static class SettingsNavigation
   // Keep stable route ids and the Mac's order (15 Nov): [Profile] · General, Appearance, Notifications · Coding AIs,
   // Agents, Tasks, AI apps · Privacy, Advanced, About. Devices and Cloud live inside Profile; Browser opens from the
   // Browser itself. Windows has no island, voice or plugins page.
-  public static IReadOnlyList<SettingsCategory> Categories { get; } = [
+  public static IReadOnlyList<SettingsCategory> Categories { get; } = (SettingsCategory[])[
     new("profile", "Profile", "", "DeckProjectBlueBrush", 0, "account name picture photo e-mail email sign in out ways github google apple cloud sync devices phones computers this pc"),
     new("general", "General", "", "DeckProjectGraphiteBrush", 1, "sessions restart reconnect name copy select awake sleep updates version opens new session terminal text size font"),
     new("appearance", "Appearance", "", "DeckProjectGraphiteBrush", 1, "theme light dark system match windows"),
@@ -22,7 +22,7 @@ public static class SettingsNavigation
   ];
 
   // Pages opened from a row inside another page (Profile); never listed on their own.
-  public static IReadOnlyList<SettingsCategory> InnerPages { get; } = [
+  public static IReadOnlyList<SettingsCategory> InnerPages { get; } = (SettingsCategory[])[
     new("cloud", "Cloud", "", "DeckProjectBlueBrush", 0, "cloud sync"),
     new("personal", "Personal information", "", "DeckProjectGraphiteBrush", 0, "name e-mail"),
     new("sign-in", "Sign-in", "", "DeckProjectGraphiteBrush", 0, "google github apple sign out"),

@@ -45,7 +45,7 @@ public sealed class CloudBinRules
   public bool CanPutBackAll(IReadOnlyCollection<CloudBinLine> selected) => selected.Count > 0 && !Working;
 
   /// The right-click menu of a selection: every removal can be put back or deleted for good; nothing else.
-  public IReadOnlyList<string> Menu(IReadOnlyCollection<CloudBinLine> selected) => selected.Count == 0 || Working ? [] : [PutBack, DeleteForGood];
+  public IReadOnlyList<string> Menu(IReadOnlyCollection<CloudBinLine> selected) => selected.Count == 0 || Working ? [] : (string[])[PutBack, DeleteForGood];
 
   /// The standard confirm's question for "Delete for good" (asked once, for the whole selection).
   public static (string Title, string Text) DeleteForGoodQuestion(IReadOnlyList<CloudBinLine> selected) =>

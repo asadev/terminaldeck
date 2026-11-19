@@ -67,7 +67,7 @@ public sealed partial class CloudPage : UserControl
       // Signed out or signing in: one line and a modest Sign in (or Cancel).
       var press = new Button { Content = page.Button ?? CloudPageText.SignIn, IsEnabled = !working, VerticalAlignment = VerticalAlignment.Center };
       press.Click += async (_, _) => await AccountPressAsync(press.Content as string);
-      Body.Children.Add(SettingsPanel.GroupRows([SettingsPanel.SettingRow(page.Line, "", press)]));
+      Body.Children.Add(SettingsPanel.GroupRows((FrameworkElement[])[SettingsPanel.SettingRow(page.Line, "", press)]));
     }
     else
     {
@@ -107,7 +107,7 @@ public sealed partial class CloudPage : UserControl
         details.Children.Add(review); detailsOpen = true;
       }
       var statusGroup = new StackPanel(); statusGroup.Children.Add(state); statusGroup.Children.Add(details);
-      Body.Children.Add(SettingsPanel.GroupRows([new Border { Child = statusGroup }]));
+      Body.Children.Add(SettingsPanel.GroupRows((FrameworkElement[])[new Border { Child = statusGroup }]));
       var rows = new List<FrameworkElement>();
       if (page.UseCloud is { } on)
       {
@@ -125,12 +125,12 @@ public sealed partial class CloudPage : UserControl
           var chosen = choice.IsOn ? CloudTrustMode.Ask : CloudTrustMode.Account;
           if (chosen != account.Snapshot.TrustMode) await PressAsync(() => account.SetTrustModeAsync(chosen));
         };
-        Body.Children.Add(SettingsPanel.GroupRows([SettingsPanel.SettingRow("Ask me for each new device", CloudPageText.TrustModeNote(mode), choice)]));
+        Body.Children.Add(SettingsPanel.GroupRows((FrameworkElement[])[SettingsPanel.SettingRow("Ask me for each new device", CloudPageText.TrustModeNote(mode), choice)]));
       }
       UpdateSync();
       // The one way in to Your Cloud (DESIGN-WINDOWS-CLOUD.md 1): the page's last row.
       if (manageFiles is not null)
-        Body.Children.Add(SettingsPanel.GroupRows([SettingsPanel.LinkRow(CloudContentsWords.OpenButton, null, null, null, manageFiles)]));
+        Body.Children.Add(SettingsPanel.GroupRows((FrameworkElement[])[SettingsPanel.LinkRow(CloudContentsWords.OpenButton, null, null, null, manageFiles)]));
     }
     if ((pressProblem ?? (summary.Button is not null ? page.Problem ?? summary.Problem : null)) is { } problem) Body.Children.Add(AccountPages.Problem(problem));
   }

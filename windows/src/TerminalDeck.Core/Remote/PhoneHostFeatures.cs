@@ -56,6 +56,8 @@ public sealed class PhoneHostFeatures : IRelayPhoneApplication, IW9PhonePushAppl
     public readonly ConcurrentDictionary<string, string> WatchedChats = new();
     public readonly CancellationTokenSource Life = new();
     public string LastSessions = "";
+    // 19 Nov free plan: this connection was served a paid kind (a browser, screen or tunnel stream may be open).
+    public volatile bool UsedPaid;
   }
 
   // Messages the wrapped chain answers (Hoot, Tasks, the Receiver, pairing).
@@ -78,6 +80,7 @@ public sealed class PhoneHostFeatures : IRelayPhoneApplication, IW9PhonePushAppl
   private readonly ConcurrentDictionary<string, Link> links = new();
   private readonly ConcurrentDictionary<string, long> lastOutput = new();
   private Func<string, byte[], CancellationToken, ValueTask>? publisher;
+  private Func<bool> limitsToSessions = static () => false;
   private int broadcastQueued;
   private bool disposed;
 
@@ -92,6 +95,19 @@ public sealed class PhoneHostFeatures : IRelayPhoneApplication, IW9PhonePushAppl
 
   public IReadOnlyCollection<byte[]> KnownPeers => next.KnownPeers;
   public bool PairingOpen => next.PairingOpen;
+  /// 19 Nov free plan (`RemoteFreePlan`): true while this PC's own account is free with the paywall on, so another device
+  /// gets this PC's sessions only. Read per request from the app's one subscription answer; false while it is not known.
+  public Func<bool> LimitsToSessions
+  {
+    get => Volatile.Read(ref limitsToSessions);
+    set => Volatile.Write(ref limitsToSessions, value ?? throw new ArgumentNullException(nameof(value)));
+  }
+  /// At the plan read that makes the account free (a lapse): the device connections that were served a paid kind, so
+  /// their owner ends them whole, which ends their browser, screen and tunnel streams the way any closed connection does
+  /// (the Mac's `freePlanBegan`). The devices stay approved and reconnect; paid kinds are refused from then on.
+  public IReadOnlyList<string> FreePlanBegan() => links.Where(pair => pair.Value.UsedPaid && !Local(pair.Key)).Select(pair => pair.Key).ToArray();
+  // This PC's own browser on its loopback web page is local use of this PC, never limited by the free plan.
+  private static bool Local(string channel) => channel.StartsWith("local-web:", StringComparison.Ordinal);
   public void SetPublisher(Func<string, byte[], CancellationToken, ValueTask>? publish)
   {
     Volatile.Write(ref publisher, publish);
@@ -110,6 +126,10 @@ public sealed class PhoneHostFeatures : IRelayPhoneApplication, IW9PhonePushAppl
     {
       if (type is not ("panel.read" or "panel.act")) return await next.ReceiveAsync(channel, peerKey, plaintext, ct);
       var innerRid = message.TryGetProperty("rid", out var ir) && ir.ValueKind == JsonValueKind.String ? ir.GetString() : null;
+      // The free plan before the Tasks chain answers (a refused Tasks read is never remembered for pushes). A connection
+      // that has not said hello is left to the chain's own refusal, as before.
+      if (links.TryGetValue(channel, out var asking) && peerKey.Span.SequenceEqual(asking.Key) && FreePlanRefuses(channel, asking, type, message, innerRid) is { } refusedInner)
+        return refusedInner;
       try
       {
         _ = PhonePanelPagination.Cursor(message);
@@ -123,6 +143,8 @@ public sealed class PhoneHostFeatures : IRelayPhoneApplication, IW9PhonePushAppl
     if (!peerKey.Span.SequenceEqual(link.Key)) throw new ProtocolException("Reconnect this phone before continuing.");
     var device = trust.RequireCurrent(link.DeviceId, peerKey.Span);
     var rid = message.TryGetProperty("rid", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
+    // 19 Nov free plan: asked before every other rule (the Mac's order), so a paid kind is never half-answered.
+    if (FreePlanRefuses(channel, link, type, message, rid) is { } refused) return refused;
     if (!Known(type))
     {
       if (type == "panel.read") return Reply(Error("unavailable", "That page is not on this computer yet.", rid));
@@ -144,6 +166,16 @@ public sealed class PhoneHostFeatures : IRelayPhoneApplication, IW9PhonePushAppl
       System.Diagnostics.Trace.WriteLine("Phone " + type + " failed: " + ex.GetType().Name + ": " + ex.Message);
       return silent ? new([]) : Reply(Error("unavailable", "That did not work on this computer.", rid));
     }
+  }
+
+  private PhoneApplicationReply? FreePlanRefuses(string channel, Link link, string type, JsonElement message, string? rid)
+  {
+    var panel = message.TryGetProperty("panel", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+    if (Local(channel) || !RemoteFreePlan.IsPaid(type, panel)) return null;
+    if (LimitsToSessions()) return Reply(RemoteFreePlan.Refusal(rid));
+    // Served while paid: should the plan become free, this connection ends (`FreePlanBegan`).
+    link.UsedPaid = true;
+    return null;
   }
 
   private bool Known(string type) => Reads.Contains(type) || WorkMessages.Contains(type) || type == "chats.answer" || type == "sims.record" || workspace?.Handles(type) == true;

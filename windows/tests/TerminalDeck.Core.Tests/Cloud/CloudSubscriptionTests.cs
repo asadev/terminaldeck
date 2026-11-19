@@ -15,7 +15,8 @@ public sealed class CloudSubscriptionTests
   public void Paywall_off_has_no_difference_across_every_declared_place_tool_and_command(string state, bool offer)
   {
     var off = Snapshot("off", state, offer);
-    Assert.True(off.AllowsCloudServices); Assert.False(off.ShowsSubscription);
+    // 19 Nov: a gift shows its plan with the paywall off too; nothing else is new while it is off.
+    Assert.True(off.AllowsCloudServices); Assert.Equal(state == "gift", off.ShowsSubscription); Assert.False(off.LimitsRemoteToSessions);
     Assert.Equal(16, Enum.GetValues<CloudPaidPlace>().Length);
     foreach (var place in Enum.GetValues<CloudPaidPlace>())
     {
@@ -24,18 +25,22 @@ public sealed class CloudSubscriptionTests
     }
     Assert.Equal(BeforeTools, BeforeTools.Where(t => CloudPaidInventory.ShowsTool(off, t)));
     Assert.Equal(BeforeCommands, BeforeCommands.Where(c => CloudPaidInventory.ShowsCommand(off, c)));
-    Assert.False(CloudPaidInventory.ShowsTool(off, CloudSubscriptionTools.Id));
+    Assert.Equal(state == "gift", CloudPaidInventory.ShowsTool(off, CloudSubscriptionTools.Id));
   }
 
   [Theory]
   [InlineData("none")] [InlineData("lapsed")]
-  public void Unpaid_hides_paid_places_and_tools_but_keeps_local_accounts_and_WhatsApp(string state)
+  public void Unpaid_hides_paid_places_and_tools_but_keeps_local_accounts_WhatsApp_devices_and_remote_sessions(string state)
   {
     var unpaid = Snapshot("on", state);
     Assert.False(unpaid.AllowsCloudServices); Assert.True(unpaid.ShowsSubscription);
-    Assert.All(Enum.GetValues<CloudPaidPlace>(), place => Assert.False(unpaid.Offers(place)));
-    Assert.Equal(new[] { "cloud.profile", "sessions.send", "tasks.list", "agents.list", "whatsapp.agents" }, BeforeTools.Where(t => CloudPaidInventory.ShowsTool(unpaid, t)));
-    Assert.Equal(new[] { "new-session", "settings:profile", "whatsapp", "servers" }, BeforeCommands.Where(c => CloudPaidInventory.ShowsCommand(unpaid, c)));
+    // 19 Nov free plan: a free account keeps its devices and its other computers' sessions (the Mac's freeAccountPlaces).
+    Assert.True(unpaid.LimitsRemoteToSessions); Assert.True(unpaid.AllowsRemoteSessions);
+    Assert.Equal(new[] { CloudPaidPlace.Devices, CloudPaidPlace.OtherComputerSessions }, Enum.GetValues<CloudPaidPlace>().Where(place => unpaid.Offers(place)));
+    Assert.Equal(new[] { "cloud.profile", "computers.services", "sessions.send", "tasks.list", "agents.list", "whatsapp.agents" }, BeforeTools.Where(t => CloudPaidInventory.ShowsTool(unpaid, t)));
+    Assert.True(CloudPaidInventory.ShowsTool(unpaid, "computers.look"));
+    Assert.False(CloudPaidInventory.ShowsTool(unpaid, "computers.manage")); Assert.False(CloudPaidInventory.ShowsTool(unpaid, "computers.screen"));
+    Assert.Equal(new[] { "devices", "settings:devices", "new-session", "settings:profile", "whatsapp", "servers" }, BeforeCommands.Where(c => CloudPaidInventory.ShowsCommand(unpaid, c)));
     Assert.True(CloudPaidInventory.ShowsTool(unpaid, CloudSubscriptionTools.Id));
   }
 
@@ -59,7 +64,46 @@ public sealed class CloudSubscriptionTests
     Assert.True(unavailable.AllowsCloudServices); Assert.False(unavailable.ShowsSubscription);
     Assert.True(CloudSubscriptionSnapshot.Unknown.AllowsCloudServices);
     Assert.False(CloudSubscriptionSnapshot.Unknown.ShowsSubscription);
+    // No answer refuses nothing (19 Nov free plan): only a known paywall-on, tier-free answer limits remote access.
+    Assert.False(unavailable.LimitsRemoteToSessions); Assert.False(CloudSubscriptionSnapshot.Unknown.LimitsRemoteToSessions);
     Assert.Throws<JsonException>(() => CloudSubscription.Read("{\"paywall\":\"on\",\"state\":\"manual\"}"u8.ToArray()));
+  }
+
+  [Theory]
+  [InlineData("{\"paywall\":\"on\",\"state\":\"none\",\"tier\":\"free\",\"canBuyStorage\":false}", true, false)]
+  [InlineData("{\"paywall\":\"on\",\"state\":\"lapsed\"}", true, null)]               // an older service: tier from state
+  [InlineData("{\"paywall\":\"on\",\"state\":\"gift\",\"tier\":\"paid\",\"canBuyStorage\":true}", false, true)]
+  [InlineData("{\"paywall\":\"on\",\"state\":\"paid\",\"tier\":\"paid\",\"canBuyStorage\":true}", false, true)]
+  [InlineData("{\"paywall\":\"off\",\"state\":\"none\",\"tier\":\"free\",\"canBuyStorage\":false}", false, false)]
+  public void Free_plan_limits_only_a_known_paywall_on_free_tier(string body, bool limited, bool? canBuyStorage)
+  {
+    var answer = CloudSubscription.Read(System.Text.Encoding.UTF8.GetBytes(body));
+    Assert.Equal(canBuyStorage, answer.CanBuyStorage);
+    Assert.Equal(limited, answer.LimitsRemoteToSessions);
+    var known = CloudSubscriptionSnapshot.Unknown.Received(answer);
+    Assert.Equal(limited, known.LimitsRemoteToSessions); Assert.True(known.AllowsRemoteSessions);
+    Assert.Throws<JsonException>(() => CloudSubscription.Read("{\"paywall\":\"on\",\"state\":\"none\",\"tier\":\"gold\"}"u8.ToArray()));
+  }
+
+  [Fact]
+  public void Plan_row_and_page_words_are_the_Macs()
+  {
+    Assert.Equal("Terminal Deck Cloud", CloudSubscriptionPageText.Title);
+    Assert.Null(CloudSubscriptionPageText.RowValue(new("on", "none")));
+    Assert.Equal("Gift \u00b7 no charge", CloudSubscriptionPageText.RowValue(new("off", "gift", Source: "gift")));
+    Assert.Equal("Yearly", CloudSubscriptionPageText.RowValue(new("on", "paid", "yearly", Source: "apple")));
+    var until = new DateTimeOffset(2026, 12, 20, 12, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+    Assert.Equal("Monthly \u00b7 paid until " + CloudSubscriptionPageText.Date(until), CloudSubscriptionPageText.RowValue(new("on", "paid", "monthly", until, "google")));
+    Assert.Equal("Ended", CloudSubscriptionPageText.RowValue(new("on", "lapsed")));
+    Assert.Equal("Browser, simulators and screen sharing, Cloud sync and tasks on every device, and 100 GB of Cloud storage.", CloudSubscriptionPageText.Benefit(100));
+    Assert.Equal("$8.00 a month, or $67.00 a year", CloudSubscriptionPageText.Price);
+    Assert.Equal("Subscribe in the Terminal Deck app on your phone", CloudSubscriptionPageText.Subscribe);
+    Assert.Equal("Your plan has ended.", CloudSubscriptionPageText.Ended(new("on", "lapsed")));
+    Assert.Equal("Terminal Deck Cloud", CloudSubscriptionPageText.Plan(null));
+    Assert.Equal("300 GB", CloudSubscriptionPageText.Storage(new("on", "gift", ExtraGb: 200)));
+    Assert.Equal("100 GB with the plan and 200 GB of extra storage.", CloudSubscriptionPageText.StorageInfo(new("on", "gift", ExtraGb: 200)));
+    Assert.Null(CloudSubscriptionPageText.Manage("gift"));
+    Assert.Equal("Change or cancel it in the Terminal Deck app on your iPhone.", CloudSubscriptionPageText.Manage("apple"));
   }
 
   private sealed class NoApproval : IMcpPermissionBroker
@@ -158,6 +202,10 @@ public sealed class CloudSubscriptionTests
     await account.RefreshAsync();
     Assert.Null(account.SyncIdentity); Assert.Equal(CloudPhase.NotAllowed, account.Snapshot.Phase);
     Assert.NotNull(account.Snapshot.Email);
+    // 19 Nov free plan: the relay keeps this PC (its reach identity) and its device list; Cloud sync does not run.
+    Assert.Equal(identity, account.ReachIdentity);
+    Assert.NotEmpty(account.Snapshot.DeviceRows);
+    Assert.Equal(identity!.Value.Subject, (await account.CredentialsAsync(default)).UserId);
     var requestsBeforeStalePress = http.Account.Requests.Count;
     await Assert.ThrowsAsync<CloudProfileRefusal>(() => account.RenameDeviceAsync("old-device", "Kept name"));
     await Assert.ThrowsAsync<CloudProfileRefusal>(() => account.SignOutDeviceAsync("old-device"));
@@ -171,6 +219,24 @@ public sealed class CloudSubscriptionTests
     Assert.Equal("gift", account.Snapshot.Subscription.LastAnswer?.State);
     Assert.True(account.Snapshot.Subscription.AllowsCloudServices);
     Assert.Null(account.SyncIdentity); Assert.Equal(CloudPhase.NotAllowed, account.Snapshot.Phase);
+  }
+
+  [Fact]
+  public async Task A_free_sign_in_records_this_PC_for_the_relay_and_starts_no_Cloud_sync()
+  {
+    var http = new SubscriptionHttp { Answer = new("on", "none", Tier: "free", CanBuyStorage: false) };
+    using var account = new CloudAccountClient(CloudConfiguration.Today("PC", "1"), new MemoryAccount(), http, new CountingRandom(), new FakeBrowser(), new Clock());
+    var start = await account.BeginSignInAsync();
+    var query = start.Query.TrimStart('?').Split('&').Select(p => p.Split('=', 2)).ToDictionary(p => p[0], p => Uri.UnescapeDataString(p[1]));
+    Assert.True(await account.FinishAppReturnAsync(new Uri($"terminaldeck://cloud/return/{query["callback"]}?code=Q29kZUZyb21UaGVXZWJzaXRlX19fX19fX19fX19fX19&state={query["state"]}")));
+    Assert.Equal(CloudPhase.NotAllowed, account.Snapshot.Phase);
+    Assert.Null(account.SyncIdentity);
+    Assert.NotNull(account.ReachIdentity);
+    Assert.Single(http.Account.Requests, r => r.Method == HttpMethod.Post && r.Url.AbsolutePath == "/v1/devices");
+    Assert.Contains(account.Snapshot.DeviceRows, row => row.ThisDevice);
+    // Only the sign-in, the plan, this PC's record and its device list: no Cloud status, capabilities or sync reads.
+    Assert.All(http.Account.Requests.Select(r => r.Url.AbsolutePath).Where(p => p.StartsWith("/v1/", StringComparison.Ordinal)),
+      path => Assert.Contains(path, new[] { "/v1/auth/exchange", "/v1/devices" }));
   }
 
 }

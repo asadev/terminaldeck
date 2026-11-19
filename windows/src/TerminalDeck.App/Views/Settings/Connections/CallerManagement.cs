@@ -59,7 +59,7 @@ public sealed partial class SettingsPane
     stack.Children.Add(AiPageSection("Keys", null, null, Settings.SettingsPanel.GroupRows(keys)));
     // MCP servers: a second page of this window, not a switch at the top (15 Nov).
     if (NavigateSettings is { } navigate)
-      stack.Children.Add(Settings.SettingsPanel.GroupRows([AiPageLinkRow("MCP servers", () => navigate("mcp-servers"))]));
+      stack.Children.Add(Settings.SettingsPanel.GroupRows((FrameworkElement[])[AiPageLinkRow("MCP servers", () => navigate("mcp-servers"))]));
     // WhatsApp agents (15 Nov): the page's LAST group.
     stack.Children.Add(new WhatsApp.WhatsAppSettingsGroup(TerminalDeck.Core.WhatsApp.WhatsAppAgentsStore.Shared, WhatsAppChoices));
   }
@@ -87,7 +87,7 @@ public sealed partial class SettingsPane
   };
   private async Task RenameCallerAsync(string id)
   {
-    var name = new TextBox { Header = "App name", MaxLength = 80, Text = CallerFiles.Names([id])[id] };
+    var name = new TextBox { Header = "App name", MaxLength = 80, Text = CallerFiles.Names((string[])[id])[id] };
     var note = Description("Only this app’s label changes. Its key, conversation and permissions stay the same.");
     var body = new StackPanel { Spacing = 12 }; body.Children.Add(name); body.Children.Add(note);
     var dialog = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = "Rename app key", Content = body, PrimaryButtonText = "Save", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Primary };
@@ -106,7 +106,7 @@ public sealed partial class SettingsPane
   }
   private async Task RevokeCallerAsync(string id)
   {
-    var name = CallerFiles.Names([id])[id];
+    var name = CallerFiles.Names((string[])[id])[id];
     var note = Description("Revoke “" + name + "”? This key stops working immediately. Other app keys stay connected. This app will need a new key to reconnect.");
     var dialog = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = "Revoke app key", Content = note, PrimaryButtonText = "Revoke", CloseButtonText = "Keep it", DefaultButton = ContentDialogButton.Close };
     dialog.PrimaryButtonClick += (_, args) =>

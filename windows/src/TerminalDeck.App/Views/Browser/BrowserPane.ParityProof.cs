@@ -113,7 +113,7 @@ public sealed partial class BrowserPane
       Check("unsupported popup reports plain reason", tab.PageRequestNote!.Contains("unsupported", StringComparison.OrdinalIgnoreCase)); tab.PageRequestNote = null;
       Stage("restore"); ShellSelected?.Invoke(tab.Id); await Wait(() => !parkedPages.ContainsKey(tab.Id));
       Check("selection restores the same WebView", ReferenceEquals(web, tab.View.CoreWebView2));
-      var priorChoices = SessionChoices; SessionChoices = () => [new("browser", "Fixture session")]; await Core.AttachAsync(tab.Id, "browser");
+      var priorChoices = SessionChoices; SessionChoices = () => (BrowserSessionChoice[])[new("browser", "Fixture session")]; await Core.AttachAsync(tab.Id, "browser");
       await Core.CreateProfileAsync("Fixture Work"); RefreshShellViews();
       foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
       {

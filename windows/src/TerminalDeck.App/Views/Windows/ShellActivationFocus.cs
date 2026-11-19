@@ -28,6 +28,8 @@ public sealed partial class ShellWindow
     window.Activated += (_, args) =>
     {
       if (args.WindowActivationState == WindowActivationState.Deactivated) { pressed = false; return; }
+      // 19 Nov free plan: a computer switched on later is joined when the app comes to the front (no timer).
+      if (host == "main") Runtime.CameToFront();
       // Low priority: a click that activated the window moves focus first.
       window.DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
       {

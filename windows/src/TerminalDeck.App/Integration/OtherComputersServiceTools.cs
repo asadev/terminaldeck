@@ -16,6 +16,8 @@ public static class OtherComputersServiceTools
       var id = args.GetProperty("computerId").GetString()!; context.Require("computers", id);
       await context.EnsureCurrentAsync(ct);
       var action = args.GetProperty("action").GetString()!;
+      // 19 Nov free plan: a free account keeps this tool for sessions; local web ports stay paid (the Mac's machines.ports).
+      if (action is "ports" or "open-here" or "open-there" && !computers.PaidAllowed) throw new McpRefusal(TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Subscribe);
       var fields = args.TryGetProperty("fields", out var f) ? JsonNode.Parse(f.GetRawText()) as JsonObject ?? throw new McpRefusal("fields must be an object.") : new JsonObject();
       if (ComputerOperations.All.ContainsKey(action)) return await computers.OperateAsync(id, action, fields, ct);
       string Text(string key) => fields[key]?.GetValue<string>() is { Length: > 0 } text ? text : throw new McpRefusal("Supply " + key + ".");

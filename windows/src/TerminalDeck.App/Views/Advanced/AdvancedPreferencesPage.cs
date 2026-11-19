@@ -44,7 +44,7 @@ public sealed class AdvancedPreferencesPage : UserControl
     body.Children.Add(SettingsPanel.GroupRows(rows));
     var reset = AccountPages.RedButton("Reset all settings…");
     reset.Click += async (_, _) => await ResetAsync();
-    body.Children.Add(SettingsPanel.GroupRows([SettingsPanel.SettingRow("Reset all settings",
+    body.Children.Add(SettingsPanel.GroupRows((FrameworkElement[])[SettingsPanel.SettingRow("Reset all settings",
       "Resets General, notifications, terminal appearance, window theme, close confirmation and browser preferences. Browser tabs close when the saved sign-in mode changes. Projects, sessions, accounts, agents and saved palettes are kept.", reset)]));
     if (notice.Text.Length > 0) body.Children.Add(notice);
   }

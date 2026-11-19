@@ -33,7 +33,7 @@ public sealed class DeploymentStrip : StackPanel
       var glyph = step.State switch { "done" => "✓", "failed" => "!", "running" => "●", "skipped" => "–", _ => "○" };
       var button = new Button { Content = glyph + " " + step.Name, FontSize = 11, MaxWidth = 160, MinWidth = 0, MinHeight = 24, Padding = new(4, 0, 4, 0), Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"] };
       if (step.State == "running") button.SetResourceReference(Control.ForegroundProperty, "AccentFillColorDefaultBrush");
-      button.Flyout = Details(run, [step]); Children.Add(button);
+      button.Flyout = Details(run, (DeploymentStep[])[step]); Children.Add(button);
     }
     var more = run.Steps.Length - selected.Length;
     if (more > 0) Children.Add(new Button { Content = "+" + more, FontSize = 11, MinHeight = 24, Padding = new(4, 0, 4, 0), Flyout = Details(run, run.Steps), Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"] });

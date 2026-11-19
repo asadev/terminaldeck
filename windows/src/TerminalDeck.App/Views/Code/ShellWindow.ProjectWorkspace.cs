@@ -31,7 +31,7 @@ public sealed partial class ShellWindow
   private static CodePage Embedded(CodePage page) { page.EmbedInProject(); return page; }
   private sealed class ProjectCodeHost(ShellWindow shell, string projectId) : ICodePageHost
   {
-    public IReadOnlyList<CodeRoot> Roots() => CodeWorkspace.Roots([shell.Runtime.Projects.Get(projectId)], []);
+    public IReadOnlyList<CodeRoot> Roots() => CodeWorkspace.Roots((global::TerminalDeck.Core.Projects.Project[])[shell.Runtime.Projects.Get(projectId)], []);
     public (string? ProjectId, string? Folder) Current() => (projectId, shell.Runtime.Projects.Get(projectId).HomeFolder);
     public UIElement Picture(CodeRoot root, double size) => shell.CodePagesHost.Picture(root, size);
     public Task OpenTerminalAsync(CodeRoot root, string folder) => shell.CodePagesHost.OpenTerminalAsync(root, folder);

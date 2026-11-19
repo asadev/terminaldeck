@@ -177,13 +177,22 @@ public sealed class WindowsChatSessionsClient : IChatSessions
   public IReadOnlyList<ChatRecord> List() => records.Values.ToArray();
   public ChatRecord Get(string id) => records.GetValueOrDefault(id) ?? throw new KeyNotFoundException("This chat was not found.");
   public async ValueTask<ChatRecord> ReadAsync(string id, CancellationToken cancellationToken = default) => (await CallAsync(new() { Secret = secret, Operation = "get", Id = id }, cancellationToken)).Chat ?? throw new IOException("This chat snapshot was not returned.");
+  /// Told the folder of every chat about to open (the app: one setup for every AI, AiSetupKeeper.AlignSoon). Must return
+  /// at once; it never stops the start.
+  public Action<string>? Opening { get; set; }
   public ValueTask<ChatRecord> CreateAsync(ChatDefinition definition, string? conversationId = null, CancellationToken cancellationToken = default) =>
     CreateAsync(definition, customTitle: false, conversationId, cancellationToken);
   // customTitle: the person named it in New session; the keeper keeps that name on the first message.
-  public async ValueTask<ChatRecord> CreateAsync(ChatDefinition definition, bool customTitle, string? conversationId = null, CancellationToken cancellationToken = default) =>
-    (await CallAsync(new() { Secret = secret, Operation = "create", Definition = definition, ConversationId = conversationId, CustomTitle = customTitle }, cancellationToken)).Chat ?? throw new IOException("This chat was not created.");
-  public async ValueTask<ChatRecord> CreateAsync(string provider, string folder, string accountId, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
-    (await CallAsync(new() { Secret = secret, Operation = "create", Provider = provider, Folder = folder, AccountId = accountId, Options = options }, cancellationToken)).Chat ?? throw new IOException("This chat was not created.");
+  public async ValueTask<ChatRecord> CreateAsync(ChatDefinition definition, bool customTitle, string? conversationId = null, CancellationToken cancellationToken = default)
+  {
+    Opening?.Invoke(definition.Cwd);
+    return (await CallAsync(new() { Secret = secret, Operation = "create", Definition = definition, ConversationId = conversationId, CustomTitle = customTitle }, cancellationToken)).Chat ?? throw new IOException("This chat was not created.");
+  }
+  public async ValueTask<ChatRecord> CreateAsync(string provider, string folder, string accountId, ChatOptions? options = null, CancellationToken cancellationToken = default)
+  {
+    Opening?.Invoke(folder);
+    return (await CallAsync(new() { Secret = secret, Operation = "create", Provider = provider, Folder = folder, AccountId = accountId, Options = options }, cancellationToken)).Chat ?? throw new IOException("This chat was not created.");
+  }
   private async ValueTask ActionAsync(string operation, string id, CancellationToken ct, string? clientId = null, string? text = null, ChatMedia[]? media = null, ChatOptions? options = null, bool allow = false) =>
     _ = await CallAsync(new() { Secret = secret, Operation = operation, Id = id, ClientId = clientId, Text = text, Media = media, Options = options, Allow = allow }, ct);
   public ValueTask SendAsync(string id, string clientId, string text, ChatMedia[]? media = null, CancellationToken cancellationToken = default) => ActionAsync("send", id, cancellationToken, clientId, text, media);

@@ -24,7 +24,7 @@ public sealed partial class AppRuntime
     {
       var state = Hoot.Read();
       if (!PhoneHootGrants.Allows(device, state) || state.Settings is not { } settings) throw new PhoneRefusal("unauthorized", "Hoot is no longer shared with this phone.");
-      return PhoneWorkspacePaths.Require(requested ?? settings.Folder, [settings.Folder], false);
+      return PhoneWorkspacePaths.Require(requested ?? settings.Folder, (string[])[settings.Folder], false);
     }
     return PhoneWorkspacePaths.Require(requested ?? host.Folders(device).FirstOrDefault() ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), host.Folders(device), device.Access == PhoneAccess.Full);
   }
@@ -87,8 +87,13 @@ public sealed partial class AppRuntime
     foreach (var device in Remote.Trust.List().Where(d => d.Access == PhoneAccess.Full && Remote.Grants.Get(d.Id)?.Everything != true))
       Remote.Grants.Set(new(device.Id, true, [], [], [], Everything: true));
     var sessionsHost = new PhoneSessionsHost(this);
-    return new PhoneHostFeatures(chain, Remote.Trust, sessionsHost, activity, screens, CreatePhoneWorkspace(sessionsHost));
+    // 19 Nov free plan: another device gets this PC's sessions only while its account is free (RemoteFreePlan).
+    var features = new PhoneHostFeatures(chain, Remote.Trust, sessionsHost, activity, screens, CreatePhoneWorkspace(sessionsHost))
+      { LimitsToSessions = () => Cloud.Snapshot.Subscription.LimitsRemoteToSessions };
+    Volatile.Write(ref phoneHostFeatures, features);
+    return features;
   }
+  private PhoneHostFeatures? phoneHostFeatures;
 
   // The MCP door's approve (remote.manage) lets a phone in by the same rule as the device dialog: one writer.
   public void ApprovePhone(string deviceId)

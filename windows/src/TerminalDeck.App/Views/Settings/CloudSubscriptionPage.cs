@@ -31,30 +31,33 @@ public sealed class CloudSubscriptionPage : UserControl
     var title = new StackPanel { Spacing = 10, HorizontalAlignment = HorizontalAlignment.Center, Margin = new(0, 12, 0, 0) };
     title.Children.Add(SettingsPanel.IconTile("", "DeckAgentIndigoBrush", 56));
     title.Children.Add(new TextBlock { Text = CloudSubscriptionPageText.Title, FontSize = 17, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center });
-    title.Children.Add(Words(CloudSubscriptionPageText.Benefit));
-    body.Children.Add(title);
-    if (answer.Entitled)
+    if (answer.State == "gift") title.Children.Add(Words(CloudSubscriptionPageText.Gift));
+    if (!answer.Entitled)
     {
-      var rows = new List<FrameworkElement>();
-      if (answer.State == "gift" || answer.Plan is not null) rows.Add(SettingsPanel.SettingRow("Plan", "", SettingsPanel.StateText(answer.State == "gift" ? "Included" : answer.Plan == "yearly" ? "Yearly" : "Monthly")));
-      if (answer.PaidUntil is { } until) rows.Add(SettingsPanel.SettingRow("Paid until", "", SettingsPanel.StateText(CloudSubscriptionPageText.Date(until))));
-      if (answer.Source is "apple" or "google") rows.Add(SettingsPanel.SettingRow("Paid through", "", SettingsPanel.StateText(answer.Source == "apple" ? "Apple" : "Google Play")));
-      var storage = (long)answer.IncludedGb + answer.ExtraGb;
-      rows.Add(SettingsPanel.SettingRow("Storage", $"{answer.IncludedGb} GB included" + (answer.ExtraGb > 0 ? $" · {answer.ExtraGb} GB extra" : ""), SettingsPanel.StateText(storage + " GB")));
-      body.Children.Add(SettingsPanel.GroupRows(rows));
-      if (answer.Source is "apple" or "google") body.Children.Add(Words("Change or cancel it in the " + TerminalDeck.Core.Brand.Name + " app on your " + (answer.Source == "apple" ? "iPhone." : "Android phone.")));
-    }
-    else
-    {
-      if (answer.State == "lapsed")
+      // Free or ended: what it adds, the price and where to subscribe (this PC sells nothing, so there is no button).
+      if (CloudSubscriptionPageText.Ended(answer) is { } ended)
       {
-        var ended = answer.PaidUntil is { } until ? "Your plan ended on " + CloudSubscriptionPageText.Date(until) + "." : "Your plan ended.";
-        if (answer.DataKeptUntil is { } kept) ended += " Your Cloud data is kept until " + CloudSubscriptionPageText.Date(kept) + ".";
-        body.Children.Add(Words(ended));
+        var line = Words(ended); line.SetResourceReference(TextBlock.ForegroundProperty, "DeckInkBrush"); title.Children.Add(line);
       }
-      var price = Words(CloudSubscriptionPageText.Price); price.FontSize = 15; price.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold; body.Children.Add(price);
-      body.Children.Add(Words(CloudSubscriptionPageText.Subscribe));
+      title.Children.Add(Words(CloudSubscriptionPageText.Benefit(answer.IncludedGb)));
+      title.Children.Add(new TextBlock { Text = CloudSubscriptionPageText.Price, FontSize = 15, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new(0, 8, 0, 0), HorizontalAlignment = HorizontalAlignment.Center });
+      title.Children.Add(Words(CloudSubscriptionPageText.Subscribe));
+      body.Children.Add(title);
+      return;
     }
+    body.Children.Add(title);
+    var rows = new List<FrameworkElement>();
+    if (answer.State == "paid")
+    {
+      rows.Add(SettingsPanel.SettingRow("Plan", "", SettingsPanel.StateText(CloudSubscriptionPageText.Plan(answer.Plan))));
+      if (answer.PaidUntil is { } until) rows.Add(SettingsPanel.SettingRow("Paid until", "", SettingsPanel.StateText(CloudSubscriptionPageText.Date(until))));
+      if (CloudSubscriptionPageText.Source(answer.Source) is { } source) rows.Add(SettingsPanel.SettingRow("Paid through", "", SettingsPanel.StateText(source)));
+    }
+    rows.Add(SettingsPanel.SettingRow("Storage", CloudSubscriptionPageText.StorageInfo(answer) ?? "", SettingsPanel.StateText(CloudSubscriptionPageText.Storage(answer))));
+    body.Children.Add(SettingsPanel.GroupRows(rows));
+    if (CloudSubscriptionPageText.Manage(answer.Source) is { } manage) body.Children.Add(Words(manage));
+    // A gift can still be upgraded to the paid plan (Asad, 19 Nov: "so that user can at least upgrade").
+    if (answer.State == "gift") body.Children.Add(Words(CloudSubscriptionPageText.Subscribe));
   }
 
   private static TextBlock Words(string words)

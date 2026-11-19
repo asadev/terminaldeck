@@ -92,6 +92,8 @@ public sealed class RelayHostClient : IDisposable
   }
   /// Ends every account channel now (paired ones stay).
   internal Task CloseAccountChannelsAsync(IReadOnlyCollection<string>? deviceIds) => Volatile.Read(ref current)?.CloseAccountChannelsAsync(deviceIds) ?? Task.CompletedTask;
+  /// Ends these channels of the current socket now (the free plan's lapse).
+  public Task CloseChannelsAsync(IReadOnlyCollection<string> ids) => Volatile.Read(ref current)?.CloseChannelsAsync(ids) ?? Task.CompletedTask;
   // The token to dial with: only one with a minute left that the relay did not refuse.
   private string? DialToken()
   {

@@ -69,7 +69,7 @@ internal sealed class RemoteSessionHeader : Grid
     if (computer != "fixture" || session != "fixture-session") throw new InvalidOperationException("Only the isolated fixture accepts proof data.");
     cProof = true; this.controls = controls; this.accounts = accounts; Render();
   }
-  private bool Has(string capability) => service.CloudAllowed && service.List().Any(c => c.Id == computer && c.State == "Online" && c.Capabilities.Contains(capability));
+  private bool Has(string capability) => service.RemoteAllowed && service.List().Any(c => c.Id == computer && c.State == "Online" && c.Capabilities.Contains(capability));
   private void Changed() => DispatcherQueue.TryEnqueue(Render);
   private void Render()
   {

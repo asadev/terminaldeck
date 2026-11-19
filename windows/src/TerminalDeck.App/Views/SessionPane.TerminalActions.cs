@@ -84,7 +84,7 @@ public sealed partial class SessionPane
       encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, decoder.OrientedPixelWidth, decoder.OrientedPixelHeight, 96, 96, pixels.DetachPixelData()); await encoder.FlushAsync();
       if (encoded.Size > 8 * 1024 * 1024) throw new ArgumentException("Choose an image up to 8 MB.");
       var folder = Path.Combine(root.DirectoryPath, "attachments", draft.Id); Directory.CreateDirectory(folder); var path = Path.Combine(folder, Guid.NewGuid().ToString("N") + ".png");
-      encoded.Seek(0); using (var input = encoded.AsStreamForRead()) using (var file = File.Create(path)) await input.CopyToAsync(file); text = TerminalPaste.Paths([path], draft.Provider == "shell");
+      encoded.Seek(0); using (var input = encoded.AsStreamForRead()) using (var file = File.Create(path)) await input.CopyToAsync(file); text = TerminalPaste.Paths((string[])[path], draft.Provider == "shell");
     }
     else if (data.Contains(StandardDataFormats.WebLink)) text = (await data.GetWebLinkAsync()).AbsoluteUri;
     else if (data.Contains(StandardDataFormats.Text)) text = await data.GetTextAsync();

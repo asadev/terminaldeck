@@ -20,7 +20,7 @@ public sealed partial class ShellWindow
   {
     var root = AppDataRoot.Explicit(Path.Combine(dataRoot.DirectoryPath, "model-picker-fixture"));
     var provider = new PickerProofAccount();
-    var accounts = new AccountService(new JsonStateStore<AccountState>(root, "accounts"), [provider]);
+    var accounts = new AccountService(new JsonStateStore<AccountState>(root, "accounts"), (IAccountProvider[])[provider]);
     var account = await accounts.CreateAsync("claude", "Synthetic catalogue");
     await accounts.RefreshAsync(account.Id);
     await accounts.WarmModelsAsync();
@@ -65,7 +65,7 @@ public sealed partial class ShellWindow
     public ValueTask<IReadOnlyList<ProviderModel>> ModelsAsync(AccountProfile account, CancellationToken ct)
     {
       Reads++;
-      return ValueTask.FromResult<IReadOnlyList<ProviderModel>>([
+      return ValueTask.FromResult<IReadOnlyList<ProviderModel>>((ProviderModel[])[
         new("opus-fixture", "Claude Opus fixture", 200000, IsDefault: true),
         new("sonnet-fixture", "Claude Sonnet fixture", 200000),
         new("haiku-fixture", "Claude Haiku fixture", 200000)]);

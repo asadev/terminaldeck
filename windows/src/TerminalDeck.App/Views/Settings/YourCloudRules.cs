@@ -87,7 +87,7 @@ public static class YourCloudRules
   public static bool ShowsListBar(string placeKey) => placeKey != "Bin";
 
   /// The crumbs: the place, then each folder by name.
-  public static IReadOnlyList<string> Crumbs(string place, IReadOnlyList<string> folder) => [place, .. folder];
+  public static IReadOnlyList<string> Crumbs(string place, IReadOnlyList<string> folder) => (string[])[place, .. folder];
 
   /// One Bin line: what it was, when, from which device by name.
   public static string BinWhen(CloudBinLine line, DateTimeOffset? now = null) => line.Title + " · " + Changed(line.At, now);

@@ -162,7 +162,7 @@ internal static class ReviewFixProof
     await Snapshot(directory, "fix-13-project-defaults");
     window.OpenAgent(AgentSeats.HootId); await Snapshot(directory, "fix-14-hoot-unavailable");
     var root = AppDataRoot.Explicit(Path.Combine(window.Runtime.Root.DirectoryPath, "review-chat"));
-    var accounts = new AccountService(new JsonStateStore<AccountState>(root, "accounts"), [new SyntheticAccount()]); var fake = accounts.List().First();
+    var accounts = new AccountService(new JsonStateStore<AccountState>(root, "accounts"), (IAccountProvider[])[new SyntheticAccount()]); var fake = accounts.List().First();
     var processes = new WindowsChatProcessKeeper(root, window.Runtime.KeeperExecutable, Path.Combine(root.DirectoryPath, "tools"), KeeperCredentials.GetOrCreate(root));
     await using var core = new ChatSessions(new ChatHistory(root), processes, accounts);
     var empty = await core.CreateAsync("claude", root.DirectoryPath, fake.Id); var page = new ChatPage(core, empty.Definition.Id, window.WindowHandle); window.ShowProofChat(page);
@@ -210,7 +210,7 @@ internal static class ReviewFixProof
         emit({type:'result',subtype:'success'});
       });
       """);
-    var accounts = new AccountService(new JsonStateStore<AccountState>(root, "accounts"), [new SyntheticAccount()]); var account = await accounts.CreateAsync("claude", "Synthetic CLI · no real sign-in");
+    var accounts = new AccountService(new JsonStateStore<AccountState>(root, "accounts"), (IAccountProvider[])[new SyntheticAccount()]); var account = await accounts.CreateAsync("claude", "Synthetic CLI · no real sign-in");
     var processes = new WindowsChatProcessKeeper(root, window.Runtime.KeeperExecutable, tools, KeeperCredentials.GetOrCreate(root));
     await using var core = new ChatSessions(new ChatHistory(root), processes, accounts);
     using var serving = new CancellationTokenSource(); var server = new ChatSessionsPipeServer(root, core, KeeperCredentials.GetOrCreate(root)).RunAsync(serving.Token);

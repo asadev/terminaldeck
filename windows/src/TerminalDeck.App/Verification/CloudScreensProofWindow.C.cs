@@ -39,8 +39,8 @@ internal sealed partial class CloudScreensProofWindow
     var skillRoot = Path.Combine(folder, ".agents", "skills");
     var skillFolder = Path.Combine(skillRoot, "release-check"); Directory.CreateDirectory(skillFolder);
     await File.WriteAllTextAsync(Path.Combine(skillFolder, "SKILL.md"), "---\nname: Release check\ndescription: Check the package before release.\n---\nRead the release notes and package manifest.");
-    var skills = AgentSkills.Find([skillRoot]);
-    using var model = new AgentsViewModel(agents, projects) { Sessions = () => [new("fixture-chat", "Review the release notes", "codex", folder, "working", website.Id, "release-review", "chat")] };
+    var skills = AgentSkills.Find((string[])[skillRoot]);
+    using var model = new AgentsViewModel(agents, projects) { Sessions = () => (ProjectSession[])[new("fixture-chat", "Review the release notes", "codex", folder, "working", website.Id, "release-review", "chat")] };
     var agentPage = new AgentsPage(model, new ProofNavigation());
     Check("Agents at-work fixture derives one live busy hand", model.Activity(agents.Get("release-review")) is { Live: 1, Busy: 1 });
     Check("Skills are read only from the explicit scratch project", skills.Count == 1 && skills[0].Folder == skillFolder);
@@ -60,7 +60,7 @@ internal sealed partial class CloudScreensProofWindow
     Check("Viewing efficiency controls writes no default policy", policy is null);
     var at = DateTimeOffset.UtcNow;
     var ledger = new AgentBudgetLedger(new JsonStateStore<AgentUsageLedgerState>(data, "c-proof-agent-usage"));
-    await ledger.ObserveAsync(new("fixture-chat", "release-review", "fixture-task", false, at, [new("fixture-request", at, 80), new("fixture-request", at, 80)], true, false));
+    await ledger.ObserveAsync(new("fixture-chat", "release-review", "fixture-task", false, at, (AgentUsageSample[])[new("fixture-request", at, 80), new("fixture-request", at, 80)], true, false));
     var totals = await ledger.MonthlyAsync("release-review", false, at);
     Check("Budget ledger counts repeated usage only once", totals.Tokens == 80);
     Check("Budget warning uses the real eighty-percent policy", AgentBudgetPolicy.Monthly(new(MonthlyTokens: 100), totals, false).Warning is not null);
@@ -97,7 +97,7 @@ internal sealed partial class CloudScreensProofWindow
       var query = start.Query.TrimStart('?').Split('&').Select(p => p.Split('=', 2)).ToDictionary(p => p[0], p => Uri.UnescapeDataString(p[1]));
       if (!await account.FinishAppReturnAsync(new Uri($"terminaldeck://cloud/return/{query["callback"]}?code=Q29kZUZyb21UaGVXZWJzaXRlX19fX19fX19fX19fX19&state={query["state"]}"))) throw new InvalidOperationException("The local payment fixture did not sign in.");
       var snapshot = account.Snapshot.Subscription;
-      Check(paywall + "/" + state + " service answer projects the expected access", snapshot.ShowsSubscription == (paywall == "on") && snapshot.AllowsCloudServices == (paywall == "off" || state == "gift"));
+      Check(paywall + "/" + state + " service answer projects the expected access", snapshot.ShowsSubscription == (paywall == "on" || state == "gift") && snapshot.AllowsCloudServices == (paywall == "off" || state == "gift"));
       var profile = new ProfilePage(account, _ => { });
       await Shot("profile-" + paywall + "-" + state, profile, 760, 900, background: "DeckRailBrush");
       Check(paywall + "/" + state + " Profile plan row follows service", Texts(profile).Contains(CloudSubscriptionPageText.Title) == (paywall == "on"));

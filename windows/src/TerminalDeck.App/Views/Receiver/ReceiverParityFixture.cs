@@ -13,9 +13,9 @@ internal static class ReceiverParityFixture
   {
     var receiver = Store();
     var model = new ReceiverViewModel(receiver, new Settings()) { SelectedId = "event-1" };
-    return new ReceiverPage(model, [("studio", "Studio"), ("docs", "Documentation")]);
+    return new ReceiverPage(model, ((string Id, string Label)[])[("studio", "Studio"), ("docs", "Documentation")]);
   }
-  internal static FrameworkElement Artifacts() => new ArtifactsPage(new Catalog(), Store(), [new("fixture-studio", "Studio", "studio"), new("fixture-docs", "Documentation", "docs")]);
+  internal static FrameworkElement Artifacts() => new ArtifactsPage(new Catalog(), Store(), (ArtifactFolder[])[new("fixture-studio", "Studio", "studio"), new("fixture-docs", "Documentation", "docs")]);
   private static ReceiverStore Store()
   {
     var at = new DateTimeOffset(2026, 10, 29, 15, 30, 0, TimeSpan.Zero);
@@ -33,7 +33,7 @@ internal static class ReceiverParityFixture
   }
   private sealed class Delivery : IReceiverDelivery
   {
-    public IReadOnlyList<ReceiverDestination> Destinations() => [new(new(RouteKind.Session, "design"), "Design review", "studio"), new(new(RouteKind.Hoot), "Hoot", "studio")];
+    public IReadOnlyList<ReceiverDestination> Destinations() => (ReceiverDestination[])[new(new(RouteKind.Session, "design"), "Design review", "studio"), new(new(RouteKind.Hoot), "Hoot", "studio")];
     public ValueTask<DeliveryReceipt> DeliverAsync(ReceiverItem item, ReceiverTarget target, string deliveryId, CancellationToken ct) => throw new InvalidOperationException("Visual fixture only.");
   }
   private sealed class Settings : IReceiverIntakeSettings

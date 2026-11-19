@@ -4,11 +4,14 @@
     {
       "project": "tests\\TerminalDeck.Core.Tests\\TerminalDeck.Core.Tests.csproj",
       "names": [
-        "TerminalDeck.Core.Tests.Browser.BrowserBookmarksTests",
-        "TerminalDeck.Core.Tests.Browser.BrowserLocalPortsTests",
-        "TerminalDeck.Core.Tests.Browser.BrowserTests",
-        "TerminalDeck.Core.Tests.Browser.BrowserWorkspaceTests",
-        "TerminalDeck.Core.Tests.Browser.W13IntegrationTests"
+        "TerminalDeck.Core.Tests.AiSetup.AiSetupKeeperTests",
+        "TerminalDeck.Core.Tests.Cloud.ProjectFoldersTravelTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudBootFilesJoinTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudBootFilesRulesTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudSubscriptionTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudScreensTests",
+        "TerminalDeck.Core.Tests.Remote.PhoneHostFeaturesTests",
+        "TerminalDeck.Core.Tests.Remote.ReachAccountTests"
       ]
     }
   ]

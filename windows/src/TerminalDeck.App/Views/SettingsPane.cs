@@ -85,7 +85,7 @@ public sealed partial class SettingsPane : Grid
   {
     var section = destinations.SelectedIndex;
     content.Children.Clear();
-    if (section == 2 && !runtime.CloudServicesAllowed) { content.Children.Add(new TerminalDeck.App.Views.Settings.CloudSubscriptionPage(runtime.Cloud)); return; }
+    if (section == 2 && !runtime.DevicesAllowed) { content.Children.Add(new TerminalDeck.App.Views.Settings.CloudSubscriptionPage(runtime.Cloud)); return; }
     var stack = new StackPanel { Spacing = 20, MaxWidth = 700, HorizontalAlignment = HorizontalAlignment.Stretch };
     stack.Children.Add(new TextBlock { Text = PopupPresentation ? "Devices" : SelectedSection, FontSize = PopupPresentation ? 17 : 28, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
     content.Children.Add(stack);

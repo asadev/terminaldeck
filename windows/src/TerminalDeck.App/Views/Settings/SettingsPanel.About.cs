@@ -11,7 +11,7 @@ public sealed partial class SettingsPanel
   {
     var column = Column();
     var version = Services.WindowsUpdateStatus.Version();
-    column.Children.Add(GroupRows([
+    column.Children.Add(GroupRows((FrameworkElement[])[
       SettingRow(TerminalDeck.Core.Brand.Name, "", StateText(version)),
       SettingRow("Licence", "The source is available under the MIT licence. Open the licence for its terms and copyright notice.", AboutLink("MIT", "https://github.com/asadev/terminaldeck/blob/main/LICENSE", "MIT licence")),
       SettingRow("Build", "Version " + version + " · " + RuntimeInformation.ProcessArchitecture + " · .NET " + Environment.Version + ". The version comes from the installed Windows package.", StateText("Windows · " + RuntimeInformation.ProcessArchitecture)),

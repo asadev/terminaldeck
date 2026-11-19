@@ -86,7 +86,7 @@ public sealed partial class ShellWindow
   }
   private sealed class W12ProofConnection : IManagedMcpConnection
   {
-    public ValueTask<IReadOnlyList<McpRemoteTool>> ToolsAsync(CancellationToken ct) => ValueTask.FromResult<IReadOnlyList<McpRemoteTool>>([
+    public ValueTask<IReadOnlyList<McpRemoteTool>> ToolsAsync(CancellationToken ct) => ValueTask.FromResult<IReadOnlyList<McpRemoteTool>>((McpRemoteTool[])[
       new("proof", JsonSerializer.SerializeToElement(new { type = "object", properties = new { message = new { type = "string", description = "Message sent to the tool" }, count = new { type = "integer" }, mode = new { type = "string", @enum = new[] { "brief", "full" } }, enabled = new { type = "boolean" }, items = new { type = "array", items = new { type = "string" } } } }), "Audit tool", "Synthetic tool for isolated form verification")]);
     public ValueTask<JsonElement> CallAsync(string tool, JsonElement arguments, CancellationToken ct) => ValueTask.FromResult(JsonSerializer.SerializeToElement(new { text = "proof-result", arguments }));
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;

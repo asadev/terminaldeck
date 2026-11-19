@@ -49,7 +49,7 @@ public sealed partial class SettingsPane
     stack.Children.Remove(loading);
     if (accounts.Count == 0) stack.Children.Add(Description("No accounts yet"));
     foreach (var section in sections) stack.Children.Add(section);
-    if (sections.Count == 0) stack.Children.Add(Settings.SettingsPanel.GroupRows([AiPageAddRow("Add account", "accounts.add", () => ShowAddAccountAsync())]));
+    if (sections.Count == 0) stack.Children.Add(Settings.SettingsPanel.GroupRows((FrameworkElement[])[AiPageAddRow("Add account", "accounts.add", () => ShowAddAccountAsync())]));
     // A second page of this window (15 Nov): the bar names it and Back returns.
     var more = new List<FrameworkElement> { AiPageLinkRow("Which account agents use", () => NavigateSettings?.Invoke("accounts") ?? SelectSectionAsync(1)) };
     foreach (var provider in missing)
