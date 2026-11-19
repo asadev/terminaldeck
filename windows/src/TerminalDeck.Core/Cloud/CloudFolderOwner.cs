@@ -30,8 +30,11 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   public const string DiskLowRefusal = "Waiting: this PC has less than 2 GB free. It is tried again later.";
 
   public CloudFileKind Profile { get; }
-  /// His folder on this PC (for artifacts: the app's own store of them).
+  /// His folder on this PC (for artifacts: the app's own store of them; for project folders: unused, see `Roots`).
   public string Folder { get; }
+  /// Where its paths live: `Folder` alone, or many project folders (CloudFileKind.ProjectFolders).
+  public CloudFolderRoots Roots => filesAt;
+  private readonly CloudFolderRoots filesAt;
   public string DeviceId { get; }
   public string StateRoot { get; }
   private readonly CloudBin keeper;
@@ -57,6 +60,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   private long lastFullLook;
   private bool hurry;
   private FileSystemWatcher? watcher;
+  private List<FileSystemWatcher> rootWatchers = [];
   private Timer? looper;
 
   /// Something of this PC is ready to be sent (the wiring asks the sync for a round).
@@ -88,7 +92,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   /// - `keeper`: the account's ONE keeper and Bin (`CloudBin.ForAccount`), shared with every other kind's owner.
   /// - `now`: the sync's service clock, falling back to this PC's clock.
   public CloudFolderOwner(string deviceId, string folder, string stateRoot, CloudBin keeper, Func<bool> everyDeviceUnderstands, CloudFileKind? kind = null,
-    Func<long?>? freeDisk = null, Func<long>? now = null, Action<string>? log = null)
+    Func<long?>? freeDisk = null, Func<long>? now = null, Action<string>? log = null, CloudFolderRoots? roots = null)
   {
     if (!CloudDeleteText.IsUuid(deviceId) || !Path.IsPathFullyQualified(folder) || !Path.IsPathFullyQualified(stateRoot)) throw new CloudFailure("invalid_request");
     var mine = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
@@ -96,6 +100,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     if (string.Equals(mine, held, StringComparison.OrdinalIgnoreCase) || held.StartsWith(mine + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
       || mine.StartsWith(held + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new CloudFailure("unsafe_configuration");
     DeviceId = deviceId.ToLowerInvariant(); Folder = mine; StateRoot = held; this.keeper = keeper;
+    filesAt = roots ?? new CloudFolderRoots(mine);
     Profile = kind ?? CloudFileKind.CloudFolder;
     this.everyDeviceUnderstands = everyDeviceUnderstands;
     this.now = now ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
@@ -153,7 +158,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   private CloudFolderEngine.Placement Projection(string relative, byte[] bytes)
   {
     if (Profile.Refusal(relative) is not null || bytes.LongLength > Profile.MaximumFileBytes || CloudFolderRules.WindowsCannotHold(relative)) return new(false, "not-carried");
-    if (CloudFolderDisk.CaseClash(CopyRoot, relative) || CloudFolderDisk.CaseClash(Folder, relative)) return new(false, "case-clash");
+    if (CloudFolderDisk.CaseClash(CopyRoot, relative) || filesAt.CaseClash(relative)) return new(false, "case-clash");
     return new(true, null);
   }
 
@@ -166,35 +171,74 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     var parts = path.Split('/');
     return parts.Length > 1 ? string.Join(" › ", parts[..^1]) : null;
   }
-  private bool FolderPresent() => CloudFolderDisk.IsPlainFolder(Folder);
+  private bool FolderPresent() => filesAt.IsMany ? filesAt.All.Count > 0 : CloudFolderDisk.IsPlainFolder(Folder);
   private static string Hash(byte[] bytes) => CloudMemoryFormat.Hash(bytes);
   private void Report(Exception error) => log(Profile.Label + ": " + (error is CloudFailure f ? f.Code : error.GetType().Name));
 
   // ---- Joining the sync ----
 
-  /// Watches his folder (file events, and a look every 2 seconds). Nothing of this PC is recorded until
-  /// `MarkCloudRead` and the gate is open.
+  /// Watches his folder (file events, and a look every 2 seconds; project folders: one watcher per project folder and a
+  /// look every 10 seconds). Nothing of this PC is recorded until `MarkCloudRead` and the gate is open.
   public void StartWatching()
   {
     if (looper is not null) return;
-    try
-    {
-      if (FolderPresent())
+    if (filesAt.IsMany) WatchRoots();
+    else
+      try
       {
-        watcher = new FileSystemWatcher(Folder) { IncludeSubdirectories = true, NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size };
-        watcher.Changed += (_, _) => dirty = true; watcher.Created += (_, _) => dirty = true; watcher.Deleted += (_, _) => dirty = true; watcher.Renamed += (_, _) => dirty = true;
-        watcher.Error += (_, _) => dirty = true;
-        watcher.EnableRaisingEvents = true;
+        if (FolderPresent())
+        {
+          watcher = new FileSystemWatcher(Folder) { IncludeSubdirectories = true, NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size };
+          watcher.Changed += (_, _) => dirty = true; watcher.Created += (_, _) => dirty = true; watcher.Deleted += (_, _) => dirty = true; watcher.Renamed += (_, _) => dirty = true;
+          watcher.Error += (_, _) => dirty = true;
+          watcher.EnableRaisingEvents = true;
+        }
       }
-    }
-    catch (Exception e) when (e is IOException or ArgumentException or UnauthorizedAccessException) { watcher = null; }
-    looper = new Timer(_ => _ = LookIfDueAsync(), null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+      catch (Exception e) when (e is IOException or ArgumentException or UnauthorizedAccessException) { watcher = null; }
+    var pause = TimeSpan.FromSeconds(Profile.LookSeconds);
+    looper = new Timer(_ => _ = LookIfDueAsync(), null, pause, pause);
   }
   /// Sign-out or a closed gate: nothing is read, sent or written after this returns. Nothing is deleted.
   public void StopWatching()
   {
     looper?.Dispose(); looper = null;
     watcher?.Dispose(); watcher = null;
+    foreach (var one in rootWatchers) one.Dispose();
+    rootWatchers = [];
+  }
+  /// Project folders: one watcher per project folder on this PC. Builds and checkouts (`code`, `node_modules`, ...)
+  /// change all the time and never travel: their events never wake a look.
+  private void WatchRoots()
+  {
+    foreach (var one in rootWatchers) one.Dispose();
+    var made = new List<FileSystemWatcher>();
+    foreach (var root in filesAt.All.Values.Order(StringComparer.OrdinalIgnoreCase))
+      try
+      {
+        if (!CloudProjectFoldersRules.RealFolder(root)) continue;
+        var one = new FileSystemWatcher(root) { IncludeSubdirectories = true, NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size };
+        void Nudge(string? name)
+        {
+          if (name is null || !name.Split('\\', '/').Any(part => CloudProjectFoldersRules.NeverFolders.Contains(part.ToLowerInvariant()))) dirty = true;
+        }
+        one.Changed += (_, e) => Nudge(e.Name); one.Created += (_, e) => Nudge(e.Name); one.Deleted += (_, e) => Nudge(e.Name); one.Renamed += (_, e) => Nudge(e.Name);
+        one.Error += (_, _) => dirty = true;
+        one.EnableRaisingEvents = true;
+        made.Add(one);
+      }
+      catch (Exception e) when (e is IOException or ArgumentException or UnauthorizedAccessException)
+      {
+        log(Profile.Label + ": a project folder cannot be watched (" + e.GetType().Name + "); it is looked at every " + Profile.LookSeconds.ToString(CultureInfo.InvariantCulture) + " s");
+      }
+    rootWatchers = made;
+  }
+  /// Project folders: the projects on this PC changed (added, moved, given a folder). Their files are looked at next.
+  public void SetRoots(IReadOnlyDictionary<string, string> next)
+  {
+    if (!filesAt.IsMany || filesAt.Same(next)) return;
+    filesAt.Set(next);
+    if (looper is not null) WatchRoots();
+    dirty = true;
   }
   /// The first pull has returned: this PC has read the Cloud, so its own files may be recorded now. Kept.
   public void MarkCloudRead() { SetControl("cloudRead", "1"); Save(); }
@@ -249,12 +293,14 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     var journalBefore = engine.LastSeq;
     // An arrived removal half applied before a crash is finished before anything reconciles.
     FinishArrivedRemovals(engine);
-    var walk = CloudFolderWalk.Run(Folder);
+    var walk = filesAt.Walk(Profile);
     var t = now();
     // Each saved intent on its own; nothing here can stop the look.
     RecoverDeleteIntents(engine);
     var hadFiles = state.Base.Count > 0;
-    var unavailable = !walk.Present || !walk.Reliable || walk.Files.Count == 0 && hadFiles;
+    // Project folders: an unreadable item in one folder never stops the others (removals still need a reliable look).
+    var unavailable = filesAt.IsMany ? filesAt.All.Count == 0 || walk.Files.Count == 0 && hadFiles
+      : !walk.Present || !walk.Reliable || walk.Files.Count == 0 && hadFiles;
     SetControl("folderMissing", unavailable ? "1" : null);
     if (unavailable)
     {
@@ -272,13 +318,16 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     SetControl("secretNames", walk.SecretNames.Count == 0 ? null : string.Join("\n", walk.SecretNames));
     SetControl("spellingNames", walk.SpellingNames.Count == 0 ? null : string.Join("\n", walk.SpellingNames));
     CheckDisk();
-    roomLow = roomLeft() is { } left && left < CloudFolderFormat.RoomFloor;
+    roomLow = Profile.ObeysRoomFloor && roomLeft() is { } left && left < CloudFolderFormat.RoomFloor;
     SetControl("roomLow", roomLow ? "1" : null);
     _ = DaySent(t);
     var today = t / CloudFolderFormat.Day;
     var busyFiles = 0;
+    // Paced (project folders): at most `BytesPerLook` recorded per look; the rest goes in the next looks.
+    long recordedBytes = 0;
     foreach (var path in walk.Files.Keys.OrderBy(p => p, StringComparer.Ordinal))
     {
+      if (Profile.BytesPerLook is { } pace && recordedBytes >= pace) { dirty = true; break; }
       var entry = walk.Files[path];
       state.Presence[path] = t;
       var mark = DeleteState().Mark(path);
@@ -314,6 +363,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
       try { recorded = Settle(path, engine); } catch (CloudFailure e) when (e.Code == "unsafe_configuration") { continue; }
       if (recorded)
       {
+        recordedBytes += entry.Bytes;
         state.DayCount[path] = day is not null && day.Day == today ? new DayRow { Day = today, Count = day.Count + 1 } : new DayRow { Day = today, Count = 1 };
         // A file that keeps changing: each send within 10 minutes of the last one lengthens the gap.
         var next = sentAt > 0 && t - sentAt < CloudFolderFormat.BusyLongGap ? streak + 1 : 1;
@@ -326,7 +376,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     foreach (var still in state.Seen.Where(s => s.Value.ChangedAt < t - 3_600_000 && s.Value.SentAt < t - 3_600_000).Select(s => s.Key).ToArray()) state.Seen.Remove(still);
     // "Only on this PC" lives only where this PC has the file: a kept file he later removed by hand leaves no mark.
     foreach (var m in DeleteState().Marks().Where(m => m.Mark == CloudLocalMark.OnlyOnThisPc && !walk.Files.ContainsKey(m.Place) && !walk.ExcludedPaths.Contains(m.Place)))
-      if (CloudFolderDisk.Read(Folder, m.Place).Kind == CloudFolderDisk.Kind.Absent)
+      if (filesAt.Read(m.Place).Kind == CloudFolderDisk.Kind.Absent)
       {
         DeleteState().ClearMark(m.Place);
         Book.Cleared.Add(m.Place);
@@ -356,7 +406,8 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   private bool MayRecord(long bytes)
   {
     if (roomLow) return false;
-    if (DaySent(now()) + bytes > CloudFolderFormat.DailySendBytes) { SetControl("dayFull", "1"); return false; }
+    if (Profile.DailySendBytes is not { } cap) return true;
+    if (DaySent(now()) + bytes > cap) { SetControl("dayFull", "1"); return false; }
     return true;
   }
   private void Spent(long bytes)
@@ -379,9 +430,9 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     if (!Book.Cleared.Contains(path) || DeleteState().Mark(path) is not null) return false;
     if (localHash is null)
     {
-      if (Profile.Refusal(path) is not null || CloudFolderDisk.CaseClash(Folder, path) || CloudFolderDisk.StampOf(Folder, path) is not { } before) return false;
-      var read = CloudFolderDisk.Read(Folder, path);
-      if (!read.IsFile || CloudFolderDisk.StampOf(Folder, path) != before || read.Bytes!.LongLength != before.Bytes) return false;
+      if (Profile.Refusal(path) is not null || filesAt.CaseClash(path) || filesAt.StampOf(path) is not { } before) return false;
+      var read = filesAt.Read(path);
+      if (!read.IsFile || filesAt.StampOf(path) != before || read.Bytes!.LongLength != before.Bytes) return false;
       localHash = Hash(read.Bytes!);
     }
     if (engine.KnownVersion(path, localHash))
@@ -399,12 +450,12 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   {
     // Its size and time are read before AND after its bytes; a file still being written waits. A name that differs
     // only by capitals from the file on disk is not that file.
-    if (Profile.Refusal(path) is not null || CloudFolderDisk.CaseClash(Folder, path) || CloudFolderDisk.StampOf(Folder, path) is not { } before) return false;
-    var read = CloudFolderDisk.Read(Folder, path);
+    if (Profile.Refusal(path) is not null || filesAt.CaseClash(path) || filesAt.StampOf(path) is not { } before) return false;
+    var read = filesAt.Read(path);
     if (!read.IsFile) return false;
     var local = read.Bytes!;
     AfterReadForTests?.Invoke(path);
-    if (CloudFolderDisk.StampOf(Folder, path) != before || local.LongLength != before.Bytes || local.LongLength > Profile.MaximumFileBytes) return false;
+    if (filesAt.StampOf(path) != before || local.LongLength != before.Bytes || local.LongLength > Profile.MaximumFileBytes) return false;
     var localHash = Hash(local);
     // His "Cloud" choice survives a branch switch: bytes this place held before come back as "Only on this PC".
     if (CloudChoiceStands(path, localHash, engine)) return false;
@@ -421,9 +472,9 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
           if (!EnsureSafetyCopy()) return false;
           KeepMine(path, now(), local, now());
           CrashPointForTests?.Invoke("j7:beforeWrite");
-          CloudFolderDisk.Write(Folder, path, newest.Bytes!, localHash);
+          filesAt.Write(path, newest.Bytes!, localHash);
         }
-        SetBase(path, hash, newest.Bytes!.LongLength, CloudFolderDisk.Modified(Folder, path) ?? now());
+        SetBase(path, hash, newest.Bytes!.LongLength, filesAt.Modified(path) ?? now());
         DeleteState().ClearMark(path);
         return false;
       }
@@ -437,11 +488,11 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
       }
       CloudFolderDisk.Write(CopyRoot, path, local, expecting);
       Spent(local.LongLength);
-      SetBase(path, localHash, local.LongLength, CloudFolderDisk.Modified(Folder, path) ?? now());
+      SetBase(path, localHash, local.LongLength, filesAt.Modified(path) ?? now());
       DeleteState().ClearMark(path);
       return true;
     }
-    var modified = CloudFolderDisk.Modified(Folder, path) ?? before.Modified;
+    var modified = filesAt.Modified(path) ?? before.Modified;
     var known = Base(path);
     var copy = CloudFolderDisk.Read(CopyRoot, path);
     if (copy.Kind == CloudFolderDisk.Kind.Blocked) return false;
@@ -495,9 +546,9 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     // The arrived version is newer: his edit is kept 30 days (a version he can open), then the newer one is written.
     if (!EnsureSafetyCopy()) return false;
     var until = KeepMine(path, localAt, local, t);
-    CloudFolderDisk.Write(Folder, path, copyBytes, localHash);
-    CloudFolderDisk.SetModified(Folder, path, arrived.CreatedAt);
-    SetBase(path, copyHash, copyBytes.LongLength, CloudFolderDisk.Modified(Folder, path) ?? arrived.CreatedAt);
+    filesAt.Write(path, copyBytes, localHash);
+    filesAt.SetModified(path, arrived.CreatedAt);
+    SetBase(path, copyHash, copyBytes.LongLength, filesAt.Modified(path) ?? arrived.CreatedAt);
     state.Lines[path] = new LineRow { Device = arrived.OriginDevice, KeptUntil = until, At = t };
     return false;
   }
@@ -509,12 +560,12 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     foreach (var (path, row) in state.Base.ToArray())
     {
       if (walk.Files.ContainsKey(path) || walk.ExcludedPaths.Contains(path)) { state.Gone.Remove(path); continue; }
-      if (DeleteState().Mark(path) is not null || CloudFolderDisk.Read(Folder, path).Kind != CloudFolderDisk.Kind.Absent) continue;
+      if (DeleteState().Mark(path) is not null || filesAt.Read(path).Kind != CloudFolderDisk.Kind.Absent) continue;
       if (!state.Gone.TryGetValue(path, out var since)) { state.Gone[path] = t; continue; }
       if (t - since < CloudFolderFormat.Quiet) continue;
       // Only the witness decides here, never an intent left in the table.
       var lastSeen = Math.Min(state.Presence.TryGetValue(path, out var at) ? at : row.Modified, since);
-      var answer = await witness.WhoAsync(CloudFolderDisk.Full(Folder, path), DateTimeOffset.FromUnixTimeMilliseconds(lastSeen), DateTimeOffset.FromUnixTimeMilliseconds(since));
+      var answer = await witness.WhoAsync(filesAt.Full(path) ?? CloudFolderDisk.Full(Folder, path), DateTimeOffset.FromUnixTimeMilliseconds(lastSeen), DateTimeOffset.FromUnixTimeMilliseconds(since));
       var travelled = false;
       if (answer.Kind == CloudDeleteWitnessAnswer.Kinds.Ai && answer.Session is { } session && answer.Group is { } group
         && CloudFolderDisk.Read(CopyRoot, path) is { IsFile: true } copy && Hash(copy.Bytes!) == row.Hash)
@@ -541,12 +592,12 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     foreach (var path in state.Arrived.OrderBy(p => p, StringComparer.Ordinal).Take(2000).ToArray())
     {
       if (DeleteState().Mark(path) is not null) continue;
-      if (Profile.Refusal(path) is not null || CloudFolderDisk.CaseClash(Folder, path) || CloudFolderDisk.Read(CopyRoot, path) is not { IsFile: true } copy)
+      if (Profile.Refusal(path) is not null || filesAt.CaseClash(path) || CloudFolderDisk.Read(CopyRoot, path) is not { IsFile: true } copy)
       {
         state.Arrived.Remove(path); continue;
       }
       // A name that is a folder here and a file there (or the other way) stays apart, named.
-      if (CloudFolderDisk.FileFolderClash(Folder, path)) { clashes.Add(Name(path)); continue; }
+      if (filesAt.FileFolderClash(path)) { clashes.Add(Name(path)); continue; }
       var copyHash = Hash(copy.Bytes!);
       if (copyHash != Base(path)?.Hash)
       {
@@ -562,7 +613,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   private void Arrive(string path, byte[] copyBytes, string copyHash, BaseRow? known, CloudFolderEngine engine)
   {
     var t = now();
-    var found = CloudFolderDisk.Read(Folder, path);
+    var found = filesAt.Read(path);
     switch (found.Kind)
     {
       case CloudFolderDisk.Kind.Blocked:
@@ -570,16 +621,16 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
       case CloudFolderDisk.Kind.Absent:
         // A previously agreed file disappeared here: the two-look witness decides before any placement.
         if (known is not null) return;
-        CloudFolderDisk.Write(Folder, path, copyBytes, null);
-        if (engine.CurrentVersion(path)?.CreatedAt is { } at) CloudFolderDisk.SetModified(Folder, path, at);
-        SetBase(path, copyHash, copyBytes.LongLength, CloudFolderDisk.Modified(Folder, path) ?? t);
+        filesAt.Write(path, copyBytes, null);
+        if (engine.CurrentVersion(path)?.CreatedAt is { } at) filesAt.SetModified(path, at);
+        SetBase(path, copyHash, copyBytes.LongLength, filesAt.Modified(path) ?? t);
         state.Gone.Remove(path);
         TakeFromBin(ItemKey(path), t);
         return;
       default:
         var local = found.Bytes!;
         var localHash = Hash(local);
-        if (localHash == copyHash) { SetBase(path, copyHash, local.LongLength, CloudFolderDisk.Modified(Folder, path) ?? t); return; }
+        if (localHash == copyHash) { SetBase(path, copyHash, local.LongLength, filesAt.Modified(path) ?? t); return; }
         if (known is not null && localHash == known.Hash)
         {
           // His file is the version both agreed on: the newer one replaces it; his is kept 30 days (a way back).
@@ -587,13 +638,13 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
           // Bytes that never arrived from another device are HIS: kept under his own key for their full 30 days.
           if (engine.ArrivedVersion(path, localHash) is null) KeepMine(path, known.Modified, local, t);
           else KeepVersion(ItemKey(path), Name(path), Place(path), known.Modified, DeviceId, local, t);
-          CloudFolderDisk.Write(Folder, path, copyBytes, localHash);
-          if (engine.CurrentVersion(path)?.CreatedAt is { } made) CloudFolderDisk.SetModified(Folder, path, made);
-          SetBase(path, copyHash, copyBytes.LongLength, CloudFolderDisk.Modified(Folder, path) ?? t);
+          filesAt.Write(path, copyBytes, localHash);
+          if (engine.CurrentVersion(path)?.CreatedAt is { } made) filesAt.SetModified(path, made);
+          SetBase(path, copyHash, copyBytes.LongLength, filesAt.Modified(path) ?? t);
           return;
         }
         // Both changed (or a file of the same name was here before he joined: rule J, his first copy loses and is kept).
-        var modified = CloudFolderDisk.Modified(Folder, path) ?? t;
+        var modified = filesAt.Modified(path) ?? t;
         if (BothChanged(path, local, localHash, modified, engine)) engine.ReconcileAll([path]);
         return;
     }
@@ -612,14 +663,16 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     {
       var engine = Core();
       FinishArrivedRemovals(engine);
+      // Project folders are the person's own folders: never made here (a project not on this PC waits).
+      if (filesAt.IsMany) return;
       Directory.CreateDirectory(Folder);
       SetControl("folderMissing", null);
       foreach (var path in state.Base.Keys) state.Arrived.Add(path);
       foreach (var path in state.Arrived.ToArray())
       {
-        if (DeleteState().Mark(path) is not null || CloudFolderDisk.Read(Folder, path).Kind != CloudFolderDisk.Kind.Absent
+        if (DeleteState().Mark(path) is not null || filesAt.Read(path).Kind != CloudFolderDisk.Kind.Absent
           || CloudFolderDisk.Read(CopyRoot, path) is not { IsFile: true } copy) continue;
-        CloudFolderDisk.Write(Folder, path, copy.Bytes!, null);
+        filesAt.Write(path, copy.Bytes!, null);
         SetBase(path, copy.Bytes!, now());
       }
       RetryRemovalHeads(engine);
@@ -656,18 +709,18 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
       var item = ItemKey(path);
       var t = now();
       if (keeper.Get(item) is not { } binned || keeper.Content(Profile.KeeperKind, binned.Sha256) is not { } bytes || !FolderPresent()) return false;
-      var there = CloudFolderDisk.Read(Folder, path);
+      var there = filesAt.Read(path);
       switch (there.Kind)
       {
         case CloudFolderDisk.Kind.Blocked: return false;
-        case CloudFolderDisk.Kind.Absent: CloudFolderDisk.Write(Folder, path, bytes, null); break;
+        case CloudFolderDisk.Kind.Absent: filesAt.Write(path, bytes, null); break;
         default:
           var hash = Hash(there.Bytes!);
           if (hash != binned.Sha256)
           {
             // The file Put back displaces is his: kept under its own key for its full 30 days.
             KeepMine(path, t, there.Bytes!, t);
-            CloudFolderDisk.Write(Folder, path, bytes, hash);
+            filesAt.Write(path, bytes, hash);
           }
           break;
       }
@@ -749,7 +802,8 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   {
     IReadOnlyList<string> Names(string key) => Control(key) is { } v ? v.Split('\n') : [];
     var lines = new List<string>();
-    if (Control("folderMissing") == "1") lines.Add(Profile.KeeperKind == CloudFileKind.CloudFolder.KeeperKind ? "Your Cloud folder is not on this PC" : "Your artifacts folder is not on this PC");
+    if (Control("folderMissing") == "1") lines.Add(Profile.KeeperKind == CloudFileKind.CloudFolder.KeeperKind ? "Your Cloud folder is not on this PC"
+      : filesAt.IsMany ? "No project's folder is on this PC" : "Your artifacts folder is not on this PC");
     var words = Profile.Words;
     if (Names("gateWaiting") is { Count: > 0 } waiting) lines.Add(words.Gate(waiting));
     if (Control("roomLow") == "1") lines.Add(words.RoomLow);
@@ -789,11 +843,12 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     {
       if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
       Directory.CreateDirectory(staging);
-      foreach (var path in CloudFolderWalk.Run(Folder).Files.Keys)
+      foreach (var path in filesAt.Walk(Profile).Files.Keys)
       {
+        if (filesAt.Full(path) is not { } from) continue;
         var to = CloudFolderDisk.Full(staging, path);
         Directory.CreateDirectory(Path.GetDirectoryName(to)!);
-        File.Copy(CloudFolderDisk.Full(Folder, path), to);
+        File.Copy(from, to);
       }
       Directory.Move(staging, target);
     }
@@ -817,6 +872,8 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     try { from = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source)); }
     catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { throw new CloudFailure("invalid_request"); }
     var mine = Folder;
+    // The cloud.folder_add tool is the Cloud folder's; a project's folders are added to by hand.
+    if (filesAt.IsMany) throw new CloudFailure("invalid_request");
     if (string.Equals(from, mine, StringComparison.OrdinalIgnoreCase) || from.StartsWith(mine + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
       || mine.StartsWith(from + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || !(File.Exists(from) || Directory.Exists(from)))
       throw new CloudFailure("invalid_request");
@@ -857,11 +914,11 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     await Enter();
     try
     {
-      if (Profile.Refusal(relative) is not null || bytes.LongLength > Profile.MaximumFileBytes || CloudFolderDisk.CaseClash(Folder, relative)) throw new CloudFailure("unsafe_configuration");
+      if (Profile.Refusal(relative) is not null || bytes.LongLength > Profile.MaximumFileBytes || filesAt.CaseClash(relative)) throw new CloudFailure("unsafe_configuration");
       if (!FolderPresent() || Control("folderMissing") == "1" || DeleteState().Mark(relative) is not null) throw new CloudFailure("unavailable");
-      if (CloudFolderDisk.Read(Folder, relative).Kind == CloudFolderDisk.Kind.Absent && Base(relative) is not null) throw new CloudFailure("unavailable");
-      CloudFolderDisk.Write(Folder, relative, bytes, expecting);
-      if (modified is { } at) CloudFolderDisk.SetModified(Folder, relative, at);
+      if (filesAt.Read(relative).Kind == CloudFolderDisk.Kind.Absent && Base(relative) is not null) throw new CloudFailure("unavailable");
+      filesAt.Write(relative, bytes, expecting);
+      if (modified is { } at) filesAt.SetModified(relative, at);
       dirty = true;
     }
     finally { Leave(); }
@@ -873,7 +930,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     await Enter();
     try
     {
-      if (CloudFolderDisk.Read(Folder, relative) is not { IsFile: true } held || Hash(held.Bytes!) != expecting) throw new CloudFailure("version_changed");
+      if (filesAt.Read(relative) is not { IsFile: true } held || Hash(held.Bytes!) != expecting) throw new CloudFailure("version_changed");
       RemoveItem(relative, actor.Intent(relative, CloudDeleteScope.Everywhere), Core());
     }
     finally { Save(); Leave(); }
@@ -975,7 +1032,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
           if (DeleteState().Mark(item.Relative)?.Mark == CloudLocalMark.OnlyOnThisPc && engine.CurrentVersion(item.Relative)?.Version == item.Version)
           {
             // A new put on top of a Cloud removal reunites every device. This device's differing bytes are kept.
-            if (CloudFolderDisk.Read(Folder, item.Relative) is { IsFile: true } local && Hash(local.Bytes!) != item.ResourceHash)
+            if (filesAt.Read(item.Relative) is { IsFile: true } local && Hash(local.Bytes!) != item.ResourceHash)
             {
               KeepMine(item.Relative, now(), local.Bytes!, now());
               SetBase(item.Relative, local.Bytes!, now());
@@ -1027,7 +1084,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   /// "plan (from MacBook Pro).md" (once). True when handled.
   private bool KeptBesideByCapitals(CloudFolderEngine.Part item, CloudFolderEngine engine)
   {
-    if (engine.CurrentVersion(item.Relative) is not null || !(CloudFolderDisk.CaseClash(CopyRoot, item.Relative) || CloudFolderDisk.CaseClash(Folder, item.Relative))) return false;
+    if (engine.CurrentVersion(item.Relative) is not null || !(CloudFolderDisk.CaseClash(CopyRoot, item.Relative) || filesAt.CaseClash(item.Relative))) return false;
     if (engine.RetainedBytes(item.ResourceHash) is not { } bytes || !FolderPresent()) return true;
     var device = deviceName(item.Op.OriginDevice.ToLowerInvariant()) ?? "another device";
     var slash = item.Relative.LastIndexOf('/');
@@ -1038,10 +1095,10 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
       var besideName = CloudFolderFormat.BesideName(name, device, number);
       var beside = parent.Length == 0 ? besideName : parent + "/" + besideName;
       if (Profile.Refusal(beside) is not null || CloudFolderRules.WindowsCannotHold(beside)) return true;
-      var there = CloudFolderDisk.Read(Folder, beside);
+      var there = filesAt.Read(beside);
       if (there.IsFile) { if (Hash(there.Bytes!) == item.ResourceHash) return true; continue; }
-      if (there.Kind == CloudFolderDisk.Kind.Blocked || CloudFolderDisk.CaseClash(Folder, beside)) continue;
-      CloudFolderDisk.Write(Folder, beside, bytes, null);
+      if (there.Kind == CloudFolderDisk.Kind.Blocked || filesAt.CaseClash(beside)) continue;
+      filesAt.Write(beside, bytes, null);
       dirty = true;
       return true;
     }
@@ -1054,7 +1111,9 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   public CloudDeleteIntent? PendingDeleteIntent(string path) => DeleteState().Intent(path);
   private bool RootUnavailable()
   {
-    var walk = CloudFolderWalk.Run(Folder);
+    // Project folders: a whole walk per arrival would be costly; a project not on this PC simply waits (`Locate`).
+    if (filesAt.IsMany) return filesAt.All.Count == 0;
+    var walk = filesAt.Walk(Profile);
     return !walk.Present || !walk.Reliable || walk.Files.Count == 0 && state.Base.Count > 0;
   }
   /// J-7: bytes this place held before (the copy now, this PC's own journal, or what arrived).
@@ -1120,14 +1179,14 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   /// `wasHere`: his file was in the folder when the act began (false for a removal an AI already made in the folder).
   private void RemoveItem(string path, CloudDeleteIntent intent, CloudFolderEngine engine, bool wasHere = true)
   {
-    if (Profile.Refusal(path) is not null || CloudFolderDisk.CaseClash(Folder, path) || CloudFolderDisk.CaseClash(CopyRoot, path) || !HasReadCloud() || !everyDeviceUnderstands())
+    if (Profile.Refusal(path) is not null || filesAt.CaseClash(path) || CloudFolderDisk.CaseClash(CopyRoot, path) || !HasReadCloud() || !everyDeviceUnderstands())
       throw new CloudFailure("unavailable");
     if (intent.Scope == CloudDeleteScope.Cloud && !deleteRuleOpen()) throw new CloudFailure("invalid_request");
     Book.Cleared.Remove(path);
     DeleteState().PutIntent(intent);
     try
     {
-      if (intent.Scope == CloudDeleteScope.Everywhere && CloudFolderDisk.Read(Folder, path) is { IsFile: true } local)
+      if (intent.Scope == CloudDeleteScope.Everywhere && filesAt.Read(path) is { IsFile: true } local)
       {
         DeleteState().ClearMark(path);
         var copy = CloudFolderDisk.Read(CopyRoot, path);
@@ -1165,9 +1224,9 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
       {
         var bytes = keeper.Content(Profile.KeeperKind, binned);
         if (CloudFolderDisk.Read(CopyRoot, path).Kind == CloudFolderDisk.Kind.Absent && bytes is not null) CloudFolderDisk.Write(CopyRoot, path, bytes, null);
-        if (scope == CloudDeleteScope.Everywhere && restoreLocal && CloudFolderDisk.Read(Folder, path).Kind == CloudFolderDisk.Kind.Absent && bytes is not null)
-          CloudFolderDisk.Write(Folder, path, bytes, null);
-        if (CloudFolderDisk.Read(Folder, path).IsFile && keeper.Get(ItemKey(path))?.Sha256 == binned)
+        if (scope == CloudDeleteScope.Everywhere && restoreLocal && filesAt.Read(path).Kind == CloudFolderDisk.Kind.Absent && bytes is not null)
+          filesAt.Write(path, bytes, null);
+        if (filesAt.Read(path).IsFile && keeper.Get(ItemKey(path))?.Sha256 == binned)
         {
           TakeFromBin(ItemKey(path), now());
           Book.Bin.Remove(path);
@@ -1197,7 +1256,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
         if (retained is not null) CloudFolderDisk.Write(CopyRoot, path, retained, null);
       }
       if (retained is null || Hash(retained) != current.RawHash) throw new CloudFailure("unavailable");
-      var local = CloudFolderDisk.Read(Folder, path);
+      var local = filesAt.Read(path);
       if (local.Kind == CloudFolderDisk.Kind.Blocked) throw new CloudFailure("unsafe_configuration");
       if (intent.Scope == CloudDeleteScope.Everywhere && local.IsFile && Hash(local.Bytes!) != current.RawHash) throw new CloudFailure("version_changed");
       if (!EnsureSafetyCopy()) throw new CloudFailure("unavailable");
@@ -1209,7 +1268,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
       Book.Binned[path] = current.RawHash;
       Save();
       CrashPointForTests?.Invoke("press:afterBin");
-      if (intent.Scope == CloudDeleteScope.Everywhere && local.IsFile) CloudFolderDisk.Remove(Folder, path, Hash(local.Bytes!));
+      if (intent.Scope == CloudDeleteScope.Everywhere && local.IsFile) filesAt.Remove(path, Hash(local.Bytes!));
       // Persist attribution first, then bind its exact journal id.
       if (modern)
       {
@@ -1241,7 +1300,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
       RememberRemovalMetadata(path, intent, engine);
       SetBase(path, null);
       // "Only on this PC" only where this PC has the file.
-      if (intent.Scope == CloudDeleteScope.Cloud && CloudFolderDisk.Read(Folder, path).IsFile) DeleteState().PutMark(new CloudDeleteMark(path, CloudLocalMark.OnlyOnThisPc, intent.At));
+      if (intent.Scope == CloudDeleteScope.Cloud && filesAt.Read(path).IsFile) DeleteState().PutMark(new CloudDeleteMark(path, CloudLocalMark.OnlyOnThisPc, intent.At));
       else DeleteState().ClearMark(path);
       DeleteState().ClearIntent(path);
       Book.Binned.Remove(path);
@@ -1306,13 +1365,13 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
         {
           byte[]? bytes = null;
           var here = false;
-          if (CloudFolderDisk.Read(Folder, path) is { IsFile: true } local) { bytes = local.Bytes; here = true; }
+          if (filesAt.Read(path) is { IsFile: true } local) { bytes = local.Bytes; here = true; }
           else if (keeper.Get(ItemKey(path)) is { } kept) bytes = keeper.Content(Profile.KeeperKind, kept.Sha256);
           if (bytes is not null)
           {
             if (CloudFolderDisk.Read(CopyRoot, path).Kind == CloudFolderDisk.Kind.Absent) CloudFolderDisk.Write(CopyRoot, path, bytes, null);
             engine.SetNextParents(path, row.Parents);
-            SetBase(path, bytes, CloudFolderDisk.Modified(Folder, path) ?? now());
+            SetBase(path, bytes, filesAt.Modified(path) ?? now());
             // In the Cloud, not on this PC when he has no file here; otherwise simply in sync.
             if (here) DeleteState().ClearMark(path);
             else DeleteState().PutMark(new CloudDeleteMark(path, CloudLocalMark.NotOnThisPc, now()));
@@ -1347,11 +1406,11 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
         Book.Cleared.Remove(path);
         if (to == CloudBringBackDestination.Cloud)
         {
-          if (CloudFolderDisk.Read(Folder, path) is not { IsFile: true } local) throw new CloudFailure("unavailable");
+          if (filesAt.Read(path) is not { IsFile: true } local) throw new CloudFailure("unavailable");
           // A Cloud-scope removal archived the copy: a fresh capture inherits that removal's version.
           if (CloudFolderDisk.Read(CopyRoot, path) is { IsFile: true } old) CloudFolderDisk.Remove(CopyRoot, path, Hash(old.Bytes!));
           CloudFolderDisk.Write(CopyRoot, path, local.Bytes!, null);
-          SetBase(path, local.Bytes!, CloudFolderDisk.Modified(Folder, path) ?? now());
+          SetBase(path, local.Bytes!, filesAt.Modified(path) ?? now());
           var before = engine.CurrentVersion(path)?.Version;
           engine.ReconcileAll([path]);
           if (engine.CurrentVersion(path)?.Version == before) engine.Resend(path);
@@ -1360,7 +1419,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
         else
         {
           if (CloudFolderDisk.Read(CopyRoot, path) is not { IsFile: true } copy) throw new CloudFailure("unavailable");
-          var local = CloudFolderDisk.Read(Folder, path);
+          var local = filesAt.Read(path);
           string? hash = null;
           if (local.Kind == CloudFolderDisk.Kind.Blocked) throw new CloudFailure("unsafe_configuration");
           if (local.IsFile)
@@ -1369,9 +1428,9 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
             KeepMine(path, now(), local.Bytes!, now());
             hash = Hash(local.Bytes!);
           }
-          CloudFolderDisk.Write(Folder, path, copy.Bytes!, hash);
+          filesAt.Write(path, copy.Bytes!, hash);
           DeleteState().ClearMark(path);
-          SetBase(path, copy.Bytes!, CloudFolderDisk.Modified(Folder, path) ?? now());
+          SetBase(path, copy.Bytes!, filesAt.Modified(path) ?? now());
         }
         TakeFromBin(ItemKey(path), now());
         restored.Add(item);
@@ -1456,7 +1515,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     if (!head.Parents.Contains(current.Version)) return;
     CloudDeleteTravelRemoval travel;
     try { travel = head.Travel; } catch (CloudDeleteRuleException) { DropHead(head, "it could not be read"); return; }
-    var local = CloudFolderDisk.Read(Folder, path);
+    var local = filesAt.Read(path);
     if (local.Kind == CloudFolderDisk.Kind.Blocked) return;
     var cloudScope = travel.Intent?.Scope == CloudDeleteScope.Cloud;
     var binGroup = travel.Intent is { } intent ? GroupOf(intent, path)
@@ -1484,7 +1543,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
       KeepBinnedHistory(path, Hash(retained));
       keeper.Put(Profile.KeeperKind, ItemKey(path), Name(path), Place(path), path, head.At, head.Mac, retained, Profile.Listed(path), now(), binGroup);
       Book.Bin[path] = CloudFileDeleteBook.Store(binGroup);
-      if (local.IsFile) CloudFolderDisk.Remove(Folder, path, current.RawHash);
+      if (local.IsFile) filesAt.Remove(path, current.RawHash);
       DeleteState().ClearMark(path);
     }
     // The private copy's removal and the engine's "removed" are one step: the marker is read before anything reconciles,
@@ -1552,7 +1611,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
         scope = intent.Scope;
         // An undo that failed half-way is finished, never the delete it undoes.
         if (Book.Undo.TryGetValue(path, out var undo)) { AbandonRemoval(path, CloudDeleteText.Scope(undo.Scope) ?? CloudDeleteScope.Cloud, engine, undo.Restore); continue; }
-        if (CloudFolderDisk.Read(Folder, path).Kind == CloudFolderDisk.Kind.Blocked) continue;
+        if (filesAt.Read(path).Kind == CloudFolderDisk.Kind.Blocked) continue;
         if (Profile.Refusal(path) is not null || !Book.Binned.TryGetValue(path, out var binned))
         {
           DeleteState().ClearIntent(path);
@@ -1562,7 +1621,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
         if (engine.CurrentVersion(path) is { } current)
         {
           var changed = current.RawHash != binned;
-          if (intent.Scope == CloudDeleteScope.Everywhere && CloudFolderDisk.Read(Folder, path) is { IsFile: true } local && Hash(local.Bytes!) != binned) changed = true;
+          if (intent.Scope == CloudDeleteScope.Everywhere && filesAt.Read(path) is { IsFile: true } local && Hash(local.Bytes!) != binned) changed = true;
           if (CloudFolderDisk.Read(CopyRoot, path) is { IsFile: true } copy && Hash(copy.Bytes!) != binned) changed = true;
           if (changed)
           {

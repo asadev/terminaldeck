@@ -14,7 +14,10 @@ public static class CloudFolderFormat
   public const string FolderName = "Terminal Deck Cloud";
   public static string Domain => DomainOf(InventoryRow);
   /// CloudBrainFilesFormat.ownDomainRows: I23 artifacts, I24 the Cloud folder (each a domain of its own).
-  public static string DomainOf(string row) => row switch { "I24" => "cloud-folder", "I23" => "artifacts", _ => throw new CloudFailure("invalid_request") };
+  public static string DomainOf(string row) => row switch
+  {
+    "I24" => "cloud-folder", "I23" => "artifacts", CloudProjectFoldersRules.InventoryRow => CloudProjectFoldersRules.Domain, _ => throw new CloudFailure("invalid_request")
+  };
   /// `%USERPROFILE%\Terminal Deck Cloud`.
   public static string DefaultFolder(string? home = null) => Path.Combine(home ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), FolderName);
   public const long MaximumFileBytes = 25_000_000;
@@ -175,13 +178,27 @@ public sealed class CloudFolderWalk
   public bool Reliable { get; private set; } = true;
 
   private void Skip(CloudFolderSkip why, string relative) { Skipped[why] = Skipped.GetValueOrDefault(why) + 1; ExcludedPaths.Add(relative); }
+  internal void MarkUnreliable() => Reliable = false;
+  /// Another root's look added to this one (project folders: one walk per project folder).
+  internal void Merge(CloudFolderWalk other)
+  {
+    foreach (var (path, entry) in other.Files) Files.TryAdd(path, entry);
+    foreach (var (why, count) in other.Skipped) Skipped[why] = Skipped.GetValueOrDefault(why) + count;
+    SecretNames.AddRange(other.SecretNames); SpellingNames.AddRange(other.SpellingNames);
+    ExcludedPaths.UnionWith(other.ExcludedPaths);
+    Bytes += other.Bytes;
+    if (!other.Present || !other.Reliable) Reliable = false;
+  }
 
-  public static CloudFolderWalk Run(string root)
+  public static CloudFolderWalk Run(string root) => Run(root, CloudFileKind.CloudFolder);
+  /// `kind` gives the rules (path rule, size, count); `under` is put before every path (a project folder's key/name/).
+  public static CloudFolderWalk Run(string root, CloudFileKind kind, string under = "")
   {
     var walk = new CloudFolderWalk();
+    var projects = kind.PathRule is not null;
     if (!CloudFolderDisk.IsPlainFolder(root)) { walk.Present = false; walk.Reliable = false; return walk; }
     var pending = new Stack<(string Full, string Relative)>();
-    pending.Push((root, ""));
+    pending.Push((root, under.TrimEnd('/')));
     while (pending.Count > 0)
     {
       var (folder, prefix) = pending.Pop();
@@ -198,6 +215,13 @@ public sealed class CloudFolderWalk
         if ((attributes & FileAttributes.Directory) != 0)
         {
           var lower = child.Name.ToLowerInvariant();
+          if (projects)
+          {
+            // Project folders: only what is rebuilt or comes from git stays; hidden folders travel too.
+            if (CloudProjectFoldersRules.NeverFolders.Contains(lower) || CloudProjectFoldersRules.IsCheckout(child.FullName)) walk.Skip(CloudFolderSkip.Rebuildable, relative);
+            else pending.Push((child.FullName, relative));
+            continue;
+          }
           if (CloudFolderRules.RebuildableFolders.Contains(lower)) { walk.Skip(CloudFolderSkip.Rebuildable, relative); continue; }
           if (lower.StartsWith('.')) { walk.Skip(CloudFolderSkip.Hidden, relative); continue; }
           pending.Push((child.FullName, relative));
@@ -205,8 +229,9 @@ public sealed class CloudFolderWalk
         }
         if (child is not FileInfo file) { walk.Skip(CloudFolderSkip.NotAFile, relative); continue; }
         // Windows (Decker, 15 Nov): Explorer's own files are never sent from this PC. One that arrived is kept as any file.
-        if (CloudFolderRules.IsExplorerOwn(child.Name)) { walk.Skip(CloudFolderSkip.Hidden, relative); continue; }
-        if (CloudFolderRules.Refusal(relative) is { } why)
+        // (Project folders leave them out by their own rule, as the system's scratch.)
+        if (!projects && CloudFolderRules.IsExplorerOwn(child.Name)) { walk.Skip(CloudFolderSkip.Hidden, relative); continue; }
+        if (kind.Refusal(relative) is { } why)
         {
           walk.Skip(why, relative);
           if (why == CloudFolderSkip.Secret) walk.SecretNames.Add(child.Name);
@@ -217,10 +242,10 @@ public sealed class CloudFolderWalk
         long size, modified;
         try { size = file.Length; modified = CloudFolderDisk.Ms(file.LastWriteTimeUtc); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { walk.Reliable = false; continue; }
-        if (size > CloudFolderFormat.MaximumFileBytes) { walk.Skip(CloudFolderSkip.TooLarge, relative); continue; }
+        if (size > kind.MaximumFileBytes) { walk.Skip(CloudFolderSkip.TooLarge, relative); continue; }
         walk.Files[relative] = new Entry(size, modified);
         walk.Bytes += size;
-        if (walk.Files.Count > CloudFolderFormat.MaximumFiles) { walk.Reliable = false; return walk; }
+        if (walk.Files.Count > kind.MaximumFiles) { walk.Reliable = false; return walk; }
       }
     }
     return walk;

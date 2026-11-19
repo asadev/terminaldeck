@@ -4,7 +4,8 @@ namespace TerminalDeck.App.Integration;
 
 /// Lane F: the Cloud folder (`%USERPROFILE%\Terminal Deck Cloud`) and his artifacts travel with his other devices, as on
 /// the Mac: ONE file owner run twice, per account (`cloud\accounts\<account>\cloud-folder`, `...\artifacts`,
-/// `...\artifacts-files`). This PC announces `cloudfolder` and `artifacts` here, where it takes them.
+/// `...\artifacts-files`); a third time over every project's folders (`...\project-folders`, 19 Nov). This PC announces
+/// `cloudfolder`, `artifacts` and `projectfolders` here, where it takes them.
 /// Joined by the integrator: `CloudOwners` returns `.. CloudFilesOwners(subject, deviceId, announce, keeper, serviceNow)`
 /// with the account's ONE CloudAnnounce and `CloudBin.ForAccount(folder)` (lane D; never a second Bin), and `RegisterCloudFilesTools()` is called once from
 /// `InitializeCloud` (the two tool families need their McpCatalogue line).
@@ -12,6 +13,8 @@ public sealed partial class AppRuntime
 {
   public CloudFolderOwner? CloudFolder { get; private set; }
   public CloudArtifacts? CloudArtifactsStore { get; private set; }
+  /// Folders that travel with a project (19 Nov, row I26): one owner over every project folder of this PC.
+  public CloudFolderOwner? CloudProjectFoldersOwner { get; private set; }
 
   private string? CloudDeviceName(string deviceId) =>
     Cloud.Snapshot.DeviceRows.FirstOrDefault(d => string.Equals(d.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase))?.Name;
@@ -52,18 +55,43 @@ public sealed partial class AppRuntime
     Wire(artifacts.Owner, CloudArtifactsFormat.Feature);
     artifacts.PrepareStore();
 
-    // This PC takes Cloud folder and artifacts records from here on.
+    // Folders that travel with a project (Asad, 19 Nov: "everything should travel ... don't worry about cloud limits"):
+    // every top-level folder of each project whose one folder on this PC is inside the user's folder, all kinds of files,
+    // no day cap of ours (so it never uses the Cloud folder's and artifacts' shared day budget), the Cloud folder's way
+    // otherwise. Its private copy is a plain copy (NTFS has no clones).
+    var projectFolders = new CloudFolderOwner(deviceId, Path.Combine(account, "project-folders-root"), Path.Combine(account, "project-folders"), keeper,
+      () => announce.EveryDeviceUnderstands(CloudProjectFoldersRules.Feature, CloudProjectFoldersRules.Format), CloudFileKind.ProjectFolders, now: Now,
+      log: WriteCloudLog, roots: new CloudFolderRoots(ProjectFolderRoots()));
+    projectFolders.SetWhoWaits(() => Waiting(CloudProjectFoldersRules.Feature));
+    projectFolders.SetDeviceName(CloudDeviceName);
+    projectFolders.SetDeleteRuleGate(announce.DeleteRuleIsOpen);
+    projectFolders.SetDeleteRuleAnnounced(announce.DeleteRuleAnnounced);
+    projectFolders.SetServiceNow(serviceNow);
+    projectFolders.Changed += () => _ = CloudSync?.SyncNowAsync();
+
+    // This PC takes Cloud folder, artifacts and project folder records from here on.
     announce.Announce(CloudFolderFormat.Feature, CloudFolderFormat.Format, force: true);
     announce.Announce(CloudArtifactsFormat.Feature, CloudArtifactsFormat.Format, force: true);
+    announce.Announce(CloudProjectFoldersRules.Feature, CloudProjectFoldersRules.Format, force: true);
 
     CloudFolder = owner;
     CloudArtifactsStore = artifacts;
+    CloudProjectFoldersOwner = projectFolders;
     owner.StartWatching();
     artifacts.Owner.StartWatching();
+    projectFolders.StartWatching();
     if (Artifacts is not null) Artifacts.Changed += FeedCloudArtifacts;
+    Projects.Changed += FeedProjectFolderRoots;
     FeedCloudArtifacts();
-    return [owner, artifacts.Owner];
+    return [owner, artifacts.Owner, projectFolders];
   }
+
+  /// Project key -> this PC's folder of that project: the instruction files' project mapping (one folder per project),
+  /// only folders inside the user's folder (never the user's folder itself).
+  private Dictionary<string, string> ProjectFolderRoots() =>
+    CloudProjectFoldersRules.Roots(CloudBootProjectFolders(), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+  /// A project added, moved or given a folder: the owner looks at the new set next.
+  private void FeedProjectFolderRoots() => CloudProjectFoldersOwner?.SetRoots(ProjectFolderRoots());
 
   /// The Artifacts page's list (the Receiver's recorded outputs) feeds the store: only artifacts inside a project's one
   /// folder on this PC, read, never written.
@@ -83,10 +111,13 @@ public sealed partial class AppRuntime
   private void StopCloudFiles()
   {
     if (Artifacts is not null) Artifacts.Changed -= FeedCloudArtifacts;
+    Projects.Changed -= FeedProjectFolderRoots;
     CloudFolder?.StopWatching();
     CloudArtifactsStore?.Owner.StopWatching();
+    CloudProjectFoldersOwner?.StopWatching();
     CloudFolder = null;
     CloudArtifactsStore = null;
+    CloudProjectFoldersOwner = null;
   }
 
   /// The two tool families (cloud.folder, cloud.folder_add, cloud.artifacts), registered once.
