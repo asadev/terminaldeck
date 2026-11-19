@@ -12,7 +12,7 @@ public sealed class ProjectFoldersTravelTests
   /// Computed outside this code: "p" + the first 16 hex of SHA-256("td-project-folders\nproject-deck").
   private const string Key = "p402830051885cc4d";
 
-  private static string Project(CloudFolderFixture f, string mac) => Path.Combine(f.Base, mac, "home", mac == "a" ? "Deck Dev" : Path.Combine("Work", "Deck"));
+  private static string Project(CloudFolderFixture f, string mac) => Path.Combine(f.Base, mac, "home", mac == "a" ? "My Project" : Path.Combine("Work", "Deck"));
   private static CloudFolderOwner Owner(CloudFolderFixture f, string mac, string device, IReadOnlyDictionary<string, string>? roots = null, CloudFileKind? kind = null)
   {
     Directory.CreateDirectory(Project(f, mac));
@@ -102,7 +102,7 @@ public sealed class ProjectFoldersTravelTests
       Assert.True(Data(f, "b", path) is null, path);
     // No path of either device travels: only the project key and the path inside the project.
     Assert.All(sent, op => Assert.StartsWith("file/projects/" + Key + "/", op.Source.RecordId));
-    Assert.All(sent, op => Assert.DoesNotContain("Deck Dev", op.Source.RecordId));
+    Assert.All(sent, op => Assert.DoesNotContain("My Project", op.Source.RecordId));
     // Nothing echoes back.
     await f.Settle(b);
     Assert.Empty(CloudFolderFixture.Journal(b));
