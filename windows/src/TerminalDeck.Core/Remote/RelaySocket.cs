@@ -471,7 +471,11 @@ public sealed partial class RelayHostConnection(NoiseIdentity identity, IRelayPh
   private static byte[] Close(byte[] channel) => new RelayPacket(RelayKind.Close, channel, []).Encode();
 
   /// Ends every account channel of these devices now (null = all account channels); paired channels stay.
-  public async Task CloseAccountChannelsAsync(IReadOnlyCollection<string>? deviceIds)
+  public Task CloseAccountChannelsAsync(IReadOnlyCollection<string>? deviceIds) =>
+    CloseWhereAsync((_, channel) => channel.Account is { } account && (deviceIds is null || deviceIds.Contains(account)));
+  /// Ends these channels now, whatever joined them (the free plan's lapse: a connection that was served a paid kind).
+  public Task CloseChannelsAsync(IReadOnlyCollection<string> ids) => ids.Count == 0 ? Task.CompletedTask : CloseWhereAsync((id, _) => ids.Contains(id));
+  private async Task CloseWhereAsync(Func<string, Channel, bool> which)
   {
     var closes = new List<byte[]>();
     await serial.WaitAsync().ConfigureAwait(false);
@@ -480,7 +484,7 @@ public sealed partial class RelayHostConnection(NoiseIdentity identity, IRelayPh
       if (disposed) return;
       foreach (var (id, channel) in channels.ToArray())
       {
-        if (channel.Account is not { } account || deviceIds is not null && !deviceIds.Contains(account)) continue;
+        if (!which(id, channel)) continue;
         closes.Add(Close(channel.Id));
         await RemoveAsync(id).ConfigureAwait(false);
       }

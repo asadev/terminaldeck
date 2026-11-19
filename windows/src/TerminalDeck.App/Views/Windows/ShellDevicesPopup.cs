@@ -21,7 +21,7 @@ public sealed partial class ShellWindow
   // Devices is its own owned window, built exactly like the Settings window.
   private void ShowDevicesPopup()
   {
-    if (!Runtime.CloudServicesAllowed) { ShowCloudSubscription(); return; }
+    if (!Runtime.DevicesAllowed) { ShowCloudSubscription(); return; }
     morePagesFlyout?.Hide();
     if (devicesWindow is { } existing)
     {

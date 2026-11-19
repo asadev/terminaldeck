@@ -51,6 +51,42 @@ public static class SidebarCloudRows
     return rows;
   }
 
+  /// 19 Nov free plan: a free account has no Cloud copy of its sessions; the side panel lists the sessions running on
+  /// its other computers that are online now, read live through the relay (each computer's own `sessions` list, as the
+  /// phones read it). `Ref` is "live:" + the connection + "/" + the session. As the Mac's NativeRemoteSessionRows.liveOthers
+  /// (lane/mac-free-tier bca95ea42): one row per running session not already here; computers in a fixed order, each
+  /// computer's sessions as it lists them; the name is the title, else the folder's name, else "Session".
+  public const string LivePrefix = "live:";
+  public sealed record LiveComputer(string Connection, string Name, string Platform, IReadOnlyList<System.Text.Json.JsonElement> Sessions);
+  public static IReadOnlyList<SidebarCloudRow> FromLive(IEnumerable<LiveComputer> computers, IEnumerable<string> localIds)
+  {
+    var local = new HashSet<string>(localIds, StringComparer.Ordinal);
+    var seen = new HashSet<string>(StringComparer.Ordinal);
+    var rows = new List<SidebarCloudRow>();
+    foreach (var computer in computers.OrderBy(c => c.Connection, StringComparer.Ordinal))
+      foreach (var session in computer.Sessions)
+      {
+        var id = Text(session, "id");
+        if (id is not { Length: > 0 } || local.Contains(id) || Text(session, "status") is "exited" or "ended") continue;
+        if (session.TryGetProperty("exitCode", out var exit) && exit.ValueKind == System.Text.Json.JsonValueKind.Number) continue;
+        if (!seen.Add(id)) continue;
+        var chat = session.TryGetProperty("chat", out var flag) && flag.ValueKind == System.Text.Json.JsonValueKind.True;
+        var last = session.TryGetProperty("lastActivityAt", out var at) && at.ValueKind == System.Text.Json.JsonValueKind.Number && at.TryGetDouble(out var value) ? value : 0;
+        var status = Text(session, "status") ?? "";
+        var cwd = Text(session, "cwd") ?? "";
+        var folder = cwd.TrimEnd('/', '\\').Split('/', '\\').LastOrDefault() ?? "";
+        rows.Add(new(LivePrefix + computer.Connection + "/" + id, id, FirstText(Text(session, "title"), folder) ?? "Session", chat, ReachMachineName(computer.Name), true,
+          SidebarRowLook.NeedsYou(status), last, status, cwd, computer.Platform));
+      }
+    return rows;
+  }
+  /// The connection a live row belongs to ("live:<connection>/<session>"), or null for a Cloud row.
+  public static string? LiveConnection(SidebarCloudRow row) =>
+    row.Ref.StartsWith(LivePrefix, StringComparison.Ordinal) && row.SessionId is { Length: > 0 } session && row.Ref.EndsWith("/" + session, StringComparison.Ordinal)
+      ? row.Ref[LivePrefix.Length..^(session.Length + 1)] : null;
+  private static string? Text(System.Text.Json.JsonElement value, string field) =>
+    value.ValueKind == System.Text.Json.JsonValueKind.Object && value.TryGetProperty(field, out var found) && found.ValueKind == System.Text.Json.JsonValueKind.String ? found.GetString() : null;
+
   /// "chat" and Hoot's chat are chats; a terminal, a shell or an agent's terminal is a terminal.
   public static bool IsChat(string? kind) => (kind ?? "").ToLowerInvariant() is "chat" or "hoot" or "appchat";
 

@@ -39,8 +39,8 @@ public sealed class OtherComputersCard : StackPanel
   private void Changed() => DispatcherQueue.TryEnqueue(Render);
   private void Render()
   {
-    Visibility = service.CloudAllowed ? Visibility.Visible : Visibility.Collapsed;
-    if (!service.CloudAllowed) return;
+    Visibility = service.PaidAllowed ? Visibility.Visible : Visibility.Collapsed;
+    if (!service.PaidAllowed) return;
     rows.Children.Clear();
     foreach (var computer in service.List())
     {

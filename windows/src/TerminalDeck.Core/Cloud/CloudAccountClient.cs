@@ -252,7 +252,33 @@ public sealed partial class CloudAccountClient : IDisposable
       await ReadSubscriptionLockedAsync(record, ct);
       if (!subscription.AllowsCloudServices)
       {
-        Publish(Snapshot with { Phase = CloudPhase.NotAllowed, Email = record.Session.User.Email, DisplayName = record.Session.User.DisplayName, ThisDeviceId = record.DeviceId, Problem = null });
+        // 19 Nov free plan: a free account's phones and computers reach this PC's sessions through the relay, which
+        // needs this PC's device record (its name and keys) at the service. Only that and the device list: no trust
+        // list, no sync; nothing of the account's data goes to the Cloud (the Mac's free sign-in).
+        if (subscription.LimitsRemoteToSessions && keys is { } freeKeys && (!record.Registered || triedRegister))
+        {
+          if (firstSignIn) Stage("device registration");
+          var registration = freeKeys.Registration(configuration.DeviceLabel, configuration.AppVersion, configuration.Platform);
+          var receipt = await RegisterAsync(record, registration, ct);
+          if (receipt.DeviceId != registration.DeviceId || receipt.Status != "active") throw new CloudFailure("device_revoked");
+          if (version != generation) return;
+          record = record with { Registered = true }; Save(record);
+        }
+        var free = Snapshot with { Phase = CloudPhase.NotAllowed, Email = record.Session.User.Email, DisplayName = record.Session.User.DisplayName, ThisDeviceId = record.DeviceId, Problem = null };
+        // His devices for the Devices page (Decker, 20 Nov): the one device list, read here at sign-in and at each
+        // recheck, never in a loop; no trust list, no sync. A failed read is said in the log and the last list kept.
+        if (subscription.LimitsRemoteToSessions && record.Registered)
+        {
+          try
+          {
+            var devices = Rows(CloudWire.Decode<CloudDeviceList>(await SignedAsync(record, HttpMethod.Get, "/devices", [], ct)), record.DeviceId);
+            if (version != generation) return;
+            free = free with { Devices = devices, ThisDeviceName = devices.FirstOrDefault(r => r.ThisDevice)?.Name ?? configuration.DeviceLabel };
+          }
+          catch (Exception error) when (error is HttpRequestException or JsonException || error is CloudFailure failed && !SessionRefused(failed) && failed.Code is not ("sign_in_required" or "token_expired" or "bad_device_proof"))
+          { Log("cloud sign-in: device list not read for a free account (" + Kind(error) + ")"); }
+        }
+        Publish(free);
         return;
       }
       var gateAnswer = await CapabilitiesAsync(record, ct);

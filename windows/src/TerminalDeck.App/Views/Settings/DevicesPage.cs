@@ -34,7 +34,7 @@ public sealed class DevicePage : UserControl
   {
     body.Children.Clear();
     var snapshot = account.Snapshot;
-    if (!snapshot.Subscription.AllowsCloudServices) return;
+    if (!snapshot.Subscription.Offers(CloudPaidPlace.Devices)) return;
     var device = snapshot.DeviceRows.FirstOrDefault(d => d.DeviceId == deviceId);
     // The top bar names the page after the device.
     Tag = device?.Name ?? "Device";

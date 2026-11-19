@@ -21,18 +21,18 @@ public sealed partial class OtherComputersService
     {
       if (lifetime.IsCancellationRequested) return;
       wanted.TryAdd(id, 0);
-      if (!CloudAllowed) continue;
+      if (!RemoteAllowed) continue;
       try { await ConnectAsync(id, lifetime.Token); }
       catch (Exception ex) when (ex is not OutOfMemoryException) { }
     }
   }
   public async Task SetBrowserConsentAsync(string id, bool allowed)
   {
-    RequireCloudAccess();
+    RequirePaidAccess();
     await mutations.WaitAsync();
     try
     {
-      RequireCloudAccess();
+      RequirePaidAccess();
       if (!saved.TryGetValue(id, out var row)) throw new ArgumentException("Choose a paired computer.");
       saved[id] = row with { DrivesWindows = allowed };
       try { Save(); } catch { saved[id] = row; throw; }
@@ -56,7 +56,7 @@ public sealed partial class OtherComputersService
       if (!await browserCalls.WaitAsync(0, ct)) throw new McpRefusal("Too many browser calls are pending.");
       entered = true;
       var session = Text(frame, "session", "");
-      bool Allowed() => CloudAllowed && DrivesBrowser(id) && List().Any(c => c.Id == id && c.State == "Online") && Services(id).Sessions.Any(s => Text(s, "id", "") == session);
+      bool Allowed() => PaidAllowed && DrivesBrowser(id) && List().Any(c => c.Id == id && c.State == "Online") && Services(id).Sessions.Any(s => Text(s, "id", "") == session);
       if (!Allowed() || browserDoor is not { } door) throw new McpRefusal("Allow this computer's sessions to use browser windows here first.");
       var tools = new[] { "browser.open", "browser.close", "browser.windows", "browser.page", "browser.read", "browser.step", "browser.batch", "browser.profiles", "browser.history", "browser.workspace.read", "browser.workspace.change" };
       var tool = Text(frame, "tool", "").Replace('_', '.');

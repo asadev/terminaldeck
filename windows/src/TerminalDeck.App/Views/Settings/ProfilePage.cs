@@ -98,7 +98,7 @@ public sealed partial class ProfilePage : UserControl
       links.Add(SettingsPanel.LinkRow(CloudSubscriptionPageText.Title, null, SettingsPanel.IconTile("", "DeckAgentIndigoBrush"), CloudSubscriptionPageText.RowValue(plan), () => open(CloudSubscriptionPageText.Id)));
     body.Children.Add(SettingsPanel.GroupRows(links));
 
-    IReadOnlyList<CloudDeviceRow> devices = snapshot.Subscription.AllowsCloudServices ? DeviceRows() : [];
+    IReadOnlyList<CloudDeviceRow> devices = snapshot.Subscription.Offers(CloudPaidPlace.Devices) ? DeviceRows() : [];
     if (devices.Count > 0)
     {
       body.Children.Add(SettingsPanel.GroupTitle("Devices"));

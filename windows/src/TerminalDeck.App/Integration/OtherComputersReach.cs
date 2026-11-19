@@ -9,23 +9,40 @@ public sealed partial class OtherComputersService
   public Func<ReachGuest?>? AccountGuest { get; set; }
   public async Task RefreshAccountMachinesAsync(CancellationToken ct = default)
   {
-    if (!CloudAllowed || AccountGuest?.Invoke() is not { } guest) return;
+    if (!RemoteAllowed || AccountGuest?.Invoke() is not { } guest) return;
     foreach (var machine in await guest.ReachableAsync(ct: ct))
     {
       var id = ReachGuest.LinkId(machine.DeviceId);
       if (List().All(c => c.Id != id)) Set(new(id, machine.ShownName, machine.Platform, "Disconnected", null, [], []));
     }
   }
+  /// 19 Nov free plan: a free account has no Cloud copy of its sessions, so the side panel reads them live. Every online
+  /// computer of the account is joined through the relay, as the phones do, and kept joined by the usual retries.
+  /// Returns how many computers that are on could not be joined (the caller logs it; no names).
+  public async Task<int> ConnectAccountMachinesAsync(CancellationToken ct = default)
+  {
+    if (!RemoteAllowed || AccountGuest?.Invoke() is not { } guest) return 0;
+    var missed = 0;
+    foreach (var machine in await guest.ReachableAsync(fresh: true, ct: ct))
+    {
+      var id = ReachGuest.LinkId(machine.DeviceId);
+      if (List().Any(c => c.Id == id && c.State is "Online" or "Connecting")) continue;
+      // A computer that does not answer keeps its row's own plain note ("The live connection could not open").
+      try { await ConnectAsync(id, ct); }
+      catch (Exception ex) when (ex is not OutOfMemoryException && !ct.IsCancellationRequested) { missed++; }
+    }
+    return missed;
+  }
   private async Task ConnectReachAsync(string id, CancellationToken ct)
   {
-    RequireCloudAccess();
+    RequireRemoteAccess();
     var guest = AccountGuest?.Invoke() ?? throw new InvalidOperationException("Sign in to your account to reach this computer.");
     var machine = (await guest.ReachableAsync(ct: ct)).SingleOrDefault(m => ReachGuest.LinkId(m.DeviceId) == id)
       ?? throw new InvalidOperationException("That computer is not reachable yet. Its saved conversation is still available.");
     await mutations.WaitAsync(ct);
     try
     {
-      RequireCloudAccess();
+      RequireRemoteAccess();
       if (links.ContainsKey(id)) return;
       var secrets = await guest.SecretsAsync(machine, ct);
       var channel = new ComputerChannel { LinkEngine = LinkEngine, RelayBearer = await guest.RelayTokenAsync(ct) };
@@ -40,7 +57,7 @@ public sealed partial class OtherComputersService
         if (Text(answer, "t", "") != "welcome") throw new ProtocolException(Text(answer, "message", "That computer could not open this session."));
         var caps = answer.TryGetProperty("capabilities", out var offered) && offered.ValueKind == JsonValueKind.Array ? offered.EnumerateArray().Select(c => c.GetString() ?? "").ToArray() : [];
         if (!ReferenceEquals(guest, AccountGuest?.Invoke())) throw new InvalidOperationException("The signed-in account changed while connecting.");
-        RequireCloudAccess();
+        RequireRemoteAccess();
         links[id] = (channel, stopped); AcceptSnapshot(id, answer);
         Set(new(id, machine.ShownName, machine.Platform, "Online", null, caps, [])); Frame?.Invoke(id, answer);
         _ = ReadAsync(id, channel, stopped); _ = RestoreWatchesAsync(id, stopped.Token);
@@ -55,7 +72,7 @@ public sealed partial class OtherComputersService
   }
   public async Task<string?> OpenCloudSessionAsync(string sessionId, string machineName, CancellationToken ct = default)
   {
-    RequireCloudAccess();
+    RequireRemoteAccess();
     var existing = List().FirstOrDefault(c => c.State == "Online" && Services(c.Id).Sessions.Any(s => Text(s, "id", "") == sessionId));
     if (existing is not null) return existing.Id;
     await RefreshAccountMachinesAsync(ct);

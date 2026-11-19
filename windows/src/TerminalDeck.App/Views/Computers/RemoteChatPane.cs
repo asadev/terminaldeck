@@ -43,7 +43,7 @@ internal sealed class RemoteChatPane : Grid, IAsyncDisposable
     service.Frame += Received; service.Changed += Changed;
     Loaded += async (_, _) => await Act(() => service.ChatActionAsync(computer, session, "watch")); Controls();
   }
-  private bool Live => service.CloudAllowed && !disposed && service.List().Any(c => c.Id == computer && c.State == "Online" && c.Capabilities.Contains("chats")) && service.Services(computer).Sessions.Any(s => RemoteSessionReading.Text(s, "id") == session && RemoteSessionReading.Text(s, "status") != "exited");
+  private bool Live => service.RemoteAllowed && !disposed && service.List().Any(c => c.Id == computer && c.State == "Online" && c.Capabilities.Contains("chats")) && service.Services(computer).Sessions.Any(s => RemoteSessionReading.Text(s, "id") == session && RemoteSessionReading.Text(s, "status") != "exited");
   private void Controls()
   {
     draft.IsEnabled = Live; send.IsEnabled = Live && !sending && !string.IsNullOrWhiteSpace(draft.Text);

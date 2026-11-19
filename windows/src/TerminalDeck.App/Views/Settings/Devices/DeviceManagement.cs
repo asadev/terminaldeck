@@ -15,7 +15,8 @@ public sealed partial class SettingsPane
     // Reach by account (the Mac's Devices page): signed-in devices open this PC with no code. While it is on, the
     // pairing code is out of the way; it stays only behind the switch being off (the stricter way).
     var reach = AddReachRows(stack);
-    if (reach.OffersPairing)
+    // 19 Nov free plan: a free account keeps this page and its switch; joining by code stays paid (the Mac's rule).
+    if (reach.OffersPairing && runtime.CloudServicesAllowed)
     {
       stack.Children.Add(Description(approved.Count + (approved.Count == 1 ? " paired device · Relay: " : " paired devices · Relay: ") + runtime.Remote.State));
       stack.Children.Add(Card("Pair a device", "Show a one-use code for your phone or computer. Only let in the device you’re holding.", "Show code", ShowPairingAsync));

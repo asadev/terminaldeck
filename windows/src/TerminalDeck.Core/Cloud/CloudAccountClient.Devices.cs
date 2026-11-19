@@ -11,7 +11,9 @@ public sealed partial class CloudAccountClient
     await work.WaitAsync(ct);
     try
     {
-      if (!Snapshot.Subscription.AllowsCloudServices) throw new CloudProfileRefusal(CloudSubscriptionPageText.Subscribe);
+      // A free account keeps its Devices page (19 Nov free plan); signing a device out stays paid (it reads the Cloud's
+      // saved-password vault first).
+      if (!Snapshot.Subscription.Offers(CloudPaidPlace.Devices)) throw new CloudProfileRefusal(CloudSubscriptionPageText.Subscribe);
       if (!Load() || saved is not { } record || !Snapshot.DeviceRows.Any(d => d.DeviceId == deviceId)) throw new CloudProfileRefusal("This device is no longer in your account.");
       record = await RefreshTokenAsync(record, ct);
       var answer = await SignedAsync(record, HttpMethod.Post, "/devices/rename", CloudWire.Canonical(new { device_id = deviceId, name = clean }), ct);

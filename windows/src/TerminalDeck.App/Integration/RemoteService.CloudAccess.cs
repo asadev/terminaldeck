@@ -42,6 +42,8 @@ public sealed partial class RemoteService
     catch { await EndHostEpochAsync(CancellationToken.None, preserveLocal: !CloudRelayAllowed); throw; }
     finally { lifecycleGate.Release(); }
   }
+  /// 19 Nov free plan: ends these device connections now (a lapse: the ones that were served a paid kind).
+  public Task CloseChannelsAsync(IReadOnlyCollection<string> channels) => relay?.CloseChannelsAsync(channels) ?? Task.CompletedTask;
   private async Task EndCloudRelayAsync()
   {
     await EndHostEpochAsync(CancellationToken.None, preserveLocal: true);

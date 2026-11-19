@@ -31,12 +31,26 @@ public sealed partial class CloudAccountClient : ICloudSyncAccount
     }
   }
 
+  /// Reach by account (this PC reachable by its devices, and reaching its other computers): the sync identity, or, for a
+  /// free account (19 Nov), the signed-in account and this PC's registered device with Cloud sync not running.
+  public (string Subject, string DeviceId)? ReachIdentity
+  {
+    get
+    {
+      if (SyncIdentity is { } synced) return synced;
+      var record = saved;
+      return record is not null && keys is not null && FreeReach(record) ? (record.Session.User.Id, record.DeviceId) : null;
+    }
+  }
+  // A free account's sign-in: kept, this PC registered, only the relay in use (the snapshot says "not allowed" to Cloud).
+  private bool FreeReach(Saved record) => Snapshot.Phase == CloudPhase.NotAllowed && Snapshot.Subscription.LimitsRemoteToSessions && !record.CloudOff && record.Registered;
+
   public async Task<CloudSyncCredentials> CredentialsAsync(CancellationToken ct)
   {
     await work.WaitAsync(ct);
     try
     {
-      if (!Load() || Snapshot.Phase != CloudPhase.SignedIn || saved!.CloudOff || keys is null) throw new CloudFailure("sign_in_required", 401);
+      if (!Load() || (Snapshot.Phase != CloudPhase.SignedIn && !FreeReach(saved!)) || saved!.CloudOff || keys is null) throw new CloudFailure("sign_in_required", 401);
       var record = saved;
       if (record.Session.ExpiresAt <= Now + 60_000)
       {

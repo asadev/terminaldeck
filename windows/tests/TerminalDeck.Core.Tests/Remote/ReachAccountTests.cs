@@ -550,6 +550,23 @@ public sealed class ReachAccountTests : IDisposable
   }
 
   [Fact]
+  public async Task AFreePlanLapseEndsTheNamedChannelsWhateverJoinedThem()
+  {
+    var rig = new HostRig();
+    using var old = NoiseIdentity.Generate();
+    var receipt = rig.Trust.Redeem(rig.Trust.Pairing.Create().Code, "Old", "ios", old.PublicKey);
+    rig.Trust.Approve(receipt.DeviceId, PhoneAccess.Full);
+    using var paired = await rig.OpenAsync(old, ChannelB, null);
+    Assert.True(await rig.HelloAsync(paired!, ChannelB, receipt.Credential));
+    await rig.Connection.CloseChannelsAsync([]);
+    var before = await rig.Connection.ProcessAsync(Packet(RelayKind.Data, paired!.Send(JsonSerializer.SerializeToUtf8Bytes(new { t = "ping" })), ChannelB));
+    Assert.Contains(before, p => RelayPacket.Decode(p).Kind == RelayKind.Data);
+    await rig.Connection.CloseChannelsAsync([Convert.ToHexStringLower(ChannelB)]);
+    var after = await rig.Connection.ProcessAsync(Packet(RelayKind.Data, paired!.Send(JsonSerializer.SerializeToUtf8Bytes(new { t = "ping" })), ChannelB));
+    Assert.DoesNotContain(after, p => RelayPacket.Decode(p).Kind == RelayKind.Data);
+  }
+
+  [Fact]
   public async Task OneRemoveMeansOneThingReachsRemoveAlsoStopsTrustTrustsRemoveTakesReachOnlyWhileOn()
   {
     using var phone = NoiseIdentity.Generate();
