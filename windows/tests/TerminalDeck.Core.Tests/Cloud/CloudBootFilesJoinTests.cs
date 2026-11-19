@@ -28,7 +28,7 @@ public sealed class CloudBootFilesJoinTests : IDisposable
   private readonly Dictionary<string, (CloudMemorySlot State, CloudMemorySlot Ledger, CloudMemorySlot Adapter)> slots = [];
 
   private string FolderOf(string id) => Path.Combine(scratch, id, "app");
-  private Peer Make(string id, Dictionary<string, string>? folders = null)
+  private Peer Make(string id, Dictionary<string, string>? folders = null, bool autoAccept = false)
   {
     if (!devices.TryGetValue(id, out var device)) { device = devices[id] = new CloudTestDevice(id, service); trust.Trusted[id] = device.Jwk; }
     if (!slots.TryGetValue(id, out var s)) s = slots[id] = (new CloudMemorySlot(), new CloudMemorySlot(), new CloudMemorySlot());
@@ -37,7 +37,7 @@ public sealed class CloudBootFilesJoinTests : IDisposable
     folders ??= new Dictionary<string, string> { [Project] = folder };
     var kept = new CloudMemoryKeptInMemory();
     var adapter = new CloudBootFilesAdapter(s.Adapter, Path.Combine(scratch, id, "state", "retained"), id, () => folders, () => service.Now, kept,
-      userProfile: Path.Combine(scratch, "profile"), stateFolder: Path.Combine(scratch, id, "state"));
+      userProfile: Path.Combine(scratch, "profile"), stateFolder: Path.Combine(scratch, id, "state"), autoAccept: autoAccept);
     var store = new CloudSyncStore(s.State, s.Ledger, Subject);
     var client = new CloudFeedClient(new CloudSyncEndpoint(CloudFakeService.Base, test: true), Subject, device, service, store, () => service.Now,
       new CloudSyncBackoff(store, () => service.Now, _ => 0));
@@ -230,11 +230,11 @@ public sealed class CloudBootFilesJoinTests : IDisposable
   }
 
   [Fact]
-  public async Task Settings_hooks_MCP_and_sign_in_files_are_never_sent_and_never_written()
+  public async Task One_devices_own_MCP_and_sign_in_files_are_never_sent_and_never_written()
   {
-    var never = new[] { ".claude/settings.json", ".claude/settings.local.json", ".mcp.json", ".claude/skills/x/settings.json", ".claude/skills/x/hooks/pre.md",
+    var never = new[] { ".claude/settings.local.json", "CLAUDE.local.md", ".mcp.json", ".claude/skills/x/settings.json", ".claude/skills/x/hooks/pre.md",
       ".claude/skills/x/mcp.json", ".claude/skills/x/auth.json", ".claude/skills/x/.credentials.json", ".claude/skills/x/token.json", ".claude/agents/hooks.json",
-      ".claude/skills/x/node_modules/p/readme.md", ".claude/skills/x/server.pem", ".codex/config.toml", ".gemini/settings.json", "src/CLAUDE.md" };
+      ".claude/skills/x/node_modules/p/readme.md", ".claude/skills/x/server.pem", ".codex/auth.json", ".gemini/oauth_creds.json", "src/CLAUDE.md" };
     foreach (var path in never) Write(Pc, path, "{\"secret\": true}\n", 5_000);
     Write(Pc, ".claude/skills/x/SKILL.md", "An ordinary skill.\n", 5_000);
     var pc = Make(Pc);
@@ -256,6 +256,45 @@ public sealed class CloudBootFilesJoinTests : IDisposable
     Assert.Empty(pc.Adapter.Lines);
     // Only this PC's own skill is retained (the Bin's copy if an AI removes it); nothing of a refused record.
     Assert.Equal([CloudMemoryFormat.Hash(Encoding.UTF8.GetBytes("An ordinary skill.\n"))], Directory.GetFiles(Path.Combine(scratch, Pc, "state", "retained")).Select(Path.GetFileName));
+  }
+
+  [Fact]
+  public async Task The_projects_setup_travels_and_a_setup_file_holding_a_secret_stays_on_this_PC_and_is_counted()
+  {
+    Write(Pc, "CLAUDE.md", "rules\n", 5_000);
+    Write(Pc, ".claude/settings.json", "{\"hooks\": {}}\n", 5_000);
+    Write(Pc, ".claude/hooks/guard.py", "print('ok')\n", 5_000);
+    Write(Pc, ".codex/agents/reviewer.toml", "name = \"reviewer\"\n", 5_000);
+    Write(Pc, ".agents/skills/s/SKILL.md", "S\n", 5_000);
+    // A guard and a Codex setting holding a sign-in value: never sent as plain text.
+    Write(Pc, ".claude/hooks/call.sh", "#!/bin/sh\ncurl -H 'Authorization: Bearer abcdefghijklmnopqrstuv' x\n", 5_000);
+    Write(Pc, ".codex/config.toml", "[mcp_servers.x.env]\nAPI_KEY = \"a1b2c3d4e5f6g7h8\"\n", 5_000);
+    // An ordinary skill that only talks about tokens still travels (the check is for setup files only).
+    Write(Pc, ".claude/skills/t/SKILL.md", "Explain token = abc123 to the person.\n", 5_000);
+    // "Automatically, with my account" (the default trust): a setup file that arrives is written with no click.
+    var pc = Make(Pc, autoAccept: true);
+    var kept = new List<string>();
+    pc.Adapter.SetupKeeper = kept.Add;
+    pc.Adapter.FeedRead();
+    var capture = await pc.Adapter.CaptureAsync(() => service.Now, default);
+    var keys = capture.Operations.Select(o => ((CloudJson.Object)o.Payload)["key"]!.AsString!).Order(StringComparer.Ordinal).ToArray();
+    Assert.Equal(new[] { ".agents/skills/s/SKILL.md", ".claude/hooks/guard.py", ".claude/settings.json", ".claude/skills/t/SKILL.md", ".codex/agents/reviewer.toml", "CLAUDE.md" }
+      .Select(k => "file/project/7031/" + k), keys);
+    Assert.Equal("2 settings or guard files hold a password or key and stay on this PC.", pc.Adapter.SecretHeldLine);
+    // The keeper ran first, on the project's own folder.
+    Assert.Equal([Path.GetFullPath(FolderOf(Pc))], kept);
+
+    // One that arrives holding a secret is not written; the same file without one is.
+    var before = Snapshot(Pc);
+    var secret = CloudBootFilesFormat.Records(Guid.NewGuid().ToString("D"), "file/project/7031/.gemini/settings.json", "project/7031", Guid.NewGuid().ToString("D"), [],
+      Encoding.UTF8.GetBytes("{\"apiKey\": \"AIzaSyA1234567890abcdefghijklmnopqrstu\"}\n"), MacA, service.Now, Project, "primary");
+    foreach (var op in secret) await pc.Adapter.ApplyAsync(op, new CloudImportOrigin(MacA, 1, null, false), default);
+    Assert.Equal(before, Snapshot(Pc));
+    Assert.Contains(pc.Adapter.Lines, l => l.Kind == "refused" && l.Path == ".gemini/settings.json");
+    var plain = CloudBootFilesFormat.Records(Guid.NewGuid().ToString("D"), "file/project/7031/.gemini/settings.json", "project/7031", Guid.NewGuid().ToString("D"), [],
+      Encoding.UTF8.GetBytes("{\"theme\": \"x\"}\n"), MacA, service.Now, Project, "primary");
+    foreach (var op in plain) await pc.Adapter.ApplyAsync(op, new CloudImportOrigin(MacA, 1, null, false), default);
+    Assert.Equal("{\"theme\": \"x\"}\n", Read(Pc, ".gemini/settings.json"));
   }
 
   [Fact]

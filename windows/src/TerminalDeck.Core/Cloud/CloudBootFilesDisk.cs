@@ -10,7 +10,8 @@ namespace TerminalDeck.Core.Cloud;
 // - A new file gets its name only where nothing is (a move that never replaces).
 // - An existing file is replaced only if it still holds the expected bytes: swapped in, and what came out is checked;
 //   if that is not what was expected it is swapped back, so a save that landed in between is never lost.
-// - Nothing is run, and nothing is ever deleted from the person's folder.
+// - Nothing is run, and nothing is ever deleted from the person's folder. (The Mac writes a script, a file starting
+//   with `#!`, runnable; Windows has no run bit, so the same bytes need nothing more here.)
 
 public static class CloudBootFilesDisk
 {
@@ -248,6 +249,26 @@ public static class CloudBootFilesDisk
         case null: walk.Gap("unreadable"); break;
         case Lookup.Twin: walk.Gap("twin"); break;
         case Lookup.Exact: Take(info!, name, kind, walk); break;
+      }
+    }
+    // Setup files by exact path (`.claude/settings.json`, ...): only their own folder is opened, never through a link.
+    foreach (var path in CloudBootFilesFormat.SetupFiles(kind))
+    {
+      var parts = path.Split('/');
+      try
+      {
+        if (Descend(root, parts[..^1], create: false) is not { } opened) continue;
+        FileSystemInfo? info;
+        switch (Find(opened, parts[^1], out info))
+        {
+          case null: walk.Gap("unreadable"); break;
+          case Lookup.Twin: walk.Gap("twin"); break;
+          case Lookup.Exact: Take(info!, path, kind, walk); break;
+        }
+      }
+      catch (Stop stop)
+      {
+        if (stop.Reason == "link") walk.Exclude("link"); else walk.Gap(stop.Reason);
       }
     }
     foreach (var folder in CloudBootFilesFormat.Folders(kind))
