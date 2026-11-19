@@ -158,8 +158,13 @@ struct CloudFolderWalk: Sendable {
     var present = true
     var reliable = true
 
-    static func run(_ root: URL) -> CloudFolderWalk {
+    static func run(_ root: URL) -> CloudFolderWalk { run(root, kind: .cloudFolder) }
+    /// `kind` gives the rules (path rule, size, count); `prefix` is put before every path (a project folder's key/name/).
+    /// `tracked`: paths (from the project folder, with `trackedPrefix` before this root's own paths) that git tracks;
+    /// they are left out (they come from GitHub).
+    static func run(_ root: URL, kind: CloudFileKind, prefix: String = "", tracked: Set<String>? = nil, trackedPrefix: String = "") -> CloudFolderWalk {
         var walk = CloudFolderWalk()
+        let projects = kind.pathRule != nil
         var info = stat()
         guard lstat(root.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else { walk.present = false; walk.reliable = false; return walk }
         let fm = FileManager.default
@@ -173,19 +178,30 @@ struct CloudFolderWalk: Sendable {
         for case let url as URL in e {
             let path = url.standardizedFileURL.path
             guard path.hasPrefix(base + "/") else { problems.count += 1; continue }
-            let relative = String(path.dropFirst(base.count + 1))
+            let inside = String(path.dropFirst(base.count + 1))
+            let relative = prefix + inside
             guard let values = try? url.resourceValues(forKeys: Set(keys)) else { problems.count += 1; continue }
             if values.isSymbolicLink == true {
                 walk.skipped[.link, default: 0] += 1; walk.excludedPaths.insert(relative); continue
             }
             if values.isDirectory == true {
                 let name = url.lastPathComponent.lowercased()
+                if projects {
+                    // Project folders: only what is rebuilt or comes from git stays; hidden folders travel too.
+                    if CloudProjectFoldersRules.neverFolders.contains(name) || CloudProjectFoldersRules.isCheckout(url) {
+                        walk.skipped[.rebuildable, default: 0] += 1; e.skipDescendants(); walk.excludedPaths.insert(relative)
+                    }
+                    continue
+                }
                 if CloudFolderRules.rebuildableFolders.contains(name) { walk.skipped[.rebuildable, default: 0] += 1; e.skipDescendants(); walk.excludedPaths.insert(relative); continue }
                 if name.hasPrefix(".") { walk.skipped[.hidden, default: 0] += 1; e.skipDescendants(); walk.excludedPaths.insert(relative); continue }
                 continue
             }
+            if let tracked, values.isDirectory != true, tracked.contains(trackedPrefix + inside) {
+                walk.skipped[.rebuildable, default: 0] += 1; walk.excludedPaths.insert(relative); continue
+            }
             guard values.isRegularFile == true else { walk.skipped[.notAFile, default: 0] += 1; walk.excludedPaths.insert(relative); continue }
-            if let why = CloudFolderRules.refusal(relative) {
+            if let why = kind.refusal(relative) {
                 walk.skipped[why, default: 0] += 1; walk.excludedPaths.insert(relative)
                 if why == .secret { walk.secretNames.append(url.lastPathComponent) }
                 if why == .name, !relative.utf8.elementsEqual(relative.precomposedStringWithCanonicalMapping.utf8) {
@@ -194,11 +210,11 @@ struct CloudFolderWalk: Sendable {
                 continue
             }
             let size = Int64(values.fileSize ?? 0)
-            if size > CloudFolderFormat.maximumFileBytes { walk.skipped[.tooLarge, default: 0] += 1; walk.excludedPaths.insert(relative); continue }
+            if size > kind.maximumFileBytes { walk.skipped[.tooLarge, default: 0] += 1; walk.excludedPaths.insert(relative); continue }
             let modified = Int64(((values.contentModificationDate ?? Date(timeIntervalSince1970: 0)).timeIntervalSince1970 * 1000).rounded(.down))
             walk.files[relative] = Entry(bytes: size, modified: modified)
             walk.bytes += size
-            if walk.files.count > CloudFolderFormat.maximumFiles { walk.reliable = false; break }
+            if walk.files.count > kind.maximumFiles { walk.reliable = false; break }
         }
         if problems.count > 0 { walk.reliable = false }
         return walk
@@ -288,13 +304,19 @@ enum CloudFolderDisk {
     }
     /// Writes `bytes` at `relative`: a new file only when none is there (`expecting` nil), else only over exactly the
     /// bytes with fingerprint `expecting`. Temporary file beside it, then rename. Throws `versionChanged` otherwise.
-    static func write(_ root: URL, _ relative: String, bytes: Data, expecting: String?) throws {
+    /// `cloneFrom`: a file holding the same bytes; the new file is an APFS clone of it (no second set of bytes on disk),
+    /// checked against `bytes` before it is used, else written from `bytes` as before.
+    static func write(_ root: URL, _ relative: String, bytes: Data, expecting: String?, cloneFrom: URL? = nil) throws {
         let target = root.appendingPathComponent(relative)
         let folder = target.deletingLastPathComponent()
         // Review 14 Nov (point 1): never `createDirectory(withIntermediateDirectories:)`, which follows a linked folder.
         guard parents(root, relative, make: true) == .ready else { throw CloudFailure.unsafeConfiguration }
         let temporary = folder.appendingPathComponent(".td-cloud-" + UUID().uuidString)
-        try bytes.write(to: temporary, options: .withoutOverwriting)
+        var cloned = false
+        if let cloneFrom, clonefile(cloneFrom.path, temporary.path, UInt32(CLONE_NOFOLLOW)) == 0 {
+            if (try? BackendCloudBrainMemoryHash.file(temporary)) == BackendCloudBrainMemoryHash.bytes(bytes) { cloned = true } else { unlink(temporary.path) }
+        }
+        if !cloned { try bytes.write(to: temporary, options: .withoutOverwriting) }
         defer { unlink(temporary.path) }
         try BackendCloudBrainMemoryHash.synchronize(temporary)
         switch read(root, relative) {

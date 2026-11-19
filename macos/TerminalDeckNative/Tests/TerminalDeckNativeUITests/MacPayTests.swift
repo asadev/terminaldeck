@@ -13,7 +13,6 @@ import TerminalDeckBackend
         (.devices, "TerminalDeckNative/NativeDevicesSettings.swift", "NativeCloudOffers.shows(.devices)"),
         (.devices, "TerminalDeckNative/MACHINESDevicesScreen.swift", "NativeCloudOffers.shows(.devices)"),
         (.devices, "TerminalDeckNative/NativeSettingsKit.swift", "gate.offers(.devices)"),
-        (.phoneAndWebReach, "TerminalDeckNative/NativeDevicesSettings.swift", "NativeCloudOffers.shows(.phoneAndWebReach)"),
         (.phoneAndWebReach, "TerminalDeckNative/NativeMacReachSettings.swift", "NativeCloudOffers.shows(.phoneAndWebReach)"),
         (.pairing, "TerminalDeckNative/NativeJoinRemoteDialog.swift", "NativeCloudOffers.shows(.pairing)"),
         (.otherComputerSessions, "TerminalDeckNative/SidebarView.swift", "NativeCloudOffers.shows(.otherComputerSessions)"),
@@ -30,7 +29,8 @@ import TerminalDeckBackend
         (.aiAppsInternet, "TerminalDeckNative/NativeAiAppsSettings.swift", "NativeCloudOffers.shows(.aiAppsInternet)"),
         (.remoteMachineChoices, "TerminalDeckNative/NativeBrowserBRMachines.swift", "NativeCloudOffers.shows(.remoteMachineChoices)"),
         (.remoteMachineChoices, "TerminalDeckNative/NativeCopilotMachines.swift", "NativeCloudOffers.shows(.remoteMachineChoices)"),
-        (.remoteMachineChoices, "TerminalDeckNative/NativeNewSessionDialog.swift", "NativeCloudOffers.shows(.remoteMachineChoices)"),
+        // 19 Nov free plan: starting a session on another computer is a session feature (a free account keeps it).
+        (.otherComputerSessions, "TerminalDeckNative/NativeNewSessionDialog.swift", "NativeCloudOffers.shows(.otherComputerSessions)"),
         (.remoteMachineChoices, "TerminalDeckNative/NativeServerHost.swift", "NativeCloudOffers.shows(.phoneAndWebReach)"),
         (.remoteMachineChoices, "TerminalDeckNative/NativeCodingAIStore.swift", "NativeCloudOffers.shows(.remoteMachineChoices)"),
         (.remoteMachineChoices, "TerminalDeckNative/NativeScrapingSettings.swift", "NativeCloudOffers.shows(.remoteMachineChoices)"),
@@ -60,7 +60,7 @@ import TerminalDeckBackend
                 for existing in [false, true] { #expect(off.offers(place, existing: existing) == existing, "\(path)") }
                 for state in [CloudSubscription.State.none, .lapsed, .paid, .gift] {
                     let on = CloudSubscriptionSnapshot(lastAnswer: .init(paywall: .on, state: state), available: true)
-                    #expect(on.offers(place) == (state == .paid || state == .gift), "\(path)")
+                    #expect(on.offers(place) == (state == .paid || state == .gift || CloudPaidPlace.freeAccountPlaces.contains(place)), "\(path)")
                 }
             }
         }
@@ -79,29 +79,45 @@ import TerminalDeckBackend
         let baselineItems = NativeSettingsNavigation.items.map(\.id)
         let baselineProfile = NativeSettingsNavigation.profilePages.map(\.id)
         let baselineSearch = NativeSettingsNavigation.matching("cloud").map(\.id)
-        for state in [CloudSubscription.State.none, .lapsed, .paid, .gift] {
+        for state in [CloudSubscription.State.none, .lapsed, .paid] {
             apply(.init(paywall: .off, state: state))
             #expect(NativeSettingsNavigation.items.map(\.id) == baselineItems)
             #expect(NativeSettingsNavigation.profilePages.map(\.id) == baselineProfile)
             #expect(NativeSettingsNavigation.matching("cloud").map(\.id) == baselineSearch)
             #expect(!NativeCloudOffers.showsSubscription)
         }
+        // 19 Nov: with the paywall off, a gift's plan row is the one thing that is new.
+        apply(.init(paywall: .off, state: .gift, source: .gift, tier: .paid, canBuyStorage: true))
+        #expect(NativeSettingsNavigation.items.map(\.id) == baselineItems)
+        #expect(NativeSettingsNavigation.profilePages.map(\.id) == baselineProfile + [NativeSettingsNavigation.planID])
+        #expect(NativeCloudOffers.showsSubscription)
+        for place in CloudPaidPlace.allCases { #expect(NativeCloudOffers.shows(place)) }
         for state in [CloudSubscription.State.none, .lapsed] {
             apply(.init(paywall: .on, state: state))
             #expect(!NativeCloudAccount.shared.visible)
             #expect(!NativeCloudDisplayGate.shared.shows)
             #expect(NativeCloudDisplayGate.shared.accountShows)
             #expect(!NativeScreens.registered.contains("settings:cloud"))
-            #expect(!Sidebar21Pages.catalogue(nil, cloud: NativeCloudDisplayGate.shared.shows).contains { $0.id == Sidebar21Pages.cloudID || $0.id == "devices" })
-            for place in CloudPaidPlace.allCases { #expect(!NativeCloudOffers.shows(place)) }
-            for id in ["cloud", "devices", "devices.older", "device:fixture"] { #expect(NativeSettingsNavigation.canonical(id) == "general") }
-            #expect(!NativeSettingsNavigation.profilePages.contains { ["cloud", "devices", "devices.older"].contains($0.id) })
+            #expect(!Sidebar21Pages.catalogue(nil, cloud: NativeCloudDisplayGate.shared.shows).contains { $0.id == Sidebar21Pages.cloudID })
+            // 19 Nov free plan: a free account keeps its devices and its other computers' sessions; the rest goes.
+            for place in CloudPaidPlace.allCases { #expect(NativeCloudOffers.shows(place) == CloudPaidPlace.freeAccountPlaces.contains(place), "\(place)") }
+            #expect(NativeSettingsNavigation.canonical("cloud") == "general")
+            #expect(NativeSettingsNavigation.canonical("devices") != "general")
+            #expect(!NativeSettingsNavigation.profilePages.contains { $0.id == "cloud" })
+            #expect(NativeSettingsNavigation.profilePages.contains { $0.id == "devices" })
+            #expect(CloudSubscriptionOffers.shared.showsCommand("devices") && !CloudSubscriptionOffers.shared.showsCommand("app.join"))
             #expect(NativeSettingsNavigation.profilePages.contains { $0.id == NativeSettingsNavigation.planID })
             #expect(NativeSettingsNavigation.items.contains { $0.id == "profile" })
             #expect(NativeSettingsNavigation.profilePages.contains { $0.id == "profile.sign-in" })
         }
+        // 19 Nov free plan: the sign-in screen helper is told "closed" for a free account, his own setting otherwise.
+        apply(.init(paywall: .on, state: .none, tier: .free))
+        #expect(!NativeMacReach.helperAllowed)
+        apply(.init(paywall: .off, state: .none, tier: .free))
+        #expect(NativeMacReach.helperAllowed == NativeMacScreenSetting.allowed)
         for state in [CloudSubscription.State.paid, .gift] {
             apply(.init(paywall: .on, state: state))
+            #expect(NativeMacReach.helperAllowed == NativeMacScreenSetting.allowed)
             for place in CloudPaidPlace.allCases { #expect(NativeCloudOffers.shows(place)) }
             #expect(NativeCloudAccount.shared.visible)
             #expect(NativeCloudDisplayGate.shared.shows)
@@ -121,9 +137,35 @@ import TerminalDeckBackend
         let all = try await server.catalogue().map(\.id)
         #expect(all.count == 5)
         apply(.init(paywall: .on, state: .lapsed))
-        #expect(try await server.catalogue().map(\.id) == ["cloud.subscription", "devices.list", "sessions.list", "whatsapp.agents"])
+        // 19 Nov free plan: the tools for other computers' sessions stay with a free account.
+        #expect(try await server.catalogue().map(\.id) == ["cloud.subscription", "devices.list", "machines.look", "sessions.list", "whatsapp.agents"])
         apply(.init(paywall: .on, state: .gift))
         #expect(try await server.catalogue().map(\.id) == (all + ["cloud.subscription"]).sorted())
+    }
+    @Test func aFreeAccountsSidePanelListsItsOtherComputersSessionsFromTheirLiveLinks() throws {
+        let raw: [String: Any] = ["machines": [["id": "reach-pc", "name": "Office PC"]], "links": [
+            ["id": "reach-pc", "state": "online", "sessions": [
+                ["id": "s1", "title": "Build", "cwd": "/w/app", "provider": "claude", "status": "working"],
+                ["id": "s2", "title": "", "cwd": "/w/site", "provider": "codex", "status": "idle", "chat": true],
+                ["id": "s3", "title": "Old", "cwd": "/w", "provider": "claude", "status": "exited", "exitCode": 0]]],
+            ["id": "reach-off", "state": "offline", "sessions": [["id": "s9", "title": "Gone", "cwd": "/", "provider": "claude", "status": "idle"]]],
+            ["id": "paired-mac", "state": "online", "sessions": [["id": "p1", "title": "Paired", "cwd": "/", "provider": "claude", "status": "idle"]]]]]
+        let links = try #require(MachinesSnapshot.decode(raw))
+        let open = MachinesRules.tabId(machineId: "reach-pc", sessionId: "s1")
+        // Only his account's computers that are on, only sessions still running, one row each, none already open here.
+        let rows = NativeRemoteSessionRows.liveOthers(links: links, shown: [])
+        #expect(rows.map(\.id) == [open, MachinesRules.tabId(machineId: "reach-pc", sessionId: "s2")])
+        #expect(rows.map(\.title) == ["Build", "site"])
+        #expect(NativeRemoteSessionRows.chat(rows[1].id, links: links))
+        #expect(NativeRemoteSessionRows.liveOthers(links: links, shown: [open]).map(\.id) == [rows[1].id])
+        // The rows are drawn only for a free account, and a press opens the live session there.
+        let sidebar = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/TerminalDeckNative/SidebarView.swift"), encoding: .utf8)
+        #expect(sidebar.contains("let free = NativeCloudAccount.shared.snapshot.subscription.limitsRemoteToSessions"))
+        #expect(sidebar.contains("NativeCloudOffers.shows(.otherComputerSessions) && !free ? cloud.others : []"))
+        #expect(sidebar.contains("guard free else { return lines }"))
+        #expect(sidebar.contains("sessionRow(item, agents: sessionAgents, press: livePress(line))"))
+        #expect(sidebar.contains("return { NativeMachineSessionRoute.open(tabId: item.id) }"))
     }
     @Test func freshUnpaidSignInRemainsDiscoverableAtNextLaunchWithoutCloudStorage() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mac-pay-launch-" + UUID().uuidString)
@@ -144,7 +186,7 @@ import TerminalDeckBackend
         let ssh = SessionTarget.server(serverId: "fixture-server", shellKey: "fixture-shell")
         for state in [CloudSubscription.State.none, .lapsed, .paid, .gift] {
             apply(.init(paywall: .on, state: state))
-            #expect(NativeCloudOffers.showsSession(relay) == (state == .paid || state == .gift))
+            #expect(NativeCloudOffers.showsSession(relay), "a free account keeps its other computers' sessions")
             #expect(NativeCloudOffers.showsSession(local))
             #expect(NativeCloudOffers.showsSession(ssh))
             #expect(NativeCloudOffers.showsArtifact(cloudOnly: false))

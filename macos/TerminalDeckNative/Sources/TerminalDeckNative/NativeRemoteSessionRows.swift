@@ -26,6 +26,25 @@ enum NativeRemoteSessionRows {
         }
     }
 
+    /// 19 Nov free plan (Decker, 20 Nov: "He started in Windows. He can see and control from Mac"): a free account's
+    /// other computers' running sessions, from the live links of its account's computers (its Cloud rows are refused).
+    /// One row per session that is not shown here already; the row opens the live session there.
+    static func liveOthers(links: MachinesSnapshot, shown: Set<String>) -> [SidebarItem] {
+        let online = links.links.values.filter { $0.state == .online && $0.id.hasPrefix(MachinesSnapshot.reachLinkPrefix) }
+            .sorted { $0.id < $1.id }
+        var rows: [SidebarItem] = []
+        for link in online {
+            for session in link.sessions where session.exitCode == nil && session.status != "exited" {
+                let id = MachinesRules.tabId(machineId: link.id, sessionId: session.id)
+                guard !shown.contains(id) else { continue }
+                let folder = URL(fileURLWithPath: session.cwd).lastPathComponent
+                let title = !session.title.isEmpty ? session.title : (folder.isEmpty || session.cwd.isEmpty ? "Session" : folder)
+                rows.append(SidebarItem(id: id, title: title, kind: .session, status: session.status))
+            }
+        }
+        return rows
+    }
+
     static func chat(_ tabId: String, links: MachinesSnapshot) -> Bool {
         guard case .machine(let machine, let id) = SessionTarget(tabId: tabId) else { return false }
         return links.links[machine]?.session(id)?.chat == true

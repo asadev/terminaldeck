@@ -238,9 +238,16 @@ final class UISettingsReviewTests: XCTestCase {
         XCTAssertEqual(live.plan, .yearly)
         XCTAssertEqual(live.paidUntil?.timeIntervalSince1970, 1_825_588_800)
         XCTAssertEqual(live.extraGb, 200)
-        snapshot.subscription.received(.init(paywall: .off, state: .gift))
+        // 19 Nov: a gift shows its plan with the paywall off too; any other state shows nothing while it is off.
+        snapshot.subscription.received(.init(paywall: .off, state: .gift, source: .gift, tier: .paid, canBuyStorage: true))
         NativeCloudAccount.shared.fixture(snapshot)
-        XCTAssertNil(NativeCloudPlanSeam.shown())
+        XCTAssertEqual(NativeCloudPlanSeam.shown()?.state, NativeCloudPlanFacts.State.gift)
+        XCTAssertTrue(N.items.contains { $0.id == N.planID } || N.profilePages.contains { $0.id == N.planID })
+        for state in [CloudSubscription.State.none, .lapsed, .paid] {
+            snapshot.subscription.received(.init(paywall: .off, state: state))
+            NativeCloudAccount.shared.fixture(snapshot)
+            XCTAssertNil(NativeCloudPlanSeam.shown(), "\(state)")
+        }
 
         // The words: names and dates, no ids, nothing about later.
         var calendar = Calendar(identifier: .gregorian)
@@ -251,8 +258,8 @@ final class UISettingsReviewTests: XCTestCase {
         let none = NativeCloudPlanFacts(shows: true, state: .none)
         XCTAssertNil(W.rowValue(none))
         XCTAssertEqual(W.price(none), "$8.00 a month, or $67.00 a year")
-        XCTAssertEqual(W.gives(none), "Your sessions, memory and files on every device, the phone and web apps, and 100 GB of storage.")
-        XCTAssertEqual(W.subscribe, "Subscribe in the Terminal Deck app on your iPhone or Android phone")
+        XCTAssertEqual(W.gives(none), "Browser, simulators and screen sharing, Cloud sync and tasks on every device, and 100 GB of Cloud storage.")
+        XCTAssertEqual(W.subscribe, "Subscribe in the Terminal Deck app on your phone")
         let yearly = NativeCloudPlanFacts(shows: true, state: .paid, plan: .yearly, paidUntil: until, source: .apple, extraGb: 200)
         XCTAssertTrue(yearly.entitled)
         XCTAssertEqual(W.rowValue(yearly, calendar: calendar), "Yearly · paid until " + day)
@@ -263,7 +270,8 @@ final class UISettingsReviewTests: XCTestCase {
         XCTAssertEqual(W.manage(yearly), "Change or cancel it in the Terminal Deck app on your iPhone.")
         let gift = NativeCloudPlanFacts(shows: true, state: .gift, source: .gift)
         XCTAssertTrue(gift.entitled)
-        XCTAssertEqual(W.rowValue(gift), "Included")
+        XCTAssertEqual(W.rowValue(gift), "Gift · no charge")
+        XCTAssertEqual(W.title + " · " + (W.rowValue(gift) ?? ""), "Terminal Deck Cloud · Gift · no charge")
         XCTAssertNil(W.manage(gift))
         XCTAssertNil(W.storageInfo(gift))
         let lapsed = NativeCloudPlanFacts(shows: true, state: .lapsed, plan: .monthly, paidUntil: until, dataKeptUntil: until.addingTimeInterval(90 * 86_400))
@@ -276,7 +284,7 @@ final class UISettingsReviewTests: XCTestCase {
         let page = try source("NativeCloudPlanSettings.swift")
         XCTAssertFalse(page.contains("Button("))
         for banned in ["coming", "soon", "later", "trial"] {
-            XCTAssertFalse((W.subscribe + W.gives(none) + W.price(none) + W.included).lowercased().contains(banned), banned)
+            XCTAssertFalse((W.subscribe + W.gives(none) + W.price(none) + W.gift).lowercased().contains(banned), banned)
         }
     }
 
@@ -737,7 +745,8 @@ final class UISettingsReviewTests: XCTestCase {
             let yearly = NativeCloudPlanFacts(shows: true, state: .paid, plan: .yearly, paidUntil: until, source: .apple, extraGb: 200)
             let ended = NativeCloudPlanFacts(shows: true, state: .lapsed, plan: .monthly, paidUntil: Date().addingTimeInterval(-12 * 86_400),
                                              dataKeptUntil: Date().addingTimeInterval(78 * 86_400))
-            for (name, plan) in [("offer", offer), ("paid", yearly), ("ended", ended)] {
+            let gift = NativeCloudPlanFacts(shows: true, state: .gift, source: .gift)
+            for (name, plan) in [("offer", offer), ("paid", yearly), ("gift", gift), ("ended", ended)] {
                 var planSnapshot = snapshot
                 planSnapshot.subscription.received(.init(paywall: .on,
                     state: .init(rawValue: plan.state.rawValue) ?? .none,

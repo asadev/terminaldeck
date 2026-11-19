@@ -25,17 +25,55 @@ public struct CloudFileKind: Sendable {
     public let listsAll: Bool
     public let words: CloudFileKindWords
 
+    /// The kind's own path rule; nil = the Cloud folder's (`CloudFolderRules.refusal`).
+    public let pathRule: (@Sendable (String) -> CloudFolderSkip?)?
+    /// Bytes this Mac may send of this kind a day; nil = no cap of ours (project folders, Asad 19 Nov: "don't worry
+    /// about cloud limits").
+    public let dailySendBytes: Int64?
+    /// False: this kind keeps sending when the account's room is low (the service answers if it is really full).
+    public let obeysRoomFloor: Bool
+    /// The most files one look carries; past it the look is not reliable (nothing is inferred) and the rest waits.
+    public let maximumFiles: Int
+    /// The most bytes one look records; the rest goes in the next looks (a first upload of gigabytes goes in steps, so the
+    /// Mac and the other kinds' sends are never held up). nil = no pacing.
+    public let bytesPerLook: Int64?
+    /// Seconds between the owner's looks (2 for the Cloud folder; longer for a large tree).
+    public let lookSeconds: UInt64
+    /// The private copy is an APFS clone of the file (no extra disk space) instead of a second set of bytes.
+    public let clonesCopies: Bool
+
     public var domain: String { CloudBrainFilesFormat.domain(inventoryRow) }
     /// The same path rules for both kinds (hidden, temporary, links' names, package folders, the never-send list).
-    public func refusal(_ relative: String) -> CloudFolderSkip? { CloudFolderRules.refusal(relative) }
+    public func refusal(_ relative: String) -> CloudFolderSkip? { pathRule?(relative) ?? (pathRule == nil ? CloudFolderRules.refusal(relative) : nil) }
 
     public init(inventoryRow: String, sourceId: String, keeperKind: String, label: String, feature: String, format: Int,
                 maximumFileBytes: Int64, maximumFolderBytes: Int64, listed: @escaping @Sendable (String) -> Bool = { _ in true },
-                listsAll: Bool = true, words: CloudFileKindWords) {
+                listsAll: Bool = true, words: CloudFileKindWords, pathRule: (@Sendable (String) -> CloudFolderSkip?)? = nil,
+                dailySendBytes: Int64? = CloudFolderFormat.dailySendBytes, obeysRoomFloor: Bool = true,
+                maximumFiles: Int = CloudFolderFormat.maximumFiles, bytesPerLook: Int64? = nil, lookSeconds: UInt64 = 2, clonesCopies: Bool = false) {
         self.inventoryRow = inventoryRow; self.sourceId = sourceId; self.keeperKind = keeperKind; self.label = label
         self.feature = feature; self.format = format; self.maximumFileBytes = maximumFileBytes; self.maximumFolderBytes = maximumFolderBytes
         self.listed = listed; self.listsAll = listsAll; self.words = words
+        self.pathRule = pathRule; self.dailySendBytes = dailySendBytes; self.obeysRoomFloor = obeysRoomFloor
+        self.maximumFiles = maximumFiles; self.bytesPerLook = bytesPerLook; self.lookSeconds = lookSeconds; self.clonesCopies = clonesCopies
     }
+
+    /// Folders that travel with a project (Asad, 19 Nov: "everything should travel ... including actually pictures and
+    /// everything don't worry about cloud limits"): row I26, every top-level folder of every project on this Mac, under
+    /// one domain; a record's path is `<project key>/<folder>/<path in it>` (`CloudProjectFoldersRules`).
+    public static let projectFolders = CloudFileKind(
+        inventoryRow: CloudProjectFoldersRules.inventoryRow, sourceId: "projects", keeperKind: "projectFolders", label: "Project folders",
+        feature: CloudProjectFoldersRules.feature, format: CloudProjectFoldersRules.format,
+        maximumFileBytes: .max, maximumFolderBytes: .max,
+        words: CloudFileKindWords(
+            gate: { CloudFolderFormat.gateLine($0).replacingOccurrences(of: "Cloud folder", with: "project folders") },
+            roomLow: "", full: "", dayFull: "", busy: { CloudFolderFormat.busyLine($0) }, diskLow: CloudFolderFormat.diskLowLine,
+            tooLarge: { _ in "" }, secret: { _ in "" }, spelling: { CloudFolderFormat.spellingLine($0) }, clash: { CloudFolderFormat.clashLine($0) },
+            folderMissing: "A project's folder is not on this Mac. Nothing was removed from your other devices.",
+            exclusions: CloudProjectFoldersRules.exclusions,
+            safetyCopyFailed: "project folders: the safety copy could not be made, so nothing in them is replaced or removed by sync yet. It tries again by itself."),
+        pathRule: { CloudProjectFoldersRules.refusal($0) }, dailySendBytes: nil, obeysRoomFloor: false,
+        maximumFiles: 2_000_000, bytesPerLook: 256 * 1_048_576, lookSeconds: 10, clonesCopies: true)
 
     /// The Cloud folder, exactly as slice 1 built it (every value and line is the one it had).
     public static let cloudFolder = CloudFileKind(

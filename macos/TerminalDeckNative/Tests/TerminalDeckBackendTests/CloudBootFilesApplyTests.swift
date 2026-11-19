@@ -253,8 +253,8 @@ struct CloudBootFilesApplyTests {
         #expect(Set(done) == Set(chosen))
         #expect(f.text("b/app/" + skill) == runs[skill])
         #expect(f.text("b/app/" + script) == runs[script])
-        // Nothing is made executable, whatever the sender's file was.
-        #expect(f.mode("b/app/" + script) & 0o111 == 0)
+        // A script (it starts with #!) keeps working on every Mac: written runnable. Anything else never is.
+        #expect(f.mode("b/app/" + script) & 0o111 != 0)
         #expect(f.mode("b/app/" + skill) & 0o111 == 0)
         // The other two still wait.
         #expect(!f.exists("b/app/" + agent) && !f.exists("b/app/" + command))

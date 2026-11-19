@@ -97,6 +97,19 @@ public actor BackendCloudAccount {
     private let configuration: CloudAccountConfiguration
     private let http: any BackendCloudAccountHTTP
     private let connect: @Sendable () async throws -> BackendCloudAccountPorts
+    /// 19 Nov free plan: the service's device door alone, for a free account's sign-in (`POST /devices`, so its other
+    /// devices can reach this Mac). It builds no sync engine, saved passwords or event socket. Nil: the full ports'
+    /// transport (as before; fixtures hand in their one transport).
+    private let deviceDoor: (@Sendable () async throws -> any CloudTransportPort)?
+    /// The door for the signed-in account, made once per sign-in (its device list is read through it while free).
+    private var door: (subject: String, transport: any CloudTransportPort)?
+    private func freeDoor(subject: String) async throws -> any CloudTransportPort {
+        if let door, door.subject == subject { return door.transport }
+        let transport: any CloudTransportPort
+        if let deviceDoor { transport = try await deviceDoor() } else { transport = try await ports().transport }
+        door = (subject, transport)
+        return transport
+    }
     private var lastPorts: BackendCloudAccountPorts?
     private let clock: @Sendable () -> Int64
     private var current: CloudAccountSnapshot = .signedOut
@@ -204,14 +217,17 @@ public actor BackendCloudAccount {
                 machine: BackendCloudMachineFacts? = nil) {
         self.configuration = configuration; self.identity = identity; self.http = http; self.clock = clock; self.monotonic = monotonic
         self.connect = { BackendCloudAccountPorts(transport: transport, outbox: outbox, trust: trust) }
+        self.deviceDoor = { transport }
         self.machine = machine
     }
     public init(configuration: CloudAccountConfiguration, identity: BackendCloudAccountIdentity, http: any BackendCloudAccountHTTP,
                 ports: @escaping @Sendable () async throws -> BackendCloudAccountPorts,
                 clock: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
                 monotonic: @escaping @Sendable () -> UInt64 = { BackendCloudAccount.monotonicNow() },
-                machine: BackendCloudMachineFacts? = nil) {
+                machine: BackendCloudMachineFacts? = nil,
+                deviceDoor: (@Sendable () async throws -> any CloudTransportPort)? = nil) {
         self.configuration = configuration; self.identity = identity; self.http = http; self.clock = clock; self.monotonic = monotonic; self.connect = ports
+        self.deviceDoor = deviceDoor
         self.machine = machine
     }
     // MARK: One row per machine (MAC-NEXT-10)
@@ -355,10 +371,15 @@ public actor BackendCloudAccount {
     /// before the first status read: nothing is sent. Returns whether the status was read again.
     @discardableResult
     public func refreshDevicesIfChanged() async throws -> Bool {
-        guard [.signedIn, .paused].contains(current.phase), refreshing == nil, retrying == nil, let bound = lastPorts else { return false }
+        guard [.signedIn, .paused].contains(current.phase), refreshing == nil, retrying == nil else { return false }
+        // A free account has no sync ports; its device list comes through the device door (19 Nov free plan).
+        let transport: any CloudTransportPort
+        if let bound = lastPorts { transport = bound.transport }
+        else if subscription.limitsRemoteToSessions, let door { transport = door.transport }
+        else { return false }
         let version = generation
         let fresh: [CloudDevice]
-        do { fresh = try await bound.transport.devices().devices }
+        do { fresh = try await transport.devices().devices }
         catch {
             // MAC-NEXT-12b: a registration retired by the one-row-per-machine rule loses its session on the service
             // (user.ts retire(): device revoked, its sign-in session and refresh tokens deleted), so every request
@@ -547,6 +568,30 @@ public actor BackendCloudAccount {
             do {
                 await refreshSubscriptionIfDue()
                 if !subscription.allowsCloudServices {
+                    // 19 Nov free plan: a free account's phones and computers reach this Mac's sessions through the
+                    // relay, which needs this Mac's device record (its name and keys) at the service. Only that: no
+                    // status read, no sync engine, nothing of the account's data goes to the Cloud.
+                    if subscription.limitsRemoteToSessions {
+                        await reach("device keys")
+                        let registration = try await identity.deviceRegistration()
+                        await reach("Cloud connection")
+                        let door = try await freeDoor(subject: session.user.id)
+                        await reach("device registration")
+                        let receipt = try await register(registration, subject: session.user.id, on: door)
+                        guard generation == version else { throw CancellationError() }
+                        guard receipt.deviceId == registration.deviceId, receipt.status == .active else { throw CloudFailure.deviceRevoked }
+                        await reach("")
+                        // His devices for the Devices page (Decker, 20 Nov). A failed read is said in the log; the next
+                        // status read tries again.
+                        var listed: [CloudDevice] = []
+                        do { listed = try await door.devices().devices }
+                        catch { await stageLog?("cloud sign-in: device list not read for a free account (\(Self.kind(error)))") }
+                        guard generation == version else { throw CancellationError() }
+                        publish(.init(phase: .signedIn, gate: .closed, displayName: session.user.displayName, devices: listed))
+                        checkedAt = monotonic()
+                        await sessionHook?(.signedIn)
+                        return
+                    }
                     publish(.init(phase: .signedIn, gate: .closed, displayName: session.user.displayName))
                     await sessionHook?(.signedIn)
                     return
@@ -605,6 +650,17 @@ public actor BackendCloudAccount {
             await refreshSubscriptionIfDue()
             guard generation == version else { throw CancellationError() }
             if !subscription.allowsCloudServices {
+                // 19 Nov free plan (Decker, 20 Nov): a free account's Devices page lists its devices. The one request is
+                // the device list through the device door: no status read, no sync. Read at most every few minutes.
+                if subscription.limitsRemoteToSessions {
+                    refreshStage = "devices"
+                    let door = try await freeDoor(subject: session.user.id)
+                    let devices = try await door.devices()
+                    guard generation == version else { throw CancellationError() }
+                    publish(.init(phase: .signedIn, gate: current.gate, displayName: signedInAs, devices: devices.devices))
+                    checkedAt = monotonic(); failures = 0
+                    return
+                }
                 // Presentation only: no pause, stop, sign-out, deletion or saved-choice write on a payment change.
                 if current.phase == .needsSignIn || current.phase == .signedOut {
                     publish(.init(phase: .signedIn, gate: current.gate, displayName: signedInAs))
@@ -1113,6 +1169,7 @@ public actor BackendCloudAccount {
         await lastPorts?.transport.stop()
         await lastPorts?.seal()
         lastPorts = nil
+        door = nil
         let session = try? await identity.existing()
         var told: BackendCloudSignedOutElsewhere?
         if let detail, detail.code == "device_revoked", let session, let deviceId = try? await identity.deviceRegistration().deviceId {

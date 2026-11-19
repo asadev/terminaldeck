@@ -39,7 +39,8 @@ public enum CloudSyncKind: String, CaseIterable, Codable, Sendable {
         case .memory: return Set(CloudBrainMemoryFormat.inventoryRows).subtracting([CloudSyncChoices.accountMarksRow])
         case .projects: return ["I11"]
         case .agents: return ["I10"]
-        case .instructionFiles: return ["I09"]
+        // Project folders (I26) travel with the project's instruction files: one switch, nothing new to find.
+        case .instructionFiles: return ["I09", "I26"]
         case .tasks: return ["I12"]
         case .settings: return ["I21"]
         case .artifacts: return ["I23"]

@@ -25,6 +25,10 @@ import TerminalDeckNativeCore
         return model
     }
     private var service: SMAppService { .daemon(plistName: MacReach.daemonPlist) }
+    /// What the helper is told: his setting, and (19 Nov free plan; Decker, 20 Nov: "close it for a free account's
+    /// devices. Screen sharing is paid") closed while this Mac's account is free. His own setting is not changed; the
+    /// helper keeps the last value it was told, so a Mac at its sign-in window stays closed for a free account.
+    static var helperAllowed: Bool { NativeMacScreenSetting.allowed && !CloudSubscriptionOffers.shared.limitsRemoteToSessions }
     var available: Bool { client != nil && agentConnected }
     /// Scratch copies cannot claim the production service name, launch it, or register a helper.
     var releaseBundle: Bool { Bundle.main.bundleIdentifier == "dev.terminaldeck.app" && Bundle.main.object(forInfoDictionaryKey: "TDNativeStandalone") as? Bool == true }
@@ -57,7 +61,7 @@ import TerminalDeckNativeCore
             if client == nil {
                 let connection = try BackendMacReachClient()
                 _ = try await connection.value("claim", .object([.init("trustDirectory", .string(trustDirectory.path)),
-                    .init("name", .string(Host.current().localizedName ?? "Mac")), .init("allowed", .bool(NativeMacScreenSetting.allowed)),
+                    .init("name", .string(Host.current().localizedName ?? "Mac")), .init("allowed", .bool(Self.helperAllowed)),
                     .init("systemKeepAwake", .bool(keepAwake)),
                     .init("appVersion", .string(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"))]))
                 client = connection
@@ -97,7 +101,7 @@ import TerminalDeckNativeCore
         await permissionsChanged()
     }
     func permissionsChanged() async {
-        do { _ = try await client?.value("configure", .object([.init("allowed", .bool(NativeMacScreenSetting.allowed)), .init("systemKeepAwake", .bool(keepAwake))])) }
+        do { _ = try await client?.value("configure", .object([.init("allowed", .bool(Self.helperAllowed)), .init("systemKeepAwake", .bool(keepAwake))])) }
         catch { problem = "The helper could not confirm the new setting. Check again before leaving this Mac." }
     }
     func refreshPower() async {

@@ -369,7 +369,7 @@ final class NativeNewSessionModel {
     }
 
     var machine: NewSessionMachine? {
-        guard NativeCloudOffers.shows(.remoteMachineChoices) else { return nil }
+        guard NativeCloudOffers.shows(.otherComputerSessions) else { return nil }
         return selectedMachine.flatMap { id in context.machines.first { $0.id == id } }
     }
     var server: NewSessionServer? { selectedServer.flatMap { id in context.servers.first { $0.id == id } } }
@@ -521,7 +521,7 @@ final class NativeNewSessionModel {
             if let path = row["cwd"].text { counts[path, default: 0] += 1 }
         }
         var offeredMachines: [NewSessionMachine] = []
-        if NativeCloudOffers.shows(.remoteMachineChoices), effects.startMachine != nil, effects.openedMachine != nil {
+        if NativeCloudOffers.shows(.otherComputerSessions), effects.startMachine != nil, effects.openedMachine != nil {
             let names = Dictionary((machines["machines"].array ?? []).compactMap { row -> (String, String)? in
                 guard let id = row["id"].text else { return nil }
                 return (id, row["name"].text ?? id)
@@ -590,7 +590,7 @@ final class NativeNewSessionModel {
     }
 
     func choose(machine: NewSessionMachine) {
-        guard NativeCloudOffers.shows(.remoteMachineChoices) else { return }
+        guard NativeCloudOffers.shows(.otherComputerSessions) else { return }
         selectedMachine = machine.id
         selectedServer = nil
         selectedPath = machine.folders.first
@@ -712,7 +712,7 @@ final class NativeNewSessionModel {
     /// Directly awaitable by stub tests. A returned session is never started twice.
     func submitNative() async {
         guard !starting else { return }
-        if selectedMachine != nil && !NativeCloudOffers.shows(.remoteMachineChoices) { chooseHere(); return }
+        if selectedMachine != nil && !NativeCloudOffers.shows(.otherComputerSessions) { chooseHere(); return }
         guard canStart else { return }
         // A lapse may change what the form offers while this request travels. Keep this started request's target.
         let machine = self.machine, server = self.server
@@ -866,11 +866,11 @@ struct NativeNewSessionDialog: View {
         }
         .frame(width: 600)
         .frame(minHeight: 0, maxHeight: 490)
-        .onChange(of: NativeCloudOffers.shows(.remoteMachineChoices), initial: true) { _, shown in
+        .onChange(of: NativeCloudOffers.shows(.otherComputerSessions), initial: true) { _, shown in
             if !shown, !model.starting, model.selectedMachine != nil { model.chooseHere() }
         }
         .onChange(of: model.starting) { _, starting in
-            if !starting, !NativeCloudOffers.shows(.remoteMachineChoices), model.selectedMachine != nil { model.chooseHere() }
+            if !starting, !NativeCloudOffers.shows(.otherComputerSessions), model.selectedMachine != nil { model.chooseHere() }
         }
         .onChange(of: model.selectedPath) { model.resolveDefaultProfile() }
         .onChange(of: model.decided?.profileId) { model.checkSignIn() }
@@ -954,7 +954,7 @@ struct NativeNewSessionDialog: View {
             }
 
             projectIdentitySection
-            if (NativeCloudOffers.shows(.remoteMachineChoices) && !model.context.machines.isEmpty) || !model.context.servers.isEmpty {
+            if (NativeCloudOffers.shows(.otherComputerSessions) && !model.context.machines.isEmpty) || !model.context.servers.isEmpty {
                 whereSection
             }
             if model.here, let path = model.selectedPath {
@@ -1038,7 +1038,7 @@ struct NativeNewSessionDialog: View {
                 NativeNewSessionChoice(selected: model.here, action: model.chooseHere) {
                     Text(model.context.hereName)
                 }
-                ForEach(NativeCloudOffers.shows(.remoteMachineChoices) ? model.context.machines : []) { row in
+                ForEach(NativeCloudOffers.shows(.otherComputerSessions) ? model.context.machines : []) { row in
                     NativeNewSessionChoice(selected: model.machine?.id == row.id, action: { model.choose(machine: row) }) {
                         Image(systemName: "laptopcomputer").foregroundStyle(.secondary)
                         Text(row.name)

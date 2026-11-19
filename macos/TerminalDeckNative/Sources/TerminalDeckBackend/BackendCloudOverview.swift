@@ -401,7 +401,7 @@ public enum BackendCloudOverviewBuilder {
         switch kind {
         case .memory: return Set(CloudBrainMemoryFormat.inventoryRows)
         case .projects: return ["I10", "I11"]
-        case .bootFiles: return [CloudBootFilesFormat.inventoryRow]
+        case .bootFiles: return [CloudBootFilesFormat.inventoryRow, CloudProjectFoldersRules.inventoryRow]
         case .tasks: return [BackendCloudKinds.tasksRow]
         case .settings: return [BackendCloudKinds.settingsRow]
         case .cloudFolder: return [CloudFolderFormat.inventoryRow]

@@ -692,7 +692,8 @@ struct NativeThisMacSwitches: View {
     var body: some View {
         let reachNow = feed.reachNow
         DeckSettingsGroup {
-            if NativeCloudOffers.shows(.phoneAndWebReach), feed.signedIn, feed.fixture?.reach != nil || feed.reach.devicesReach.available {
+            // The switch that lets his devices open this Mac stays with a free account (19 Nov free plan).
+            if NativeCloudOffers.shows(.devices), feed.signedIn, feed.fixture?.reach != nil || feed.reach.devicesReach.available {
                 DeckSettingsRow(DevicesPage.settingTitle, info: DevicesPage.settingOnDetail + "\n\n" + DevicesPage.settingOffDetail,
                                 state: NativeDevicesSettings.doorWord(reachNow),
                                 stateColor: reachNow.door == .notReachable ? DeckTokens.warn : .secondary) {

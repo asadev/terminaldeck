@@ -14,7 +14,9 @@ import TerminalDeckNativeCore
 ///   holds the name wins.
 /// - An existing file is replaced only by swapping the new one in and checking what came OUT; if that is not what
 ///   was expected it is swapped back, so a save that landed in between is never lost.
-/// - Nothing is run, sourced or linked to. A written file is created 0644 (before the umask): never executable.
+/// - Nothing is run, sourced or linked to. A written file is created 0644 (before the umask); a script (its first two
+///   bytes `#!`) is created 0755, so a guard or a skill's script keeps working on every Mac (Asad, 19 Nov: "the guard
+///   should be traveling"). Runnable is decided by the bytes alone, the same on every Mac.
 enum BackendCloudBootFilesDisk {
     enum Found: Sendable, Equatable {
         case absent
@@ -169,10 +171,20 @@ enum BackendCloudBootFilesDisk {
 
     // MARK: Write
 
+    /// A script: starts with `#!`. Written runnable (0755 before the umask).
+    static func isScript(_ bytes: Data) -> Bool { bytes.count >= 2 && bytes[bytes.startIndex] == 0x23 && bytes[bytes.startIndex + 1] == 0x21 }
+
+    /// A setup file (settings, guard, Codex folder) whose text holds a password, key or token never travels as plain text:
+    /// it stays on its Mac and is counted ("secret"), asked on the sending Mac and again before a write.
+    static func setupHoldsSecret(kind: CloudBootFilesPlaceKind, relative: String, bytes: Data) -> Bool {
+        guard CloudBootFilesRules.secretChecked(kind: kind, relative: relative) else { return false }
+        return BackendSharedRedact.containsKnownSecret(String(decoding: bytes, as: UTF8.self))
+    }
+
     /// The new bytes under a private name in the same folder, synchronised. Returns that name.
     private static func stage(_ folder: Int32, _ bytes: Data) throws -> String {
         let name = ".td-cloud-" + UUID().uuidString.lowercased()
-        let descriptor = openat(folder, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+        let descriptor = openat(folder, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, isScript(bytes) ? 0o755 : 0o644)
         guard descriptor >= 0 else { throw Stop(reason: "unwritable") }
         var failed = false
         bytes.withUnsafeBytes { raw in
@@ -291,6 +303,21 @@ enum BackendCloudBootFilesDisk {
             if found == .twin { walk.gaps["twin", default: 0] += 1 }
             if found == .exact { file(top, name, relative: name, kind: kind, into: &walk) }
         }
+        // Setup files by exact path (`.claude/settings.json`, ...): only their own folder is opened, never followed.
+        for path in CloudBootFilesRules.setupFiles(kind) {
+            let parts = path.split(separator: "/").map(String.init)
+            guard let name = parts.last else { continue }
+            do {
+                guard let opened = try descend(top, Array(parts.dropLast()), create: false) else { continue }
+                defer { close(opened) }
+                guard let found = lookup(opened, name) else { walk.reliable = false; walk.gaps["unreadable", default: 0] += 1; continue }
+                if found == .twin { walk.gaps["twin", default: 0] += 1 }
+                if found == .exact { file(opened, name, relative: path, kind: kind, into: &walk) }
+            } catch let stop as Stop {
+                if stop.reason == "link" { walk.excluded["link", default: 0] += 1 }
+                else { walk.reliable = false; walk.gaps[stop.reason, default: 0] += 1 }
+            } catch { walk.reliable = false }
+        }
         for folder in CloudBootFilesRules.folders(kind) {
             do {
                 guard let opened = try descend(top, folder.split(separator: "/").map(String.init), create: false) else { continue }
@@ -369,6 +396,11 @@ enum BackendCloudBootFilesDisk {
         case .file(let bytes):
             guard CloudBootFilesRules.isText(bytes) else {
                 walk.excluded["not-text", default: 0] += 1
+                walk.present.insert(relative)
+                return
+            }
+            if setupHoldsSecret(kind: kind, relative: relative, bytes: bytes) {
+                walk.excluded["secret", default: 0] += 1
                 walk.present.insert(relative)
                 return
             }

@@ -242,7 +242,24 @@ enum NativeCloudApplication {
                 await keys.discard()
             })
         }
-        return BackendCloudAccount(configuration: configuration, identity: identity, http: http, ports: { try await binding.resolve() }, machine: machine)
+        return BackendCloudAccount(configuration: configuration, identity: identity, http: http, ports: { try await binding.resolve() }, machine: machine,
+                                   deviceDoor: { try await NativeCloudApplication.deviceDoor(configuration: configuration, dataRoot: dataRoot, identity: identity) })
+    }
+    /// 19 Nov free plan: the service's device door for a free account's sign-in (`POST /devices`, so the account's other
+    /// devices reach this Mac through the relay). The same transport the sync ports use, on the same per-identity store,
+    /// but nothing else: no sync engine, no saved passwords, no event socket, no Cloud folder.
+    nonisolated static func deviceDoor(configuration: CloudAccountConfiguration, dataRoot: URL, identity: BackendCloudAccountIdentity) async throws
+        -> any CloudTransportPort {
+        let session = try await identity.credentials()
+        let subject = CloudSubject(issuer: configuration.issuer, sub: session.user.id)
+        let subjectHash = NativeCloudAccountHash.hash(configuration.issuer + "\n" + session.user.id)
+        let storage = try CloudSyncStore(root: dataRoot.appendingPathComponent("cloud/" + subjectHash), subject: subject)
+        let environment: CloudSyncEndpoint.Environment
+        switch configuration.environment { case .production: environment = .production; case .fixture: environment = .test }
+        guard let host = configuration.baseURL.host else { throw CloudFailure.unsafeConfiguration }
+        let endpoint = try CloudSyncEndpoint(base: configuration.baseURL, environment: environment, objectHosts: [host])
+        let signer: CloudSyncSigner = { payload in BackendCloudAccountIdentity.base64(try await identity.signDevicePayload(payload)) }
+        return try CloudSyncTransport(endpoint: endpoint, auth: identity, signer: signer, store: storage, budget: CloudSyncBudget(store: storage))
     }
 }
 

@@ -94,6 +94,19 @@ struct LinkPipelineTests {
         var reader: Task<Void, Never>?
         // link.keep (LINK-KEEP-CONTRACT.md), the phone's side as the contract asks it.
         var keep = false
+        var claimProve = false, prove = false, quietProof = false, dropProofEchoes = false
+        var proofRoute = "direct", forcedProofPath: String?
+        var localOnlyProof = false, endFirstLocal = false
+        var proofID = "", proofStarted = 0.0, proofSent = 0
+        var proofEchoes = Set<Int>(), proofProbes = Set<Int>()
+        var localProven = false, peerProven = false
+        var proofTimer: Task<Void, Never>?
+        var offerFrames: [NativeRPCValue] = [], relayLinkFrames: [String] = []
+        func configureProof(_ enabled: Bool, route: String, path: String?, quiet: Bool, localOnly: Bool, endFirst: Bool) {
+            claimProve = enabled; proofRoute = route; forcedProofPath = path; quietProof = quiet
+            localOnlyProof = localOnly; endFirstLocal = endFirst
+        }
+        func dropEchoes() { dropProofEchoes = true }
         func setKeep(_ on: Bool) { keep = on }
         /// td.ctl messages from the host handled on this link; what this side handed to its link, in order.
         var gotOnLink = 0
@@ -114,7 +127,7 @@ struct LinkPipelineTests {
         /// move and then goes on `td.ctl`. Old (`only` false): the relay until this side moved (and `ping` always).
         func send(_ text: String) async {
             if keep, backSent, !backDone, !text.hasPrefix(#"{"t":"ping""#), !text.hasPrefix(#"{"t":"link."#) { backHeld.append(text); return }
-            if keep, relinked, !moved { await toHost.carry(text); return }
+            if (prove || keep && relinked), !moved { await toHost.carry(text); return }
             if moved, only || !text.hasPrefix(#"{"t":"ping""#) {
                 if let link, link.send(Data(text.utf8), lane: .control) { if keep { sentOnLink.append(text) }; return }
                 ended = ended ?? "a send on the link was refused"
@@ -129,7 +142,10 @@ struct LinkPipelineTests {
         func fromRelay(_ text: String) async {
             guard let value = Self.parse(Data(text.utf8)) else { return }
             viaRelay += 1
+            if value["t"].string?.hasPrefix("link.") == true { relayLinkFrames.append(text) }
             switch value["t"].string {
+            case "link.proven":
+                if prove, value["id"].string == proofID { peerProven = true; await proofProgress() }
             case "link.peer": await signal(value)
             case "link.back":
                 hostBacks += 1
@@ -155,6 +171,18 @@ struct LinkPipelineTests {
         var lanes: [Int32: Int] = [:]
         func fromLink(_ data: Data, _ lane: PeerLane) async {
             lanes[lane.rawValue, default: 0] += 1
+            if prove, lane == .control, let value = Self.parse(data), ["link.probe", "link.echo"].contains(value["t"].string ?? "") {
+                guard value["id"].string == proofID, value["pad"].string == String(repeating: "x", count: 16_384), let n = value["seq"].number else { return }
+                if value["t"].string == "link.probe" {
+                    proofProbes.insert(Int(n))
+                    if !dropProofEchoes {
+                        let echo = Self.text([.init("t", .string("link.echo")), .init("id", .string(proofID)), .init("seq", .number(n)), .init("pad", value["pad"])])
+                        _ = link?.send(Data(echo.utf8), lane: .control)
+                    }
+                } else if Int(n) <= proofSent { proofEchoes.insert(Int(n)) }
+                await proofProgress()
+                return
+            }
             if lane == .control, !hostMoved, !hostOnly || relinked { held.append(data); return }
             if keep, backSent { return }
             if lane == .control { gotOnLink += 1 }
@@ -164,6 +192,7 @@ struct LinkPipelineTests {
         /// link.keep: this side ends the link (once) and says how much of the host's it handled.
         func moveBack() async {
             guard keep, !backSent else { return }
+            proofTimer?.cancel()
             backSent = true; backDone = false; relinked = true
             moved = false; hostMoved = false; held = []
             link?.close(); link = nil
@@ -182,6 +211,7 @@ struct LinkPipelineTests {
                 welcomedAt = V.now()
                 welcomeCapabilities = value["capabilities"].elements?.compactMap(\.string) ?? []
                 hostOnly = welcomeCapabilities.contains(BackendRemoteHost.linkOnlyCapability)
+                prove = welcomeCapabilities.contains(BackendRemoteHost.linkProveCapability)
             case "settings.state":
                 guard let rid = value["rid"].string else { return }
                 let at = V.now()
@@ -225,6 +255,17 @@ struct LinkPipelineTests {
             switch value["op"].string {
             case "offer":
                 offers += 1
+                offerFrames.append(value)
+                if prove {
+                    proofTimer?.cancel()
+                    proofID = value["proof"].string ?? ""
+                    proofSent = 0; proofEchoes = []; proofProbes = []; localProven = false; peerProven = false
+                    gotOnLink = 0; sentOnLink = []; backSent = false; backDone = false
+                }
+                if prove, endFirstLocal, offers == 1 {
+                    await send(#"{"t":"link.peer","op":"end","localOnly":true,"retry":false}"#)
+                    return
+                }
                 guard let sdp = value["sdp"].string, let fp = value["fp"].string, let bind = value["bind"].string,
                       PeerLink.fingerprint(in: sdp) == fp,
                       PeerBinding.check(bind, binding: LinkPipelineTests.binding, role: "host", fingerprint: fp) else {
@@ -255,11 +296,13 @@ struct LinkPipelineTests {
                 guard let answer = try? await made.answer(offer: sdp), let mine = PeerLink.fingerprint(in: answer) else { return }
                 let key = forge ? Data(repeating: 1, count: 32) : LinkPipelineTests.binding
                 await send(Self.text([.init("t", .string("link.peer")), .init("op", .string("answer")), .init("sdp", .string(answer)),
-                                      .init("fp", .string(mine)), .init("bind", .string(PeerBinding.make(binding: key, role: "client", fingerprint: mine)))]))
+                                      .init("fp", .string(mine)), .init("bind", .string(PeerBinding.make(binding: key, role: "client", fingerprint: mine)))]
+                    + (prove ? [.init("route", .string(proofRoute)), .init("probeOnly", .bool(quietProof)), .init("localOnly", .bool(localOnlyProof))] : [])))
             case "cand":
                 if let c = value["c"].string { hostCandidates.append(c) }
                 if let c = value["c"].string { link?.add(candidate: c, mid: value["mid"].string, index: Int32(value["idx"].number ?? 0)) }
             case "end":
+                proofTimer?.cancel()
                 link?.close(); link = nil
             default: break
             }
@@ -269,6 +312,22 @@ struct LinkPipelineTests {
         private func opened(_ route: String) async {
             guard !moved else { return }
             self.route = route
+            if prove {
+                proofStarted = V.now()
+                let fast = (forcedProofPath ?? route) == "host" && proofRoute == "direct" && !quietProof
+                if fast { await proofMove() }
+                await proofBeat()
+                proofTimer = Task { [weak self] in
+                    while !Task.isCancelled {
+                        guard let self else { return }
+                        let interval = await self.localProven || fast ? 2_000 : 500
+                        try? await Task.sleep(for: .milliseconds(interval))
+                        guard !Task.isCancelled else { return }
+                        await self.proofBeat()
+                    }
+                }
+                return
+            }
             if let beforeMarker { await toHost.carry(beforeMarker) }
             await toHost.carry(BackendRemoteLinkPath.movedText)
             moved = true
@@ -276,6 +335,28 @@ struct LinkPipelineTests {
             movedAt = V.now()
             let queued = waiting; waiting = []
             for text in queued where link?.send(Data(text.utf8), lane: .control) != true { ended = ended ?? "a queued send was refused" }
+        }
+
+        private func proofBeat() async {
+            guard let link else { return }
+            proofSent += 1
+            let frame = Self.text([.init("t", .string("link.probe")), .init("id", .string(proofID)), .init("seq", .number(Double(proofSent))),
+                                   .init("pad", .string(String(repeating: "x", count: 16_384)))])
+            _ = link.send(Data(frame.utf8), lane: .control)
+            await proofProgress()
+        }
+        private func proofProgress() async {
+            if !localProven, proofEchoes.count >= 7, proofProbes.count >= 7, V.now() - proofStarted >= 3_000 {
+                localProven = true
+                await toHost.carry(Self.text([.init("t", .string("link.proven")), .init("id", .string(proofID))]))
+            }
+            if localProven, peerProven, !quietProof { await proofMove() }
+        }
+        private func proofMove() async {
+            guard !moved else { return }
+            await toHost.carry(BackendRemoteLinkPath.movedText)
+            moved = true; movedAt = V.now()
+            if keep { backSent = false; backDone = false; gotOnLink = 0; sentOnLink = [] }
         }
 
         private func closed(_ why: String) { ended = ended ?? why; if keep, moved { Task { await moveBack() } } }
@@ -312,7 +393,7 @@ struct LinkPipelineTests {
         func killLink() { link?.close() }
         /// Security S1: a client must never write on the video channels.
         func writeOnVideoLane() -> Bool { link?.send(Data(#"{"t":"ping"}"#.utf8), lane: .moving) ?? false }
-        func close() { link?.close(); link = nil; reader?.cancel(); feed.finish() }
+        func close() { proofTimer?.cancel(); link?.close(); link = nil; reader?.cancel(); feed.finish() }
     }
 
     final class Engine: BackendLinkEngine, @unchecked Sendable {
@@ -402,7 +483,9 @@ struct LinkPipelineTests {
     func start(link: (servers: [BackendPhonePeerServer], policy: String)?, oneWay: Double = LinkPipelineTests.relayOneWay,
                forge: Bool = false, video: Bool = false, access: BackendINT2PhoneAccessLevel? = .full,
                slowApply: Int = 0, only: Bool = true, welcome: Bool = true, key: Bool = false, grace: Int? = nil, keep: Bool = false,
-               slowBackMs: Int = 0, turnOnRelay: Bool = true, routeForTests: String? = nil) async throws -> Harness {
+               slowBackMs: Int = 0, turnOnRelay: Bool = true, routeForTests: String? = nil,
+               prove: Bool = false, proofRoute: String = "direct", quietProof: Bool = false,
+               localOnly: Bool = false, endFirstLocal: Bool = false) async throws -> Harness {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("LINK-" + UUID().uuidString)
         let trust = BackendRemoteTrustStore(directory: dir.appendingPathComponent("remote"))
         try await trust.open()
@@ -445,6 +528,7 @@ struct LinkPipelineTests {
         let toClient = Pipe(oneWay: oneWay), toHost = Pipe(oneWay: oneWay)
         let client = Client(toHost: toHost, forge: forge, only: only)
         await client.setKeep(keep)
+        await client.configureProof(prove, route: proofRoute, path: routeForTests, quiet: quietProof, localOnly: localOnly, endFirst: endFirstLocal)
         let wireClosed = Flag()
         let timer = clock.scheduled.value() + 1
         var wire = BackendRemoteHostWire(address: "fixture", peerPublicKey: publicKey, send: { text in
@@ -460,6 +544,7 @@ struct LinkPipelineTests {
         let capabilities: [NativeRPCValue] = [.string("device.access")]
             + (link != nil ? [.string(BackendRemoteHost.linkCapability)] + (only ? [.string(BackendRemoteHost.linkOnlyCapability)] : []) : [])
             + (keep ? [.string(BackendRemoteHost.linkKeepCapability)] : [])
+            + (prove ? [.string(BackendRemoteHost.linkProveCapability)] : [])
         let hello = NativeRPCValue.object([.init("t", .string("hello")), .init("protocol", .number(1)), .init("token", .string(device.credential)),
             .init("device", .object([.init("name", .string("Phone")), .init("platform", .string("ios"))])), .init("capabilities", .array(capabilities))])
         await client.send(String(decoding: try hello.encodedJSON(), as: UTF8.self))
