@@ -57,12 +57,12 @@ public sealed partial class OtherComputersService : IAsyncDisposable
   }
   public async Task<string> PairAsync(string raw, CancellationToken ct)
   {
-    RequireCloudAccess();
+    RequirePaidAccess();
     var code = PairingCode.Normalize(raw) ?? throw new ArgumentException("Type the six-digit code shown on the other computer.");
     await mutations.WaitAsync(ct);
     try
     {
-      RequireCloudAccess();
+      RequirePaidAccess();
       using var lookup = await Task.Run(() => PairingCode.Derive(code), ct);
       using var guest = NoiseIdentity.Generate();
       await using var beacon = new ComputerChannel();
@@ -79,7 +79,7 @@ public sealed partial class OtherComputersService : IAsyncDisposable
         if (answer.GetProperty("t").GetString() != "welcome" || !answer.TryGetProperty("token", out var token) || token.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(token.GetString()))
           throw new ProtocolException("That computer did not return a pairing credential. Make a fresh code there and try again.");
         var id = offer.HostId;
-        RequireCloudAccess();
+        RequireRemoteAccess();
         if (saved.ContainsKey(id)) throw new InvalidOperationException("That computer is already paired. Connect it from the list.");
         saved[id] = new(id, offer, seed.ToArray(), token.GetString()!);
         try { Save(); } catch { saved.TryRemove(id, out _); throw; }
@@ -92,12 +92,12 @@ public sealed partial class OtherComputersService : IAsyncDisposable
   }
   public async Task ConnectAsync(string id, CancellationToken ct = default)
   {
-    RequireCloudAccess();
+    RequireRemoteAccess();
     if (ReachGuest.IsReachLink(id)) { await ConnectReachAsync(id, ct); return; }
     await mutations.WaitAsync(ct);
     try
     {
-      RequireCloudAccess();
+      RequireRemoteAccess();
       if (links.ContainsKey(id)) return;
       if (!saved.TryGetValue(id, out var row)) throw new ArgumentException("Choose a paired computer.");
       wanted.TryAdd(id, 0);
@@ -113,7 +113,7 @@ public sealed partial class OtherComputersService : IAsyncDisposable
         var answer = await channel.ReceiveAsync(deadline.Token);
         if (answer.GetProperty("t").GetString() != "welcome") throw new ProtocolException(Text(answer, "message", "That computer has not approved this connection."));
         var caps = answer.GetProperty("capabilities").EnumerateArray().Take(128).Select(c => c.GetString() ?? "").ToArray();
-        RequireCloudAccess();
+        RequireRemoteAccess();
         links[id] = (channel, stop);
         AcceptSnapshot(id, answer);
         Set(new(id, row.Offer.Name, Text(answer, "hostPlatform", row.Offer.Platform), "Online", null, caps, [], PairingCode.Fingerprint(row.Offer.PublicKey), Text(answer, "appVersion", Text(answer, "version", ""))));
@@ -136,9 +136,10 @@ public sealed partial class OtherComputersService : IAsyncDisposable
       while (!stop.IsCancellationRequested)
       {
         var frame = await channel.ReceiveAsync(stop.Token);
-        RequireCloudAccess();
+        RequireRemoteAccess();
         var tag = frame.GetProperty("t").GetString();
-        if (tag == "error" && !frame.TryGetProperty("rid", out _) && Text(frame, "code", "") is "unauthorized" or "unauthenticated") throw new ProtocolException(Text(frame, "message", "The other computer changed access."));
+        // A free account's computer refuses a paid kind with a plain line (RemoteFreePlan); the connection stays.
+        if (tag == "error" && !frame.TryGetProperty("rid", out _) && Text(frame, "code", "") is "unauthorized" or "unauthenticated" && !RemoteFreePlan.IsRefusal(frame)) throw new ProtocolException(Text(frame, "message", "The other computer changed access."));
         AcceptSnapshot(id, frame);
         CompleteRequest(id, frame);
         if (tag == "window.call") _ = ServeBrowserAsync(id, frame.Clone(), stop.Token);
@@ -175,7 +176,7 @@ public sealed partial class OtherComputersService : IAsyncDisposable
   }
   public async Task SendAsync(string id, object message, CancellationToken ct = default)
   {
-    RequireCloudAccess();
+    RequireRemoteAccess();
     ComputerChannel channel;
     await mutations.WaitAsync(ct);
     try { channel = links.TryGetValue(id, out var link) ? link.Channel : throw new InvalidOperationException("Connect that computer first."); }

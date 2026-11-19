@@ -97,7 +97,7 @@ internal sealed partial class CloudScreensProofWindow
       var query = start.Query.TrimStart('?').Split('&').Select(p => p.Split('=', 2)).ToDictionary(p => p[0], p => Uri.UnescapeDataString(p[1]));
       if (!await account.FinishAppReturnAsync(new Uri($"terminaldeck://cloud/return/{query["callback"]}?code=Q29kZUZyb21UaGVXZWJzaXRlX19fX19fX19fX19fX19&state={query["state"]}"))) throw new InvalidOperationException("The local payment fixture did not sign in.");
       var snapshot = account.Snapshot.Subscription;
-      Check(paywall + "/" + state + " service answer projects the expected access", snapshot.ShowsSubscription == (paywall == "on") && snapshot.AllowsCloudServices == (paywall == "off" || state == "gift"));
+      Check(paywall + "/" + state + " service answer projects the expected access", snapshot.ShowsSubscription == (paywall == "on" || state == "gift") && snapshot.AllowsCloudServices == (paywall == "off" || state == "gift"));
       var profile = new ProfilePage(account, _ => { });
       await Shot("profile-" + paywall + "-" + state, profile, 760, 900, background: "DeckRailBrush");
       Check(paywall + "/" + state + " Profile plan row follows service", Texts(profile).Contains(CloudSubscriptionPageText.Title) == (paywall == "on"));

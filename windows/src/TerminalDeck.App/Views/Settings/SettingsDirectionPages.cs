@@ -35,7 +35,7 @@ public sealed partial class SettingsPane
   {
     var snapshot = runtime.Cloud.Snapshot.Subscription;
     if (id == TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Id && !snapshot.ShowsSubscription) return "profile";
-    if (!snapshot.AllowsCloudServices && (id == "cloud" || SettingsNavigation.IsDevice(id) || id is "devices" or "devices.older")) return TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Id;
+    if (id == "cloud" && !snapshot.AllowsCloudServices || (SettingsNavigation.IsDevice(id) || id is "devices" or "devices.older") && !snapshot.Offers(TerminalDeck.Core.Cloud.CloudPaidPlace.Devices)) return TerminalDeck.Core.Cloud.CloudSubscriptionPageText.Id;
     return id;
   }
   internal FrameworkElement? DirectionPage(string id, Action<string> select) => id switch

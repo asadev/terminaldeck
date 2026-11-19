@@ -125,7 +125,7 @@ public sealed partial class ComputerScreenWindow
         await SendAsync(new { t = "sims.input", id = display, @do = "scroll", x = at.X, y = at.Y, dx = properties.IsHorizontalMouseWheel ? delta : 0, dy = properties.IsHorizontalMouseWheel ? 0 : delta });
       };
     }
-    Grid.SetRow(bottom, 2); root.Children.Add(bottom); window.Content = new CloudAccessSurface(root, () => service.CloudAllowed, h => service.Changed += h, h => service.Changed -= h);
+    Grid.SetRow(bottom, 2); root.Children.Add(bottom); window.Content = new CloudAccessSurface(root, () => service.PaidAllowed, h => service.Changed += h, h => service.Changed -= h);
     scroll.PointerEntered += (_, _) => pointerInside = true;
     scroll.PointerExited += (_, _) => pointerInside = false;
     scroll.PointerPressed += (_, _) => scroll.Focus(FocusState.Pointer);

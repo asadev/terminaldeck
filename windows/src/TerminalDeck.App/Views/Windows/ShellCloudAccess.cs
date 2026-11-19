@@ -8,7 +8,10 @@ namespace TerminalDeck.App.Views;
 public sealed partial class ShellWindow
 {
   private bool? shownCloudAccess;
-  private bool CloudPageAllowed(ShellPage page) => Runtime.CloudServicesAllowed || page is not (ShellPage.Cloud or ShellPage.CloudChat or ShellPage.Devices);
+  // 19 Nov free plan: a session on another computer opened live through the relay (a free account's side panel row).
+  private bool CloudPageAllowed(ShellPage page) => Runtime.CloudServicesAllowed || page is not (ShellPage.Cloud or ShellPage.CloudChat or ShellPage.Devices)
+    || page == ShellPage.Devices && Runtime.DevicesAllowed
+    || page == ShellPage.CloudChat && Runtime.RemoteSessionsAllowed && cloudChatRef?.StartsWith(SidebarCloudRows.LivePrefix, StringComparison.Ordinal) == true;
   private FrameworkElement CloudSurface(FrameworkElement content) => new CloudAccessSurface(content, () => Runtime.CloudServicesAllowed, h => Runtime.Changed += h, h => Runtime.Changed -= h);
   private void ShowCloudSubscription()
   {

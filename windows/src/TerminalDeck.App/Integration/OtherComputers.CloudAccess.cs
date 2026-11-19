@@ -1,3 +1,4 @@
+using TerminalDeck.Core.Cloud;
 using TerminalDeck.Core.Remote;
 
 namespace TerminalDeck.App.Integration;
@@ -10,14 +11,27 @@ public sealed partial class OtherComputersService
     get => Volatile.Read(ref cloudServicesAllowed);
     set => Volatile.Write(ref cloudServicesAllowed, value ?? throw new ArgumentNullException(nameof(value)));
   }
-  public bool CloudAllowed => CloudServicesAllowed();
-  private void RequireCloudAccess()
+  // 19 Nov free plan: reaching other computers' sessions through the relay is free (RemoteAllowed); their browser windows,
+  // screens, pairing by code and this PC's browser for their sessions stay paid (PaidAllowed). Unset, it follows the plan.
+  private Func<bool>? remoteSessionsAllowed;
+  public Func<bool> RemoteSessionsAllowed
   {
-    if (!CloudAllowed) throw new InvalidOperationException(CloudRelayLifecycle.SubscriptionRequired);
+    get => Volatile.Read(ref remoteSessionsAllowed) ?? CloudServicesAllowed;
+    set => Volatile.Write(ref remoteSessionsAllowed, value ?? throw new ArgumentNullException(nameof(value)));
+  }
+  public bool RemoteAllowed => RemoteSessionsAllowed();
+  public bool PaidAllowed => CloudServicesAllowed();
+  private void RequireRemoteAccess()
+  {
+    if (!RemoteAllowed) throw new InvalidOperationException(CloudRelayLifecycle.SubscriptionRequired);
+  }
+  private void RequirePaidAccess()
+  {
+    if (!PaidAllowed) throw new InvalidOperationException(CloudSubscriptionPageText.Subscribe);
   }
   public async Task ReconcileCloudServicesAsync()
   {
-    if (CloudAllowed)
+    if (RemoteAllowed)
     {
       foreach (var id in wanted.Keys) if (!List().Any(row => row.Id == id && row.State is "Online" or "Connecting")) ScheduleReconnect(id);
       Changed?.Invoke(); return;

@@ -16,7 +16,7 @@ public sealed partial class ShellWindow
   private async Task ApplySidebarActionAsync(McpCallContext context, JsonElement args, CancellationToken ct)
   {
     context.Require("settings", "workspace"); await context.EnsureCurrentAsync(ct);
-    if (!Runtime.CloudServicesAllowed && args.TryGetProperty("pageId", out var paidPage) && paidPage.GetString() is "Cloud" or "Devices") throw new McpRefusal(TerminalDeck.Core.Remote.CloudRelayLifecycle.SubscriptionRequired);
+    if (args.TryGetProperty("pageId", out var paidPage) && paidPage.GetString() is "Cloud" or "Devices" && !PageAllowed(paidPage.GetString()!)) throw new McpRefusal(TerminalDeck.Core.Remote.CloudRelayLifecycle.SubscriptionRequired);
     var action = args.GetProperty("action").GetString();
     switch (action)
     {

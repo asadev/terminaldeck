@@ -45,7 +45,7 @@ public sealed partial class ProfilePage
         deviceProblems.Remove(device.DeviceId);
         try
         {
-          if (!account.Snapshot.Subscription.AllowsCloudServices) throw new CloudProfileRefusal(CloudSubscriptionPageText.Subscribe);
+          if (!account.Snapshot.Subscription.Offers(CloudPaidPlace.Devices)) throw new CloudProfileRefusal(CloudSubscriptionPageText.Subscribe);
           if (account.Snapshot.DeviceRows.Any(d => d.DeviceId == device.DeviceId)) await account.RenameDeviceAsync(device.DeviceId, name);
           else if (deviceActions is not null) await deviceActions.Rename(device.DeviceId, name);
           savedDevice = device.DeviceId; Render();
@@ -151,7 +151,7 @@ public sealed partial class ProfilePage
       {
         try
         {
-          if (!account.Snapshot.Subscription.AllowsCloudServices) throw new CloudProfileRefusal(CloudSubscriptionPageText.Subscribe);
+          if (!account.Snapshot.Subscription.Offers(CloudPaidPlace.Devices)) throw new CloudProfileRefusal(CloudSubscriptionPageText.Subscribe);
           if (account.Snapshot.DeviceRows.Any(d => d.DeviceId == device.DeviceId))
           {
             await account.SignOutDeviceAsync(device.DeviceId);

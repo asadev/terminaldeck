@@ -166,9 +166,11 @@ public sealed partial class ShellWindow
     if (menu.Items.Count == 0) menu.Items.Add(new MenuFlyoutItem { Text = "Nothing pending", IsEnabled = false });
     menu.ShowAt(target);
   }
+  // Cloud is paid; Devices stays with a free account (19 Nov free plan).
+  private bool PageAllowed(string id) => id switch { "Cloud" => Runtime.CloudServicesAllowed, "Devices" => Runtime.DevicesAllowed, _ => true };
   private void OpenPageTab(string id)
   {
-    if (!Runtime.CloudServicesAllowed && id is "Cloud" or "Devices") { ShowCloudSubscription(); return; }
+    if (!PageAllowed(id)) { ShowCloudSubscription(); return; }
     if (id == "Devices") { ShowDevicesPopup(); return; }
     if (!Enum.TryParse<ShellPage>(id, out var page)) return;
     windowState.Reveal("page:" + id); windowState.Ensure("page:" + id, "pages", id, "page", SidebarState.Catalogue.FirstOrDefault(p => p.Id == id)?.Title ?? id, explicitPage: true);
@@ -176,7 +178,7 @@ public sealed partial class ShellWindow
   }
   private void OpenSidebarPage(string id)
   {
-    if (!Runtime.CloudServicesAllowed && id is "Cloud" or "Devices") { ShowCloudSubscription(); return; }
+    if (!PageAllowed(id)) { ShowCloudSubscription(); return; }
     morePagesFlyout?.Hide();
     if (id is "Files" or "SourceControl" or "GitHub") { CodeWorkspaceView(id == "Files" ? "Files" : id == "SourceControl" ? "Changes" : "Pull requests"); id = "Code"; }
     if (id == "Devices") { ShowDevicesPopup(); return; }
@@ -187,7 +189,7 @@ public sealed partial class ShellWindow
   {
     var rows = new StackPanel { Spacing = 2, MinWidth = 248 };
     var opens = new List<Button>();
-    foreach (var page in SidebarState.Catalogue.Where(p => Runtime.CloudServicesAllowed || p.Id is not ("Cloud" or "Devices")))
+    foreach (var page in SidebarState.Catalogue.Where(p => PageAllowed(p.Id)))
     {
       var row = new Grid { ColumnSpacing = 8 };
       row.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
@@ -234,7 +236,7 @@ public sealed partial class ShellWindow
     if (controls.Length > 0) controls[Math.Clamp(index < 0 ? (delta > 0 ? 0 : controls.Length - 1) : index + delta, 0, controls.Length - 1)].Focus(FocusState.Keyboard);
   }
   // ---- Session rows (DESIGN-SESSION-ROWS.md) and the sessions on his other machines (DESIGN-WINDOWS-CLOUD.md 4) ----
-  private bool cloudRowsWired;
+  private bool cloudRowsWired, liveRowsWired;
   private string renderedCloudRows = "";
   /// The Cloud chat page now shown (ShellPage.CloudChat), and which session it is.
   private FrameworkElement? cloudChatView;
@@ -265,14 +267,36 @@ public sealed partial class ShellWindow
   /// that has a row here already (a live tab, or it moved here) is not listed twice.
   private void RenderCloudSessionRows()
   {
-    if (!Runtime.CloudServicesAllowed) { renderedCloudRows = ""; CloudSessionRows.Children.Clear(); CloudSessionRows.Visibility = Visibility.Collapsed; return; }
+    if (!Runtime.CloudServicesAllowed)
+    {
+      // 19 Nov free plan: no Cloud copy; the sessions running on his other computers, read live through the relay.
+      if (Runtime.Cloud.Snapshot.Subscription.LimitsRemoteToSessions && Runtime.RemoteSessionsAllowed) { RenderLiveSessionRows(); return; }
+      renderedCloudRows = ""; CloudSessionRows.Children.Clear(); CloudSessionRows.Visibility = Visibility.Collapsed; return;
+    }
     if (Runtime.CloudChats is not { } chats) { CloudSessionRows.Visibility = Visibility.Collapsed; return; }
     if (!cloudRowsWired)
     {
       cloudRowsWired = true;
       chats.Changed += () => DispatcherQueue.TryEnqueueHandled(UpdateSidebarSessions);
     }
-    var rows = SidebarCloudRows.From(chats.Others, chats.Machines, Model.Sessions.Select(s => s.Id));
+    DrawCloudSessionRows(SidebarCloudRows.From(chats.Others, chats.Machines, Model.Sessions.Select(s => s.Id)));
+  }
+
+  private void RenderLiveSessionRows()
+  {
+    var computers = Runtime.OtherComputers;
+    if (!liveRowsWired)
+    {
+      liveRowsWired = true;
+      computers.Changed += () => DispatcherQueue.TryEnqueueHandled(UpdateSidebarSessions);
+    }
+    var live = computers.List().Where(c => c.State == "Online" && TerminalDeck.Core.Remote.ReachGuest.IsReachLink(c.Id))
+      .Select(c => new SidebarCloudRows.LiveComputer(c.Id, c.Name, c.Platform, computers.Services(c.Id).Sessions));
+    DrawCloudSessionRows(SidebarCloudRows.FromLive(live, Model.Sessions.Select(s => s.Id)));
+  }
+
+  private void DrawCloudSessionRows(IReadOnlyList<SidebarCloudRow> rows)
+  {
     var key = JsonSerializer.Serialize(new { rows, open = Model.Page == ShellPage.CloudChat ? cloudChatRef : null });
     if (key == renderedCloudRows) return;
     renderedCloudRows = key;
@@ -294,8 +318,9 @@ public sealed partial class ShellWindow
   /// Start with its readable Cloud copy; its existing live host route replaces it when reachable.
   private void OpenCloudChat(SidebarCloudRow row)
   {
-    if (!Runtime.CloudServicesAllowed) { ShowCloudSubscription(); return; }
-    if (Runtime.CloudChats is null) return;
+    var live = SidebarCloudRows.LiveConnection(row) is not null;
+    if (live ? !Runtime.RemoteSessionsAllowed : !Runtime.CloudServicesAllowed) { ShowCloudSubscription(); return; }
+    if (!live && Runtime.CloudChats is null) return;
     cloudChatRef = row.Ref;
     cloudChatView = new TerminalDeck.App.Views.Chat.CloudSessionRoute(row, Runtime);
     SessionList.SelectedItem = null;

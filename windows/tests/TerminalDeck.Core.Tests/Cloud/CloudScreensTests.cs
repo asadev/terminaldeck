@@ -223,4 +223,21 @@ public sealed class CloudScreensTests
     Assert.Equal("1.5 MB", YourCloudRules.Size(1_572_864).Replace(',', '.'));
     Assert.Equal(["Memory", "Deck Dev", "Lead"], YourCloudRules.Crumbs("Memory", ["Deck Dev", "Lead"]));
   }
+  // ---- 19 Nov free plan: the side panel lists his other computers' running sessions from live links ----
+
+  [Fact]
+  public void AFreeAccountsSidePanelListsRunningSessionsFromLiveLinksOnce()
+  {
+    static JsonElement S(string json) { using var doc = JsonDocument.Parse(json); return doc.RootElement.Clone(); }
+    var rows = SidebarCloudRows.FromLive([
+      new("reach:b", "Mac mini.local", "macos", [S("{\"id\":\"s2\",\"title\":\"\",\"cwd\":\"/Users/someone/site\",\"status\":\"waiting\"}"), S("{\"id\":\"s3\",\"title\":\"Old\",\"status\":\"exited\",\"exitCode\":0}")]),
+      new("reach:a", "Office PC", "windows", [S("{\"id\":\"s1\",\"title\":\"Fix login\",\"chat\":true,\"cwd\":\"C:\\\\Work\\\\App\",\"status\":\"working\"}"), S("{\"id\":\"here\",\"title\":\"Open here\"}"), S("{\"id\":\"s1\",\"title\":\"Again\"}")])
+    ], ["here"]);
+    Assert.Equal(new[] { "s1", "s2" }, rows.Select(r => r.SessionId));
+    Assert.Equal("Fix login", rows[0].Name); Assert.True(rows[0].Chat); Assert.Equal("Office PC", rows[0].MachineName); Assert.False(rows[0].NeedsYou);
+    Assert.Equal("site", rows[1].Name); Assert.False(rows[1].Chat); Assert.True(rows[1].NeedsYou); Assert.Equal("Mac mini", rows[1].MachineName);
+    Assert.Equal("reach:a", SidebarCloudRows.LiveConnection(rows[0]));
+    Assert.Equal("reach:b", SidebarCloudRows.LiveConnection(rows[1]));
+    Assert.Null(SidebarCloudRows.LiveConnection(new SidebarCloudRow("r1", "s1", "Cloud row", false, "Mac mini", true, false, 0)));
+  }
 }

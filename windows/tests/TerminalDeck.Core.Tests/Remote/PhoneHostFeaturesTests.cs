@@ -369,4 +369,70 @@ public sealed class PhoneHostFeaturesTests
     Assert.True(grants.MayStartIn(device, "C:\\Work\\Sample\\api"));
     Assert.False(grants.MayStartIn(device, "C:\\Windows"));
   }
+  // ---- 19 Nov free plan (RemoteFreePlan): the Mac's list, its frame, and the lapse ----
+
+  private static async Task<string> Raw(Fixture f, object value, string channel = "phone") =>
+    System.Text.Encoding.UTF8.GetString(Assert.Single((await f.App.ReceiveAsync(channel, f.Key, JsonSerializer.SerializeToUtf8Bytes(value), default)).Messages));
+
+  [Fact]
+  public async Task AFreeAccountsPcRefusesPaidKindsWithTheMacsFrameAndServesSessions()
+  {
+    using var f = new Fixture(PhoneAccess.Full);
+    f.App.LimitsToSessions = () => true;
+    f.Host.Terminal.Add(Session("11111111-1111-1111-1111-111111111111", "shell", SessionState.Running));
+    await f.Hello();
+    Assert.Equal("{\"t\":\"error\",\"code\":\"unauthorized\",\"reason\":\"subscription_required\",\"message\":\"Part of Terminal Deck Cloud\",\"rid\":\"r1\"}",
+      await Raw(f, new { t = "browser.windows", rid = "r1" }));
+    foreach (var kind in new[] { "browser.watch", "browser.profiles", "tunnel.open", "tunnel.close", "net.open", "net.data", "ports", "window.call", "sims.list", "sims.watch", "files.list", "files.read" })
+      Assert.Equal("subscription_required", Assert.Single((await f.Send(new { t = kind, rid = "r" })).Frames).GetProperty("reason").GetString());
+    foreach (var panel in new[] { "tasks", "connected-tasks", "simulators" })
+      foreach (var kind in new[] { "panel.read", "panel.act" })
+        Assert.Equal("subscription_required", Assert.Single((await f.Send(new { t = kind, panel, rid = "p" })).Frames).GetProperty("reason").GetString());
+    // Without a request id the frame has none, as on the Mac.
+    Assert.Equal("{\"t\":\"error\",\"code\":\"unauthorized\",\"reason\":\"subscription_required\",\"message\":\"Part of Terminal Deck Cloud\"}",
+      await Raw(f, new { t = "sims.input", display = "mac:1" }));
+    // Sessions stay served: the list, and starting a new one.
+    Assert.Equal("sessions", Assert.Single((await f.Send(new { t = "list" })).Frames).GetProperty("t").GetString());
+    Assert.Equal("created", Assert.Single((await f.Send(new { t = "create", provider = "shell", cwd = "C:\\Work\\Sample" })).Frames).GetProperty("t").GetString());
+    // A page outside the list is answered as before (this PC has no "goals" page).
+    Assert.False(Assert.Single((await f.Send(new { t = "panel.read", panel = "goals" })).Frames).TryGetProperty("reason", out _));
+    Assert.Empty(f.App.FreePlanBegan());
+  }
+
+  [Fact]
+  public async Task WhilePaidNothingIsRefusedAndALapseNamesTheConnectionsServedAPaidKind()
+  {
+    using var f = new Fixture(PhoneAccess.Full);
+    var limited = false; f.App.LimitsToSessions = () => limited;
+    await f.Hello();
+    await f.Send(new { t = "list" });
+    Assert.Empty(f.App.FreePlanBegan());
+    Assert.DoesNotContain((await f.Send(new { t = "sims.list", rid = "s1" })).Frames, frame => frame.TryGetProperty("reason", out _));
+    Assert.Equal(new[] { "phone" }, f.App.FreePlanBegan());
+    limited = true;
+    Assert.Equal("subscription_required", Assert.Single((await f.Send(new { t = "sims.list", rid = "s2" })).Frames).GetProperty("reason").GetString());
+  }
+
+  [Fact]
+  public async Task TheFreePlanIsAskedBeforeTheAccessLevel()
+  {
+    using var f = new Fixture(PhoneAccess.Look);
+    f.App.LimitsToSessions = () => true;
+    await f.Hello();
+    Assert.Equal("subscription_required", Assert.Single((await f.Send(new { t = "sims.input", rid = "i1" })).Frames).GetProperty("reason").GetString());
+    f.App.LimitsToSessions = () => false;
+    var access = Assert.Single((await f.Send(new { t = "sims.input", rid = "i2" })).Frames);
+    Assert.False(access.TryGetProperty("reason", out _)); Assert.Equal("unauthorized", access.GetProperty("code").GetString());
+  }
+
+  [Fact]
+  public void TheFreePlanListIsTheMacs()
+  {
+    foreach (var kind in new[] { "browser.windows", "browser.window.open", "browser.input", "tunnel.open", "net.ack", "sims.touch", "files.read", "window.call", "ports" })
+      Assert.True(RemoteFreePlan.IsPaid(kind, null), kind);
+    foreach (var kind in new[] { "list", "attach", "input", "create", "close", "rename", "chats.say", "chats.new", "hoot.say", "activity.watch", "pictures", "upload.begin", "folders.browse", "clipboard.read", "window.result", "sessions.mine" })
+      Assert.False(RemoteFreePlan.IsPaid(kind, null), kind);
+    Assert.True(RemoteFreePlan.IsPaid("panel.read", "connected-tasks")); Assert.True(RemoteFreePlan.IsPaid("panel.act", "simulators"));
+    Assert.False(RemoteFreePlan.IsPaid("panel.read", "projects")); Assert.False(RemoteFreePlan.IsPaid("panel.read", null)); Assert.False(RemoteFreePlan.IsPaid("tasks", null));
+  }
 }

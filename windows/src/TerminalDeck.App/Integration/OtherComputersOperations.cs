@@ -85,7 +85,7 @@ public sealed partial class OtherComputersService
   }
   public void RequireCapability(string id, string capability)
   {
-    RequireCloudAccess();
+    RequireRemoteAccess();
     var row = List().FirstOrDefault(c => c.Id == id);
     if (row?.State != "Online" || !row.Capabilities.Contains(capability)) throw new InvalidOperationException("This computer does not currently grant " + capability + ".");
   }
@@ -160,7 +160,7 @@ public sealed partial class OtherComputersService
   }
   private void ScheduleReconnect(string id)
   {
-    if (!CloudAllowed) return;
+    if (!RemoteAllowed) return;
     if (List().Any(c => c.Id == id && c.State == "Online")) return;
     FailRequests(id);
     if (lifetime.IsCancellationRequested || !wanted.ContainsKey(id) || !retrying.TryAdd(id, 0)) return;
@@ -170,7 +170,7 @@ public sealed partial class OtherComputersService
       try
       {
         var attempt = 0;
-        while (CloudAllowed && wanted.ContainsKey(id) && !lifetime.IsCancellationRequested)
+        while (RemoteAllowed && wanted.ContainsKey(id) && !lifetime.IsCancellationRequested)
         {
           await Task.Delay(TimeSpan.FromSeconds(Math.Min(30, Math.Pow(2, Math.Min(attempt++, 5)))), lifetime.Token);
           try { await ConnectAsync(id, lifetime.Token); return; }
