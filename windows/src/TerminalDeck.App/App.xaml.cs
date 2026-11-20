@@ -52,7 +52,7 @@ public partial class App : Application
   {
     try
     {
-      var command = Environment.GetCommandLineArgs().Skip(1).Where(a => a != "--start-minimized").ToArray();
+      var command = AppDataRoot.LaunchArguments(Environment.GetCommandLineArgs().Skip(1));
       var packageLocalCache = Services.WindowsPackageData.LocalCache();
       if (command.Length > 0) PrepareRecovery(AppDataRoot.FromArguments(command, DevelopmentRun, packageLocalCache));
       var activation = Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().GetActivatedEventArgs();

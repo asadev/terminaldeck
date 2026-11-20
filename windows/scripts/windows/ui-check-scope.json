@@ -4,14 +4,7 @@
     {
       "project": "tests\\TerminalDeck.Core.Tests\\TerminalDeck.Core.Tests.csproj",
       "names": [
-        "TerminalDeck.Core.Tests.AiSetup.AiSetupKeeperTests",
-        "TerminalDeck.Core.Tests.Cloud.ProjectFoldersTravelTests",
-        "TerminalDeck.Core.Tests.Cloud.CloudBootFilesJoinTests",
-        "TerminalDeck.Core.Tests.Cloud.CloudBootFilesRulesTests",
-        "TerminalDeck.Core.Tests.Cloud.CloudSubscriptionTests",
-        "TerminalDeck.Core.Tests.Cloud.CloudScreensTests",
-        "TerminalDeck.Core.Tests.Remote.PhoneHostFeaturesTests",
-        "TerminalDeck.Core.Tests.Remote.ReachAccountTests"
+        "TerminalDeck.Core.Tests.Storage.AppDataRootTests"
       ]
     }
   ]
