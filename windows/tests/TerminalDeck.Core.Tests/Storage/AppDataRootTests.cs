@@ -13,6 +13,23 @@ public sealed class AppDataRootTests
   }
 
   [Fact]
+  public void TheSignInReturnLinkIsAnActivationNeverADataFolder()
+  {
+    const string link = "terminaldeck://cloud/return/AbCdEfGhIjKlMnOpQrStUv?code=Q29kZQ&state=c3RhdGU";
+    // Windows starts a copy for the link with the link as its only argument: it opens the app's own folder, no error.
+    Assert.Empty(AppDataRoot.LaunchArguments([link]));
+    Assert.Empty(AppDataRoot.LaunchArguments(["--start-minimized", "TERMINALDECK://cloud/signin"]));
+    Assert.Equal(AppDataRoot.FromArguments([]).DirectoryPath, AppDataRoot.FromArguments(AppDataRoot.LaunchArguments([link])).DirectoryPath);
+    var scratch = Path.Combine(Path.GetTempPath(), "td-link-" + Guid.NewGuid());
+    Assert.Equal(AppDataRoot.Explicit(scratch).DirectoryPath,
+      AppDataRoot.FromArguments(AppDataRoot.LaunchArguments(["--user-data-dir", scratch, link]), development: true).DirectoryPath);
+    // Anything else is still refused, and a test copy still needs its own folder.
+    Assert.Throws<ArgumentException>(() => AppDataRoot.FromArguments(AppDataRoot.LaunchArguments(["--other"])));
+    Assert.Throws<ArgumentException>(() => AppDataRoot.FromArguments(AppDataRoot.LaunchArguments([link]), development: true));
+    Assert.False(Directory.Exists(scratch));
+  }
+
+  [Fact]
   public void InstalledLaunchUsesTheStandardRootWithoutCreatingIt()
   {
     var path = Path.Combine(Path.GetTempPath(), "td-installed-" + Guid.NewGuid());

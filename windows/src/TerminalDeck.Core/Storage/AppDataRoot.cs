@@ -30,6 +30,14 @@ public sealed class AppDataRoot
     return new AppDataRoot(path);
   }
 
+  /// The app's own arguments for choosing its data folder. Left out: `--start-minimized` (how the window opens) and the
+  /// app's `terminaldeck:` links, which Windows passes as the only argument of a copy it starts for the link (the
+  /// website's sign-in return `terminaldeck://cloud/return/...`). A link is an activation that goes to the copy already
+  /// open (App.xaml.cs hands it over), never a data folder (20 Nov: the return was refused as one, so Cloud sign-in on
+  /// Windows never finished).
+  public static string[] LaunchArguments(IEnumerable<string> args) =>
+    args.Where(a => a != "--start-minimized" && !a.StartsWith("terminaldeck:", StringComparison.OrdinalIgnoreCase)).ToArray();
+
   public static AppDataRoot FromArguments(string[] args, bool development = false, string? packageLocalCache = null)
   {
     string? value = null;
