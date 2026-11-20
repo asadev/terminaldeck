@@ -12,6 +12,11 @@ struct CloudBootFilesRulesTests {
             (.project, ".claude/agents/reviewer.md"), (.project, ".claude/skills/review/SKILL.md"), (.project, ".claude/skills/review/scripts/run.sh"),
             (.project, ".claude/commands/ship.md"), (.project, ".claude/commands/team/ship.md"), (.project, ".agents/skills/x/SKILL.md"),
             (.project, ".codex/skills/y/SKILL.md"), (.project, ".gemini/skills/z/SKILL.md"), (.project, ".claude/skills/caf\u{e9}/SKILL.md"),
+            // Setup travels (19 Nov): settings, guards, rules and every AI's agents.
+            (.project, ".claude/settings.json"), (.project, ".claude/hooks/never-commands.py"), (.project, ".claude/rules/style.md"),
+            (.project, ".codex/hooks.json"), (.project, ".codex/config.toml"), (.project, ".codex/agents/decker.toml"),
+            (.project, ".gemini/settings.json"), (.project, ".gemini/agents/decker.md"), (.project, ".gemini/commands/ship.toml"),
+            (.project, ".agents/notes.md"),
             (.claude, "CLAUDE.md"), (.claude, "agents/a.md"), (.claude, "skills/s/SKILL.md"), (.claude, "commands/c.md"),
             (.codex, "AGENTS.md"), (.codex, "skills/s/SKILL.md"), (.gemini, "GEMINI.md"), (.gemini, "skills/s/SKILL.md"), (.agents, "skills/s/SKILL.md")
         ]
@@ -25,7 +30,8 @@ struct CloudBootFilesRulesTests {
         let refused: [(CloudBootFilesPlaceKind, String, CloudBootFilesRefusal)] = [
             // Not on the list (letter case counts for the listed names).
             (.project, "claude.md", .notListed), (.project, "src/CLAUDE.md", .notListed), (.project, "README.md", .notListed),
-            (.project, ".claude/settings.json", .notListed), (.project, ".claude/settings.local.json", .notListed), (.project, ".mcp.json", .notListed),
+            (.project, ".claude/settings.local.json", .never), (.project, ".mcp.json", .notListed), (.project, "CLAUDE.local.md", .never),
+            (.project, ".claude/hooks/x.local", .never), (.project, ".codex/other.json", .notListed), (.claude, "hooks/pre.sh", .notListed),
             (.project, ".Claude/skills/x/SKILL.md", .notListed), (.project, ".claude/skills", .notListed), (.project, ".claude/agent-memory/r/MEMORY.md", .notListed),
             (.codex, "CLAUDE.md", .notListed),
             // A provider's own memory, conversations, settings and sign-in.

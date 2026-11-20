@@ -11,9 +11,10 @@ struct CloudBootFilesCaptureTests {
         let f = try F(); defer { f.close() }
         let travels = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".claude/agents/reviewer.md", ".claude/skills/review/SKILL.md",
                        ".claude/skills/review/scripts/check.sh", ".claude/commands/ship.md", ".agents/skills/x/SKILL.md",
-                       ".codex/skills/y/SKILL.md", ".gemini/skills/z/SKILL.md"]
+                       ".codex/skills/y/SKILL.md", ".gemini/skills/z/SKILL.md", ".claude/settings.json", ".claude/hooks/guard.py", ".codex/hooks.json",
+                       ".codex/agents/reviewer.toml", ".gemini/settings.json"]
         for path in travels { try f.write("a/work/app/" + path, "text of " + path + "\n") }
-        let never = [".claude/settings.json", ".claude/settings.local.json", ".mcp.json", ".claude/skills/review/settings.json",
+        let never = [".claude/settings.local.json", ".mcp.json", ".claude/skills/review/settings.json",
                      ".claude/skills/review/hooks/pre.md", ".claude/skills/review/.env", ".claude/skills/review/node_modules/pkg/index.md",
                      ".claude/agents/credentials.md", ".claude/agent-memory/reviewer/MEMORY.md", "src/CLAUDE.md", "README.md"]
         for path in never { try f.write("a/work/app/" + path, "never " + path + "\n") }
@@ -48,6 +49,23 @@ struct CloudBootFilesCaptureTests {
         let bodies = try snapshot.operations.map { try F.body($0) }
         #expect(bodies == ["mapped\n"])
         #expect(f.listing("a/unmapped") == before)
+    }
+
+    @Test func aSetupFileHoldingASecretStaysOnItsMacAndIsCounted() async throws {
+        let f = try F(); defer { f.close() }
+        try f.write("a/app/CLAUDE.md", "rules\n")
+        try f.write("a/app/.claude/settings.json", "{\"hooks\": {}}\n")
+        // A guard and a Codex config holding a sign-in value: never sent as plain text.
+        try f.write("a/app/.claude/hooks/call.sh", "#!/bin/sh\ncurl -H 'Authorization: Bearer abcdefghijklmnopqrstuv' x\n")
+        try f.write("a/app/.codex/config.toml", "[mcp_servers.x.env]\nAPI_KEY = \"a1b2c3d4e5f6g7h8\"\n")
+        // An ordinary skill that only talks about tokens still travels (the check is for setup files only).
+        try f.write("a/app/.claude/skills/s/SKILL.md", "Explain token = abc123 to the person.\n")
+        let a = try await f.mac("a", device: f.deviceA, places: [f.project("p", "a/app")])
+        let snapshot = try await F.snapshot(a)
+        let prefix = F.prefix(project: "p")
+        #expect(F.keys(snapshot.operations) == Set(["CLAUDE.md", ".claude/settings.json", ".claude/skills/s/SKILL.md"].map { prefix + $0 }))
+        let place = try #require(try await a.coverage().first)
+        #expect(place.exclusions.contains("2 settings or guard files hold a password or key and stay on this Mac."))
     }
 
     @Test func changesAreDetectedPerFileAndAHandRemovalNeverTravels() async throws {

@@ -33,7 +33,7 @@ public enum CloudBootFilesRefusal: String, Codable, Sendable, CaseIterable {
         case .path: return "Refused: the file's path is not one plain path inside its folder."
         case .notListed: return "Refused: not a boot file. Only instruction files, agents, skills and commands travel."
         case .hidden: return "Refused: hidden files never travel."
-        case .never: return "Refused: settings, hooks, MCP, permission and sign-in files never travel."
+        case .never: return "Refused: this file belongs to one Mac only, or is a sign-in or key file; it never travels."
         case .rebuildable: return "Refused: installed packages are not boot files."
         }
     }
@@ -93,13 +93,29 @@ public enum CloudBootFilesRules {
     /// Folders of the place whose text files travel, by exact path.
     public static func folders(_ kind: CloudBootFilesPlaceKind) -> [String] {
         switch kind {
-        case .project: return [".claude/agents", ".claude/skills", ".claude/commands", ".agents/skills", ".codex/skills", ".gemini/skills"]
+        // Setup travels (Asad, 19 Nov: "the guard should be traveling"): the hooks, rules and each AI's agents too, and
+        // the whole shared `.agents` folder (Codex and Gemini read skills from `.agents/skills`).
+        case .project: return [".claude/agents", ".claude/skills", ".claude/commands", ".claude/hooks", ".claude/rules", ".agents",
+                               ".codex/agents", ".codex/skills", ".gemini/agents", ".gemini/commands", ".gemini/hooks", ".gemini/skills"]
         case .claude: return ["agents", "skills", "commands"]
         case .codex, .gemini, .agents: return ["skills"]
         }
     }
+    /// Setup files of the place by exact path: each AI's project settings (where its hooks, the guards, live) and the
+    /// project's Codex configuration. They travel like any boot file; one that holds a password or key stays on its Mac
+    /// (`setupHoldsSecret`, asked on the sending Mac and again at the moment of writing).
+    public static func setupFiles(_ kind: CloudBootFilesPlaceKind) -> [String] {
+        kind == .project ? [".claude/settings.json", ".codex/hooks.json", ".codex/config.toml", ".gemini/settings.json"] : []
+    }
+    /// Paths whose content is checked for secrets before they travel: the setup files and everything under the hook folders
+    /// and the Codex folder (scripts and settings, where a key is most likely to be written).
+    public static func secretChecked(kind: CloudBootFilesPlaceKind, relative: String) -> Bool {
+        guard kind == .project else { return false }
+        if setupFiles(kind).contains(where: { same($0, relative) }) { return true }
+        return [".claude/hooks/", ".claude/rules/", ".codex/", ".gemini/hooks/", ".gemini/commands/"].contains { relative.hasPrefix($0) }
+    }
     /// The same list as patterns, for the file engine's own check of a record's path.
-    public static func patterns(_ kind: CloudBootFilesPlaceKind) -> [String] { files(kind) + folders(kind).map { $0 + "/**" } }
+    public static func patterns(_ kind: CloudBootFilesPlaceKind) -> [String] { files(kind) + setupFiles(kind) + folders(kind).map { $0 + "/**" } }
 
     /// Settings, hooks, MCP, permissions and sign-in files, by name (letter case ignored), also inside a listed folder.
     public static let neverFileNames: Set<String> = [
@@ -122,7 +138,8 @@ public enum CloudBootFilesRules {
 
     /// What is left out on purpose, named. Shown with coverage; never a gap.
     public static let exclusions = [
-        "Settings, hooks and permission files are not boot files. MCP servers travel with your saved passwords.",
+        "Each AI's project settings and guards travel; a settings or guard file that holds a password or key stays on this Mac. MCP servers travel with your saved passwords.",
+        "Files named for one Mac only (\"local\" in the name) stay on that Mac.",
         "Sign-in and credential files never travel.",
         "The AI's own memory and conversation folders are not boot files.",
         "Hidden files, links and anything that is not text stay on this Mac.",
@@ -169,7 +186,10 @@ public enum CloudBootFilesRules {
     /// (`.Claude/skills` is not `.claude/skills`); it is ignored for the names that never travel.
     public static func refusal(kind: CloudBootFilesPlaceKind, relative: String) -> CloudBootFilesRefusal? {
         guard cleanRelative(relative), let pieces = parts(relative) else { return .path }
+        // One Mac's own files by name (`settings.local.json`, `CLAUDE.local.md`, `x.local`): never travel.
+        if let last = pieces.last?.lowercased(), last.contains(".local.") || last.hasSuffix(".local") { return .never }
         if pieces.count == 1, files(kind).contains(where: { same($0, pieces[0]) }) { return nil }
+        if setupFiles(kind).contains(where: { same($0, relative) }) { return nil }
         var below: [String]?
         for folder in folders(kind) {
             let lead = folder.split(separator: "/").map(String.init)

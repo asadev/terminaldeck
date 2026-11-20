@@ -80,6 +80,9 @@ public actor BackendCloudBootFiles {
     /// Off unless the composition turns it on; no tool reaches it.
     private(set) var autoAccept = false
     public func setAutoAccept(_ on: Bool) { autoAccept = on }
+    /// Runs before each project place is looked at (`BackendAISetupKeeper.align(project:)` in the app).
+    private(set) var setupKeeper: (@Sendable (URL) -> Void)?
+    public func setSetupKeeper(_ keeper: (@Sendable (URL) -> Void)?) { setupKeeper = keeper }
     /// The daily sweep deletes only on the service clock: a Mac clock that jumps forward must not delete what is kept.
     /// Without a sync core there is no service clock; tests turn this on to sweep on their own clock.
     private(set) var sweepOnLocalClock = false
@@ -346,6 +349,9 @@ public actor BackendCloudBootFiles {
     }
 
     func settlePlace(_ place: BackendCloudBootFilesPlace, engine: BackendCloudBrainFiles) async throws {
+        // One setup for every AI (19 Nov): what arrived and what changed here is made the same for every AI first, so
+        // the made files travel in this same look. Set by the composition (`BackendAISetupKeeper`); nil in tests.
+        if place.kind == .project, let keeper = setupKeeper { keeper(place.root) }
         let walk = BackendCloudBootFilesDisk.walk(root: place.root, kind: place.kind)
         // A missing/unreadable/empty project or AI home is never evidence of a deletion.
         guard rootAvailable(place) else {
@@ -462,6 +468,8 @@ public actor BackendCloudBootFiles {
         case .file(let bytes):
             // Not text: not a boot file. Neither captured nor read as removed.
             guard CloudBootFilesRules.isText(bytes) else { return false }
+            // A setup file holding a password or key: stays on this Mac (counted by the walk), never captured.
+            guard !BackendCloudBootFilesDisk.setupHoldsSecret(kind: place.kind, relative: relative, bytes: bytes) else { return false }
             localBytes = bytes
         case .blocked(let reason):
             missing.removeValue(forKey: key)
@@ -661,6 +669,7 @@ public actor BackendCloudBootFiles {
             case "hidden": lines.append(count(number, "hidden item stays on this Mac.", "hidden items stay on this Mac."))
             case "never": lines.append(count(number, "settings, hooks or sign-in item stays on this Mac.", "settings, hooks or sign-in items stay on this Mac."))
             case "rebuildable": lines.append(count(number, "folder of installed packages stays on this Mac.", "folders of installed packages stay on this Mac."))
+            case "secret": lines.append(count(number, "settings or guard file holds a password or key and stays on this Mac.", "settings or guard files hold a password or key and stay on this Mac."))
             default: break
             }
         }

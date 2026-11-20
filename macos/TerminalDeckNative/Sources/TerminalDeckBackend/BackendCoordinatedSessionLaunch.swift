@@ -114,6 +114,9 @@ public actor BackendCoordinatedSessionLaunch {
         defer { if gated { gate.leave() } }
         guard !stopped else { throw BackendSessionFailure.closed }
         try Task.checkCancellation()
+        // One setup for every AI (19 Nov): the project's skills, rule files, agents and guards are made the same for
+        // Claude, Codex and Gemini when a session opens in it (background, at most once per project every 5 s).
+        BackendAISetupKeeper.alignSoon(cwd: input.cwd)
         var requested = input
         // This key comes from the existing authorized saved ledger restore path.
         var ownSavedChoice = false

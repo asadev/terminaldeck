@@ -297,6 +297,7 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
             try await finishBack(peerGot: Int(text.dropFirst(Self.backDonePrefix.count)) ?? -1)
             return
         }
+        if text.hasPrefix(#"{"t":"link.proven""#) { if !relayIsGone { try await relay(text) }; return }
         if text.hasPrefix(#"{"t":"link.back""#) { if !relayIsGone { try await relay(text) }; return }
         let held = lock.withLock { () -> Bool in
             guard returning else { return false }
@@ -487,6 +488,16 @@ struct BackendRemoteLinkState: Sendable {
     // link.keep (LINK-KEEP-CONTRACT.md)
     /// Both sides claimed `link.keep`.
     var keep = false
+    var prove = false
+    var proofID = ""
+    var proof: BackendRemoteLinkProof?
+    var proofTask: Task<Void, Never>?
+    var peerProven = false
+    var pendingMoved = false
+    var phoneRoute = "direct"
+    var probeOnly = false
+    var localOnly = false
+    var retry = true
     /// td.ctl messages from the client on the current link handed to `take` (this side's `got`).
     var got = 0
     /// This side sent its `link.back` and waits for the client's (with its deadline).
@@ -553,6 +564,10 @@ extension BackendRemoteHost {
               live[id]?.link.token == nil else { return }
         linkEligible.insert(device)
         let token = UUID()
+        let proving = live[id]?.link.prove == true
+        live[id]?.link.proofID = proving ? token.uuidString : ""
+        live[id]?.link.proof = nil; live[id]?.link.peerProven = false; live[id]?.link.pendingMoved = false
+        live[id]?.link.phoneRoute = "direct"; live[id]?.link.probeOnly = false; live[id]?.link.localOnly = false
         live[id]?.link.got = 0; live[id]?.link.candidates = 0; live[id]?.link.clientMoved = false
         live[id]?.link.clientBack = nil; live[id]?.link.answered = false; live[id]?.link.keptOnRelay = false
         let (stream, feed) = AsyncStream<(Data, BackendLinkLane)>.makeStream()
@@ -576,6 +591,16 @@ extension BackendRemoteHost {
                 open: { [weak self] route in Task { await self?.linkOpened(id, token, route: route) } },
                 closed: { [weak self] why in Task { await self?.linkEnded(id, token, why: why, tell: true) } },
                 message: { [weak self] data, lane in
+                    // Probes bypass the app reader: it may be waiting for a marker or a slow app answer.
+                    if proving, lane == .control, BackendRemoteLinkProof.internalFrame(data) {
+                        if inbox.add(data.count) > Self.linkHoldBytes {
+                            inbox.remove(data.count)
+                            Task { await self?.linkEnded(id, token, why: "Too many delivery proofs waited.", tell: true) }
+                        } else {
+                            Task { await self?.linkProofInbound(id, token, data, lane); inbox.remove(data.count) }
+                        }
+                        return
+                    }
                     // In arrival order (the library calls one at a time); the reader handles them one by one.
                     if inbox.add(data.count) > Self.linkHoldBytes {
                         Task { await self?.linkEnded(id, token, why: "Too much arrived on the direct link before its hand-over.", tell: true) }
@@ -589,9 +614,11 @@ extension BackendRemoteHost {
                 let offer = try await connection.offer()
                 guard let fingerprint = BackendLinkBinding.fingerprint(in: offer) else { throw NativeRPCError(code: "unavailable", message: "no fingerprint") }
                 let bind = BackendLinkBinding.make(binding: binding, role: "host", fingerprint: fingerprint)
+                let phoneServers = proving ? BackendRemoteLinkProof.withTLS(servers) : servers
                 let signal = try BackendRemoteServerMessage(.linkPeer, fields: [
                     .init("op", .string("offer")), .init("sdp", .string(offer)), .init("fp", .string(fingerprint)),
-                    .init("bind", .string(bind)), .init("ice", .array(servers.map(\.wire))), .init("policy", .string(policy))])
+                    .init("bind", .string(bind)), .init("ice", .array(phoneServers.map(\.wire))), .init("policy", .string(policy))]
+                    + (proving ? [.init("proof", .string(token.uuidString))] : []))
                 guard await self.linkCurrent(id, token) else { return }
                 try await self.linkSignal(id, signal)
                 try? await Task.sleep(for: .milliseconds(Self.linkDeadlineMs))
@@ -627,12 +654,30 @@ extension BackendRemoteHost {
     private func linkOpened(_ id: UUID, _ token: UUID, route: String) async {
         guard linkCurrent(id, token), let row = live[id], let connection = row.link.connection, !row.link.open else { return }
         let route = linkRouteForTests ?? route
+        // A local-only answer must never turn into an internet path, even if native ICE chooses one unexpectedly.
+        if row.link.prove, row.link.localOnly, route != "host" {
+            await linkEnded(id, token, why: "The local-only attempt did not select a host path.", tell: true)
+            return
+        }
         live[id]?.link.open = true
         live[id]?.link.openedAt = clock()
         live[id]?.link.relinks = 0
         row.link.path.deviceName = row.device?.name ?? "a device"
-        live[id]?.link.route = route
+        live[id]?.link.route = row.link.prove ? (row.link.phoneRoute == "wrapped" ? "wrapped" : route == "host" && !row.link.probeOnly ? "host" : "direct") : route
         row.link.path.attach(connection, failure: { [weak self] why in Task { await self?.linkEnded(id, token, why: why, tell: true) } })
+        if row.link.prove {
+            var proof = BackendRemoteLinkProof(id: row.link.proofID, opened: BackendRemoteLinkProof.now,
+                fast: route == "host" && row.link.phoneRoute == "direct" && !row.link.probeOnly, probeOnly: row.link.probeOnly)
+            proof.peer = row.link.peerProven
+            // Before this side opened, only a host-path marker could have been legitimate. An older attempt's
+            // delayed marker must not release a non-local link before the current phone's ordered marker.
+            if !proof.fast, !row.link.peerProven { live[id]?.link.pendingMoved = false }
+            live[id]?.link.proof = proof
+            let took = Int((clock() - row.link.offeredAt).rounded())
+            BackendRemoteRelayClient.note("link: up \(live[id]?.link.route ?? "direct") in \(took) ms (\(row.device?.name ?? "a device"))")
+            await linkProofTick(id, token)
+            return
+        }
         let keptOnRelay = row.link.relayFirst && route == "turn"
         live[id]?.link.keptOnRelay = keptOnRelay
         if keptOnRelay {
@@ -658,21 +703,32 @@ extension BackendRemoteHost {
     /// anything (the client says "Can't reach your Mac"); only the old wire mode stayed on the relay.
     func linkEnded(_ id: UUID, _ token: UUID, why: String, tell: Bool) async {
         guard linkCurrent(id, token), let row = live[id] else { return }
-        let moved = row.link.path.hasMoved || row.link.clientMoved
+        let moved = row.link.path.hasMoved || row.link.clientMoved || row.link.prove && row.link.pendingMoved
         let linkOnly = row.link.path.currentMode != .wire || row.link.relayFirst
         let keepBack = row.link.keep && !row.link.path.relayIsGone && moved
         let connection = (keepBack ? row.link.path.beginBack() : row.link.path.detach()) ?? row.link.connection
         live[id]?.link.connection = nil; live[id]?.link.open = false; live[id]?.link.token = nil; live[id]?.link.keptOnRelay = false
-        row.link.task?.cancel()
+        row.link.task?.cancel(); row.link.proofTask?.cancel(); live[id]?.link.proofTask = nil
+        live[id]?.link.proof = nil
         row.link.feed?.finish(); live[id]?.link.feed = nil
         for waiter in row.link.waiters.values { waiter.resume(returning: false) }
         live[id]?.link.waiters = [:]
         connection?.close()
-        BackendRemoteRelayClient.note("link: ended for \(row.device?.name ?? "a device"): \(why)")
+        if !row.link.prove || why != "stalled" {
+            BackendRemoteRelayClient.note("link: ended for \(row.device?.name ?? "a device"): \(why)")
+        }
         // A client's `link.back` kept for a move back that is not made must not be left for a later link.
         if !keepBack { live[id]?.link.clientBack = nil }
         // link.keep: after a move the connection goes back to the relay instead of closing; a fresh link that never
         // opened just leaves it there. The first link after the welcome that never opened keeps today's rule.
+        if row.link.prove, !moved, !row.link.path.relayIsGone {
+            row.link.path.set(.wire)
+            let completion: [NativeRPCValue.Field] = why == "quiet retest finished"
+                ? [.init("proof", .string(row.link.proofID)), .init("reason", .string("retest-complete"))] : []
+            if tell, let signal = try? BackendRemoteServerMessage(.linkPeer, fields: [.init("op", .string("end"))] + completion) { try? await linkSignal(id, signal) }
+            linkScheduleRelink(id)
+            return
+        }
         if row.link.keep, !row.link.path.relayIsGone, moved || row.link.relinked {
             if moved { await linkMoveBack(id); return }
             if tell, let signal = try? BackendRemoteServerMessage(.linkPeer, fields: [.init("op", .string("end"))]) { try? await linkSignal(id, signal) }
@@ -731,13 +787,17 @@ extension BackendRemoteHost {
             await disconnect(id, code: 1001, reason: "The direct link ended.")
             return
         }
-        BackendRemoteRelayClient.note("link: \(row.device?.name ?? "a device") carries on over the relay")
+        if row.link.prove {
+            BackendRemoteRelayClient.note("link: \(row.link.route) moved back to the relay socket for \(row.device?.name ?? "a device")")
+        } else {
+            BackendRemoteRelayClient.note("link: \(row.device?.name ?? "a device") carries on over the relay")
+        }
         linkScheduleRelink(id)
     }
 
     /// A fresh offer after a growing wait (1 s, 2 s, 4 s ... 30 s; back to 1 s once a link opens).
     private func linkScheduleRelink(_ id: UUID) {
-        guard let row = live[id], row.link.keep, row.link.token == nil else { return }
+        guard let row = live[id], row.link.keep, row.link.token == nil, row.link.retry else { return }
         let wait = Self.relinkWaitsMs[min(row.link.relinks, Self.relinkWaitsMs.count - 1)]
         live[id]?.link.relinks += 1
         row.link.relinkTask?.cancel()
@@ -747,7 +807,7 @@ extension BackendRemoteHost {
         }
     }
     private func linkRelink(_ id: UUID) {
-        guard let row = live[id], row.link.keep, row.link.token == nil, !row.link.backWaiting, !row.link.path.relayIsGone else { return }
+        guard let row = live[id], row.link.keep, row.link.token == nil, !row.link.backWaiting, !row.link.path.relayIsGone, row.link.retry else { return }
         live[id]?.link.relinked = true
         startLink(id)
     }
@@ -760,6 +820,13 @@ extension BackendRemoteHost {
         guard let row = live[id], row.link.token != nil else { return }
         // link.keep: a marker before this link's answer belongs to a link that already ended.
         if row.link.keep && !row.link.answered { return }
+        if row.link.prove, row.link.proof?.mayMove != true {
+            // The phone may open (or finish its proof) before this side's open/proven callback is handled.
+            // Preserve its ordered marker, but release no app traffic until this side also permits the move.
+            if row.link.proof == nil || row.link.peerProven { live[id]?.link.pendingMoved = true }
+            return
+        }
+        live[id]?.link.pendingMoved = false
         live[id]?.link.clientMoved = true
         let waiters = live[id]?.link.waiters ?? [:]
         live[id]?.link.waiters = [:]
@@ -823,7 +890,19 @@ extension BackendRemoteHost {
 
     /// The client's signalling: its answer (checked against this pairing), its candidates, or the end.
     func handleLinkPeer(_ id: UUID, _ message: BackendRemoteClientMessage) async {
-        guard let row = live[id], let token = row.link.token else { return }
+        guard let row = live[id] else { return }
+        if row.link.prove {
+            if message["op"].string == "end", message["retry"].bool == false, message["localOnly"].bool != true {
+                live[id]?.link.retry = false
+                row.link.relinkTask?.cancel(); live[id]?.link.relinkTask = nil
+            }
+            if message["op"].string == "retry" {
+                live[id]?.link.retry = true
+                if row.link.token == nil, !row.link.backWaiting { startLink(id) }
+                return
+            }
+        }
+        guard let token = row.link.token else { return }
         switch message["op"].string {
         case "answer":
             guard let connection = row.link.connection, let binding = row.wire.channelBinding,
@@ -833,12 +912,24 @@ extension BackendRemoteHost {
                 await linkEnded(id, token, why: "The device's answer did not match this pairing.", tell: true)
                 return
             }
+            if row.link.prove {
+                guard let route = message["route"].string, ["direct", "wrapped"].contains(route) else {
+                    await linkEnded(id, token, why: "The device did not name its route.", tell: true); return
+                }
+                let localOnly = message["localOnly"].bool == true
+                if localOnly, route != "direct" || message["probeOnly"].bool == true || !BackendLinkCandidate.hostsOnly(in: sdp) {
+                    await linkEnded(id, token, why: "The local-only answer included a non-local route.", tell: true); return
+                }
+                live[id]?.link.localOnly = localOnly
+                live[id]?.link.phoneRoute = route
+                live[id]?.link.probeOnly = message["probeOnly"].bool == true
+            }
             do { try await connection.accept(answer: sdp) }
             catch { await linkEnded(id, token, why: "The device's answer could not be used.", tell: true) }
         case "cand":
             // Security S4: at most 32, and never loopback, unspecified or multicast addresses.
             guard let candidate = message["c"].string, row.link.candidates < Self.linkMostCandidates,
-                  BackendLinkCandidate.usable(candidate) else { return }
+                  BackendLinkCandidate.usable(candidate), !row.link.localOnly || BackendLinkCandidate.host(candidate) else { return }
             live[id]?.link.candidates += 1
             row.link.connection?.add(candidate: candidate, mid: message["mid"].string, index: Int32(message["idx"].number ?? 0))
         case "end":
@@ -854,7 +945,7 @@ extension BackendRemoteHost {
     func linkClosed(_ row: Connection) {
         let connection = row.link.path.detach() ?? row.link.connection
         row.link.task?.cancel(); row.link.reader?.cancel(); row.link.feed?.finish()
-        row.link.backDeadline?.cancel(); row.link.relinkTask?.cancel()
+        row.link.backDeadline?.cancel(); row.link.relinkTask?.cancel(); row.link.proofTask?.cancel()
         for waiter in row.link.waiters.values { waiter.resume(returning: false) }
         connection?.close()
         // Its last connection closed: withdraw the login this run handed it (only that login, if still current — R1).
@@ -981,6 +1072,15 @@ enum BackendLinkCandidate {
         return usableAddress(String(words[4]))
     }
 
+    static func host(_ line: String) -> Bool {
+        let words = (line.hasPrefix("a=") ? String(line.dropFirst(2)) : line).split(separator: " ")
+        return words.count >= 8 && words[6] == "typ" && words[7] == "host"
+    }
+
+    static func hostsOnly(in sdp: String) -> Bool {
+        sdp.components(separatedBy: .newlines).filter { $0.hasPrefix("a=candidate:") }.allSatisfy(host)
+    }
+
     static func usableAddress(_ text: String) -> Bool {
         let address = text.lowercased()
         var v4 = in_addr()
@@ -1006,10 +1106,15 @@ extension BackendRemoteProtocol {
     static func parseLink(_ r: BackendRemoteReader) throws -> NativeRPCValue? {
         switch r.type {
         case "link.moved": return r.base
+        case "link.proven": return r.base.setting("id", .string(try r.text("id", reason: "link.proven without an attempt", bytes: 64)))
         case "link.back": return r.base.setting("got", .number(try r.whole("got", 0, 1_000_000_000, reason: "link.back with an unusable count")))
         case "link.peer":
-            let op = try r.named("op", allowed: ["answer", "cand", "end"], reason: "link.peer with an unusable op")
+            let op = try r.named("op", allowed: ["answer", "cand", "end", "retry"], reason: "link.peer with an unusable op")
             var m = r.base.setting("op", .string(op))
+            try r.optional("route", into: &m) { .string(try r.named("route", allowed: ["direct", "wrapped"], reason: "link.peer with an unusable route")) }
+            try r.optional("localOnly", into: &m) { guard let b = r["localOnly"].bool else { throw r.bad("link.peer with unusable localOnly") }; return .bool(b) }
+            try r.optional("probeOnly", into: &m) { guard let b = r["probeOnly"].bool else { throw r.bad("link.peer with unusable probeOnly") }; return .bool(b) }
+            try r.optional("retry", into: &m) { guard let b = r["retry"].bool else { throw r.bad("link.peer with unusable retry") }; return .bool(b) }
             try r.optional("sdp", into: &m) { .string(try r.text("sdp", reason: "link.peer with an unusable sdp", bytes: 32_000)) }
             try r.optional("fp", into: &m) { .string(try r.text("fp", reason: "link.peer with an unusable fp", bytes: 200)) }
             try r.optional("bind", into: &m) { .string(try r.text("bind", reason: "link.peer with an unusable bind", bytes: 64)) }

@@ -10,6 +10,16 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.23.3] — 2026-11-20
+
+- A project's AI setup (skills, rule files, agents and guards) is kept the same for Claude, Codex and Gemini, and travels with the project to your other Macs.
+- Project folders travel with their project through Cloud, every folder and kind of file; files a git checkout tracks stay with git.
+- A free account sees, controls and starts sessions on its other computers; paid places stay with paid plans, and a gift shows its plan.
+
+## [0.23.1] — 2026-11-18
+
+- Phones keep same-Wi-Fi links local and use a proven secure route on restricted mobile networks, returning to the session socket if the link stalls.
+
 ## [0.23.0] — 2026-11-18
 
 - Account switches preserve API and subscription choices, and repeated pending switches can be replaced.

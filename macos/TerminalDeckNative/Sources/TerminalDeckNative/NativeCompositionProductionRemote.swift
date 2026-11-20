@@ -54,6 +54,14 @@ extension NativeCompositionProduction {
             }
         }
         await endpoint.setDefaultStartFolder { NativeLandingPlaces.independent().path }
+        // 19 Nov free plan (Decker, 20 Nov): at the plan read that makes this Mac's account free, open browser, screen
+        // and tunnel streams of other devices end, and the sign-in screen helper is closed; paid again, it is re-told.
+        CloudSubscriptionOffers.shared.watchRemoteLimit(owner: "remote-host") { limited in
+            Task { @MainActor in
+                if limited { await endpoint.freePlanBegan() }
+                await NativeMacReach.shared.permissionsChanged()
+            }
+        }
         // 14 Nov (phones ask 4): a task change sends each connected phone the Tasks lists it read, again (unasked
         // `panel.rows`, BackendRemoteHost.tasksChanged). Only phones that read Tasks; nothing new for any other.
         if let feed = try? await root.registry.subscribe("tasks:changed", ownerID: BackendCompositionRoot.appOwnerID,

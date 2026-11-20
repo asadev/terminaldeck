@@ -181,7 +181,7 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
                         ForEach(lines, id: \.id) { line in
                             switch line.entry {
                             case .own:
-                                if let item = line.item { sessionRow(item, agents: sessionAgents) }
+                                if let item = line.item { sessionRow(item, agents: sessionAgents, press: livePress(line)) }
                             case .other(let row):
                                 SIDEBARCloudSessionRow(row: row, project: registry.first { $0.id == row.project?.cloudRef },
                                                        highlighted: Sidebar21Pages.selection(selected) == line.entry.id,
@@ -275,26 +275,36 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
     }
     /// One line of the Running list: this Mac's own session (keeping its continuity identity, so a rename or a restart
     /// never redraws it as a new row), another machine's, or a project's "Earlier chats".
-    struct RunningLine { let id: String; let entry: SIDEBARCloudRows.Entry; let item: SidebarItem? }
+    struct RunningLine { let id: String; let entry: SIDEBARCloudRows.Entry; let item: SidebarItem?; var live = false }
     private func runningLines(_ sessions: [SidebarItem]) -> [RunningLine] {
         let identified = NativeSessionRailContinuity.shared.identified(sessions)
         let rows = Dictionary(identified.map { ($0.item.id, $0) }, uniquingKeysWith: { first, _ in first })
         let cloud = NativeCloudChats.shared
         // One row per session (15 Nov): a Cloud row whose live twin is open here already is not listed again.
-        let others = NativeCloudLiveChoice.shownOthers(NativeCloudOffers.shows(.otherComputerSessions) ? cloud.others : [], ownIDs: Set(sessions.map(\.id)), links: NativeMachineLinks.shared.snapshot, liveRefs: cloud.liveRefs)
+        // 19 Nov free plan: a free account's other computers' sessions come live from its computers (below), never Cloud rows.
+        let free = NativeCloudAccount.shared.snapshot.subscription.limitsRemoteToSessions
+        let others = NativeCloudLiveChoice.shownOthers(NativeCloudOffers.shows(.otherComputerSessions) && !free ? cloud.others : [], ownIDs: Set(sessions.map(\.id)), links: NativeMachineLinks.shared.snapshot, liveRefs: cloud.liveRefs)
         let entries = SIDEBARCloudRows.merge(own: sessions.map { (id: $0.id, project: sessionProject($0.id)?.id) }, others: others,
                                               earlier: [])
-        return entries.map { entry in
+        let lines: [RunningLine] = entries.map { entry in
             if case .own(let id) = entry, let row = rows[id] { return RunningLine(id: row.id, entry: entry, item: row.item) }
             return RunningLine(id: entry.id, entry: entry, item: nil)
         }
+        guard free else { return lines }
+        let live = NativeRemoteSessionRows.liveOthers(links: NativeMachineLinks.shared.snapshot, shown: Set(sessions.map(\.id)))
+        return lines + live.map { RunningLine(id: $0.id, entry: .own($0.id), item: $0, live: true) }
+    }
+    /// A free account's live row of another computer opens that session there (its tab is made by the machine action).
+    private func livePress(_ line: RunningLine) -> (() -> Void)? {
+        guard line.live, let item = line.item else { return nil }
+        return { NativeMachineSessionRoute.open(tabId: item.id) }
     }
     /// Running sessions that are not pinned (a pinned session shows only under Pinned).
     private var unpinnedRunning: [SidebarItem] { running.filter { !pins.isPinned($0.id) } }
 
     /// A session: its type icon and its own name (Asad, 15 Nov); the orange dot only while it needs him, ⋯ (and
     /// right-click) for the same menu.
-    private func sessionRow(_ session: SidebarItem, agents: [String: AGTAgent]) -> some View {
+    private func sessionRow(_ session: SidebarItem, agents: [String: AGTAgent], press: (() -> Void)? = nil) -> some View {
         let title = SIDEBARSessionLine.title(session, store: store)
         return SIDEBARSessionRow(session: session, title: title,
                           chat: store.sessionChats.contains(session.id) || NativeRemoteSessionRows.chat(session.id, links: NativeMachineLinks.shared.snapshot)
@@ -303,7 +313,7 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
                           onAccent: isSelected(session.id),
                           selection: AnyView(selection(session.id)),
                           // B2 (MAC-NEXT-13): the row opens the session as always; only the raised hand opens a waiting page.
-                          open: { choose(session.id) },
+                          open: press ?? { choose(session.id) },
                           editing: renamingID == session.id,
                           beginRename: renamesInPlace(session) ? { renamingID = session.id } : nil,
                           endRename: { typed in

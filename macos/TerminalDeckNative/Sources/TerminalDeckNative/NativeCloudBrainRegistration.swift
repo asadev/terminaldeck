@@ -13,7 +13,7 @@ enum NativeCloudBrainRegistration {
     /// Lane L3 slice 1 (14 Nov): the Cloud folder I24. It sends nothing until every Mac of the account announced that it
     /// understands Cloud folder records (`BackendCloudFolder`'s gate), so turning the row on harms no older build.
     /// Lane L3 slice 2 (14 Nov): artifacts I23, behind the same gate (every Mac understands artifacts records).
-    static let provenRows: Set<String> = ["I01", "I02", "I03", "I04", "I05", "I06", "I09", "I10", "I11", "I12", "I21", "I23", "I24"]
+    static let provenRows: Set<String> = ["I01", "I02", "I03", "I04", "I05", "I06", "I09", "I10", "I11", "I12", "I21", "I23", "I24", "I26"]
     /// The lean first version's memory (spec AM10, scope item 2): rows I01 to I06 as built. Prepared, not switched on.
     static let leanMemoryRows: Set<String> = ["I01", "I02", "I03", "I04", "I05", "I06"]
     /// What is switched on in THIS process: the proven rows and, in a DEBUG build running proof P3's scratch plan
@@ -33,6 +33,19 @@ enum NativeCloudBrainRegistration {
     /// choices (a kind off here is not started here; the account's shared marks, I05, always are).
     static func rowsHere(_ dataRoot: URL) -> Set<String> { NativeCloudSyncChoices.load(dataRoot: dataRoot).rows(enabledRows) }
 
+    /// Project folders (19 Nov): every project of this Mac whose folder is chosen, real, and inside the home folder (never
+    /// the home itself), by its key. The same project id gives the same key on every Mac.
+    static func projectFolderRoots(_ places: [BackendCloudBootFilesPlace], home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [String: URL] {
+        let homePath = home.resolvingSymlinksInPath().standardizedFileURL.path
+        var roots: [String: URL] = [:]
+        for place in places where place.kind == .project && place.chosen {
+            let root = place.root.resolvingSymlinksInPath().standardizedFileURL
+            guard root.path.hasPrefix(homePath + "/"), CloudProjectFoldersRules.realFolder(root) else { continue }
+            roots[CloudProjectFoldersRules.key(projectId: place.identity)] = root
+        }
+        return roots
+    }
+
     /// Every domain SYNC may admit as brain content: only switched-on rows (finding 27: built in steps).
     static var brainDomains: Set<String> {
         let rows = enabledRows
@@ -44,6 +57,7 @@ enum NativeCloudBrainRegistration {
         domains.formUnion((try? BackendCloudKinds.domains(rows)) ?? [])
         if rows.contains(CloudFolderFormat.inventoryRow) { domains.insert(CloudFolderFormat.domain) }
         if rows.contains(CloudArtifactsFormat.inventoryRow) { domains.insert(CloudArtifactsFormat.domain) }
+        if rows.contains(CloudProjectFoldersRules.inventoryRow) { domains.insert(CloudFileKind.projectFolders.domain) }
         return domains
     }
 
@@ -146,6 +160,7 @@ enum NativeCloudBrainRegistration {
                 try await enableKinds(context)
                 try await enableCloudFolder(context)
                 try await enableArtifacts(context)
+                try await enableProjectFolders(context)
                 await announceKindsOffHere(context)
                 setupRetries = 0
             } catch {
@@ -204,6 +219,7 @@ enum NativeCloudBrainRegistration {
                 now: { engine.serviceTime() ?? Int64(Date().timeIntervalSince1970 * 1000) })
             boot = made
             await made.setAutoAccept(automatic)
+            await made.setSetupKeeper { root in BackendAISetupKeeper.align(project: root) }
             // Delete rule (L2): gate, which Macs announced the rule, and one name per Mac, before the first engine event.
             await made.setDeleteRuleGate(NativeCloudFolder.deleteRuleIsOpen)
             await made.setDeleteRuleAnnounced(NativeCloudFolder.deleteRuleAnnounced)
@@ -326,6 +342,7 @@ enum NativeCloudBrainRegistration {
             await current?.stop()
             await MainActor.run { NativeCloudFolder.current = nil }
             await stopArtifacts()
+            await stopProjectFolders()
         }
         /// Lane L3 slice 2: artifacts, after the Cloud folder, the same way: the store is made (first time only), the
         /// owner joins, the Cloud is read (pull), and only then is anything of this Mac's own copied in and recorded; the
@@ -376,6 +393,51 @@ enum NativeCloudBrainRegistration {
             }
             await MainActor.run { NativeCloudArtifacts.shared.attach(made) }
             if mine != generation || stopped { await stopArtifacts() }
+        }
+        /// Folders that travel with a project (19 Nov): one owner over every project folder of this Mac (row I26), the Cloud
+        /// folder's way (read the Cloud first, the every-Mac gate, nothing overwritten without a kept version). Called again
+        /// (page opened, a project added or moved), it hands the owner the current project folders.
+        private var projectFolders: BackendCloudFolder?
+        private func enableProjectFolders(_ context: Context) async throws {
+            guard NativeCloudBrainRegistration.rowsHere(context.dataRoot).contains(CloudProjectFoldersRules.inventoryRow), !stopped,
+                  CloudProjectFoldersRules.isOn() else { return }
+            guard await useCloudHere(context), !stopped else { return }
+            let found = await NativeCloudBootPlaces.current(file: NativeCloudBootPlaces.choicesFile(dataRoot: context.dataRoot, subjectHash: context.subjectHash))
+            let roots = NativeCloudBrainRegistration.projectFolderRoots(found.places)
+            if let existing = projectFolders {
+                await existing.setRoots(roots)
+                if (try? await existing.hasReadCloud()) != true, (try? await context.engine.pull()) != nil { try? await existing.markCloudRead() }
+                return
+            }
+            let mine = generation, engine = context.engine
+            let subject = NativeCloudLaunch.folder(context.dataRoot).appendingPathComponent(context.subjectHash, isDirectory: true)
+            let made = try BackendCloudFolder(deviceId: context.deviceId, folder: subject.appendingPathComponent("project-folders-root", isDirectory: true),
+                stateRoot: subject.appendingPathComponent("project-folders", isDirectory: true), kind: .projectFolders,
+                roots: CloudFolderRoots(many: roots),
+                everyMacUnderstands: {
+                    guard let store = await MainActor.run(body: { DeckMemoryCenter.shared.isReady ? DeckMemoryCenter.shared.store as? DeckMemoryStore : nil }) else { return false }
+                    _ = try? await store.cloudFeatureAnnounce(CloudProjectFoldersRules.feature, format: CloudProjectFoldersRules.format)
+                    return await store.cloudFeatureEveryMacUnderstands(CloudProjectFoldersRules.feature, format: CloudProjectFoldersRules.format)
+                },
+                now: { engine.serviceTime() ?? Int64(Date().timeIntervalSince1970 * 1000) })
+            await made.setDeleteRuleGate(NativeCloudFolder.deleteRuleIsOpen)
+            await made.setDeleteRuleAnnounced(NativeCloudFolder.deleteRuleAnnounced)
+            await made.setMacName { id in
+                await MainActor.run {
+                    NativeCloudAccount.shared.snapshot.devices.first { $0.deviceId.lowercased() == id.lowercased() }.flatMap { BackendCloudContentsWords.plain($0.shownName) }
+                }
+            }
+            guard mine == generation, !stopped else { return }
+            projectFolders = made
+            try await made.start(outbox: engine, subjectHash: context.subjectHash)
+            if (try? await made.hasReadCloud()) != true {
+                if (try? await engine.pull()) != nil { try? await made.markCloudRead() }
+            }
+            if mine != generation || stopped { await stopProjectFolders() }
+        }
+        private func stopProjectFolders() async {
+            let current = projectFolders; projectFolders = nil
+            await current?.stop()
         }
         private func stopArtifacts() async {
             let current = artifacts; artifacts = nil
@@ -558,6 +620,9 @@ enum NativeCloudBrainRegistration {
             }
             if NativeCloudBrainRegistration.enabledRows.contains(CloudArtifactsFormat.inventoryRow), !here.contains(CloudArtifactsFormat.inventoryRow) {
                 _ = try? await store.cloudFeatureAnnounce(CloudArtifactsFormat.feature, format: CloudArtifactsFormat.format)
+            }
+            if NativeCloudBrainRegistration.enabledRows.contains(CloudProjectFoldersRules.inventoryRow), !here.contains(CloudProjectFoldersRules.inventoryRow) {
+                _ = try? await store.cloudFeatureAnnounce(CloudProjectFoldersRules.feature, format: CloudProjectFoldersRules.format)
             }
         }
         private func stopDeleteRuleAnnouncements() {

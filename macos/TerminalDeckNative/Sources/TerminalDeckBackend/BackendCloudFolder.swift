@@ -54,6 +54,8 @@ public actor BackendCloudFolder {
     public nonisolated let profile: CloudFileKind
     /// His folder on this Mac (for artifacts: the app's own store of them).
     public nonisolated let folder: URL
+    /// Where its paths live: `folder` alone, or many project folders (`CloudFileKind.projectFolders`).
+    public nonisolated let roots: CloudFolderRoots
     let deviceId: String
     let stateRoot: URL
     let versionsRoot: URL
@@ -114,7 +116,7 @@ public actor BackendCloudFolder {
     /// - `folder`: his Cloud folder (`CloudFolderFormat.defaultFolder()`; a scratch folder in tests).
     /// - `stateRoot`: this identity's Cloud folder state (`<cloud>/<subject>/cloud-folder`), never inside `folder`.
     /// - `now`: the sync core's service clock, falling back to this Mac's clock.
-    public init(deviceId: String, folder: URL, stateRoot: URL, versionsRoot: URL? = nil, kind: CloudFileKind = .cloudFolder,
+    public init(deviceId: String, folder: URL, stateRoot: URL, versionsRoot: URL? = nil, kind: CloudFileKind = .cloudFolder, roots: CloudFolderRoots? = nil,
                 everyMacUnderstands: @escaping @Sendable () async -> Bool,
                 freeDisk: (@Sendable () -> Int64?)? = nil,
                 now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) throws {
@@ -122,6 +124,7 @@ public actor BackendCloudFolder {
         let state = stateRoot.standardizedFileURL.path, mine = folder.standardizedFileURL.path
         guard state != mine, !state.hasPrefix(mine + "/"), !mine.hasPrefix(state + "/") else { throw CloudFailure.unsafeConfiguration }
         self.deviceId = deviceId.lowercased(); self.folder = folder.standardizedFileURL; self.stateRoot = stateRoot.standardizedFileURL
+        self.roots = roots ?? CloudFolderRoots(single: folder.standardizedFileURL)
         self.versionsRoot = versionsRoot ?? BackendCloudVersionKeeper.root(besideStateRoot: stateRoot)
         self.everyMacUnderstands = everyMacUnderstands; self.now = now
         self.profile = kind; self.inventoryRows = [kind.inventoryRow]
@@ -200,7 +203,7 @@ public actor BackendCloudFolder {
     func core() throws -> BackendCloudBrainFiles {
         if let built { return built }
         try FileManager.default.createDirectory(at: copyRoot, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let copy = copyRoot, mine = folder, profile = self.profile
+        let copy = copyRoot, mine = roots, profile = self.profile
         let source = BackendCloudBrainFilesSource(
             sourceId: profile.sourceId, root: copy, include: ["**"], exclude: BackendCloudBrainFilesNames.locks, optional: false,
             projection: .custom({ incoming in
@@ -234,6 +237,7 @@ public actor BackendCloudFolder {
     }
     func folderPresent() -> Bool {
         var info = stat()
+        if roots.isMany { return !roots.all.isEmpty }
         return lstat(folder.path, &info) == 0 && info.st_mode & S_IFMT == S_IFDIR
     }
 
@@ -257,11 +261,17 @@ public actor BackendCloudFolder {
             throw error
         }
         guard watch else { return }
-        let base = folder.resolvingSymlinksInPath().path
-        watcher = DeckMemoryWatcher(root: base) { [weak self] _, _ in Task { await self?.nudge() } }
-        looper = Task { [weak self] in
+        if roots.isMany {
+            watchRoots()
+        } else {
+            let base = folder.resolvingSymlinksInPath().path
+            watcher = DeckMemoryWatcher(root: base) { [weak self] _, _ in Task { await self?.nudge() } }
+        }
+        let pause = profile.lookSeconds * 1_000_000_000
+        // A large tree (project folders) is looked at on a low priority, so a first upload never slows the Mac.
+        looper = Task(priority: roots.isMany ? .background : nil) { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                try? await Task.sleep(nanoseconds: pause)
                 guard let self else { return }
                 await self.lookIfDue()
             }
@@ -271,11 +281,37 @@ public actor BackendCloudFolder {
     public func stop() async {
         looper?.cancel(); looper = nil
         watcher?.stop(); watcher = nil
+        for one in rootWatchers { one.stop() }
+        rootWatchers = []
         let running = pump
         pump = nil; outbox = nil; subjectHash = nil
         await running?.stop()
     }
     func nudge() { dirty = true }
+    /// Kinds that clone (project folders): the file to clone a new copy from, so the private copy takes no extra disk space.
+    func cloneSource(folderFile path: String) -> URL? { profile.clonesCopies ? CloudFolderDisk.url(roots, path) : nil }
+    func cloneSource(copyFile path: String) -> URL? { profile.clonesCopies ? copyRoot.appendingPathComponent(path) : nil }
+    /// Project folders: one watcher per project folder on this Mac (file events only nudge the next look).
+    private var rootWatchers: [DeckMemoryWatcher] = []
+    private func watchRoots() {
+        for one in rootWatchers { one.stop() }
+        rootWatchers = roots.all.values.sorted { $0.path < $1.path }.compactMap { root in
+            // Builds and checkouts (`code/`, `node_modules`, ...) change all the time and never travel: they never nudge a look.
+            DeckMemoryWatcher(root: root.resolvingSymlinksInPath().path) { [weak self] paths, _ in
+                let relevant = paths.isEmpty || paths.contains { path in
+                    !path.split(separator: "/").contains { CloudProjectFoldersRules.neverFolders.contains($0.lowercased()) }
+                }
+                if relevant { Task { await self?.nudge() } }
+            }
+        }
+    }
+    /// Project folders: the projects on this Mac changed (added, moved, mapped). Their files are looked at next.
+    public func setRoots(_ next: [String: URL]) {
+        guard roots.isMany, next != roots.all else { return }
+        roots.set(next)
+        if outbox != nil { watchRoots() }
+        dirty = true
+    }
     /// The first pull after start has returned: this Mac has read the Cloud, so its own files may be recorded now.
     /// Kept: a Mac reads the Cloud first only once.
     public func markCloudRead() throws { try setControl("cloudRead", "1") }
@@ -323,12 +359,14 @@ public actor BackendCloudFolder {
         let engine = try core()
         // An arrived removal half applied before a crash is finished before anything reconciles (MUST 7).
         await finishArrivedRemovals(engine: engine)
-        let walk = CloudFolderWalk.run(folder)
+        let walk = CloudFolderWalk.run(roots, kind: profile)
         let db = try state(), t = now()
         // Each saved intent on its own; nothing here can stop the look (MUST 2).
         await recoverDeleteIntents(engine: engine)
         let hadFiles = try db.first("SELECT 1 FROM folder_base LIMIT 1") != nil
-        let unavailable = !walk.present || !walk.reliable || (walk.files.isEmpty && hadFiles)
+        // Project folders: an unreadable item in one folder never stops the others (removals still need a reliable look).
+        let unavailable = roots.isMany ? (roots.all.isEmpty || (walk.files.isEmpty && hadFiles))
+                                       : (!walk.present || !walk.reliable || (walk.files.isEmpty && hadFiles))
         try setControl("folderMissing", unavailable ? "1" : nil)
         guard !unavailable else {
             // The next reliable root starts a fresh pair of absent looks. Preserve old migration evidence until read.
@@ -345,12 +383,15 @@ public actor BackendCloudFolder {
         try setControl("secretNames", walk.secretNames.isEmpty ? nil : walk.secretNames.joined(separator: "\n"))
         try setControl("spellingNames", walk.spellingNames.isEmpty ? nil : walk.spellingNames.joined(separator: "\n"))
         try checkDisk()
-        roomLow = (await roomLeft()).map { $0 < CloudFolderFormat.roomFloor } ?? false
+        roomLow = profile.obeysRoomFloor ? ((await roomLeft()).map { $0 < CloudFolderFormat.roomFloor } ?? false) : false
         try setControl("roomLow", roomLow ? "1" : nil)
         _ = try daySent(at: t)
         let today = t / CloudFolderFormat.day
         var busy = 0
+        // Paced (project folders): at most `bytesPerLook` recorded per look; the rest goes in the next looks.
+        var recordedBytes: Int64 = 0
         for path in walk.files.keys.sorted() {
+            if let pace = profile.bytesPerLook, recordedBytes >= pace { dirty = true; break }
             guard let entry = walk.files[path] else { continue }
             try db.run("INSERT OR REPLACE INTO folder_presence(path,at) VALUES (?,?)", [.text(path), .int(t)])
             let mark = try deleteState().mark(at: path)
@@ -387,6 +428,7 @@ public actor BackendCloudFolder {
             // A path that is a file on one side and a folder on the other is skipped here (named on the page), never the look.
             do { recorded = try await settle(path, engine: engine) } catch CloudFailure.unsafeConfiguration { continue }
             if recorded {
+                recordedBytes += entry.bytes
                 try db.run("""
                     INSERT INTO folder_day(path,day,count) VALUES (?,?,1)
                     ON CONFLICT(path) DO UPDATE SET count=CASE WHEN day=excluded.day THEN count+1 ELSE 1 END, day=excluded.day
@@ -404,7 +446,7 @@ public actor BackendCloudFolder {
         // Review 15 Nov (point 9): "Only on this Mac" lives only where this Mac has the file. A kept file he later removed
         // by hand leaves no stale mark, so a new file he makes there syncs normally.
         for mark in try deleteState().marks() where mark.mark == .onlyOnThisMac && walk.files[mark.place] == nil && !walk.excludedPaths.contains(mark.place) {
-            if case .absent = CloudFolderDisk.read(folder, mark.place) {
+            if case .absent = CloudFolderDisk.read(roots, mark.place) {
                 try deleteState().clearMark(at: mark.place)
                 try CloudFileDeleteRecords.rememberCleared(mark.place, in: state())
             }
@@ -431,7 +473,8 @@ public actor BackendCloudFolder {
     /// 200 MB (then one line says so). Sync now does not pass it.
     func mayRecord(_ bytes: Int64) throws -> Bool {
         if roomLow { return false }
-        if try daySent(at: now()) + bytes > CloudFolderFormat.dailySendBytes { try setControl("dayFull", "1"); return false }
+        guard let cap = profile.dailySendBytes else { return true }
+        if try daySent(at: now()) + bytes > cap { try setControl("dayFull", "1"); return false }
         return true
     }
     func spent(_ bytes: Int64) throws {
@@ -454,9 +497,9 @@ public actor BackendCloudFolder {
         guard try CloudFileDeleteRecords.wasCleared(path, in: state()), try deleteState().mark(at: path) == nil else { return false }
         var localHash = known
         if localHash == nil {
-            guard profile.refusal(path) == nil, !CloudFolderDisk.caseClash(folder, path), let before = CloudFolderDisk.stamp(folder, path),
-                  case .file(let local) = CloudFolderDisk.read(folder, path),
-                  CloudFolderDisk.stamp(folder, path) == before, Int64(local.count) == before.bytes else { return false }
+            guard profile.refusal(path) == nil, !CloudFolderDisk.caseClash(roots, path), let before = CloudFolderDisk.stamp(roots, path),
+                  case .file(let local) = CloudFolderDisk.read(roots, path),
+                  CloudFolderDisk.stamp(roots, path) == before, Int64(local.count) == before.bytes else { return false }
             localHash = BackendCloudBrainMemoryHash.bytes(local)
         }
         guard let localHash else { return false }
@@ -472,10 +515,10 @@ public actor BackendCloudFolder {
     func settle(_ path: String, engine: BackendCloudBrainFiles) async throws -> Bool {
         // Review 14 Nov (point 7): its size and time are read before AND after its bytes; a file still being written waits.
         // A name that differs only by capitals from the file on disk is not that file (point 9).
-        guard profile.refusal(path) == nil, !CloudFolderDisk.caseClash(folder, path), let before = CloudFolderDisk.stamp(folder, path),
-              case .file(let local) = CloudFolderDisk.read(folder, path) else { return false }
+        guard profile.refusal(path) == nil, !CloudFolderDisk.caseClash(roots, path), let before = CloudFolderDisk.stamp(roots, path),
+              case .file(let local) = CloudFolderDisk.read(roots, path) else { return false }
         afterReadForTests?(path)
-        guard CloudFolderDisk.stamp(folder, path) == before, Int64(local.count) == before.bytes,
+        guard CloudFolderDisk.stamp(roots, path) == before, Int64(local.count) == before.bytes,
               Int64(local.count) <= profile.maximumFileBytes else { return false }
         let localHash = BackendCloudBrainMemoryHash.bytes(local)
         // Final look 15 Nov (MUST 1): his "Cloud" choice survives a branch switch. Bytes this place held before come back
@@ -493,9 +536,9 @@ public actor BackendCloudFolder {
                     guard try ensureSafetyCopy() else { return false }
                     try keepMine(path, at: now(), content: local, now: now())
                     try crashPointForTests?("j7:beforeWrite")
-                    try CloudFolderDisk.write(folder, path, bytes: newest, expecting: localHash)
+                    try CloudFolderDisk.write(roots, path, bytes: newest, expecting: localHash)
                 }
-                try setBase(path, Base(hash: hash, bytes: Int64(newest.count), modified: CloudFolderDisk.modified(folder, path) ?? now()))
+                try setBase(path, Base(hash: hash, bytes: Int64(newest.count), modified: CloudFolderDisk.modified(roots, path) ?? now()))
                 try deleteState().clearMark(at: path)
                 return false
             }
@@ -506,14 +549,14 @@ public actor BackendCloudFolder {
                 expecting = BackendCloudBrainMemoryHash.bytes(bytes)
                 try keepVersion(itemKey: itemKey(path), name: Self.name(path), place: Self.place(path), at: now(), device: deviceId, content: bytes, now: now())
             }
-            try CloudFolderDisk.write(copyRoot, path, bytes: local, expecting: expecting)
+            try CloudFolderDisk.write(copyRoot, path, bytes: local, expecting: expecting, cloneFrom: cloneSource(folderFile: path))
             try spent(Int64(local.count))
-            try setBase(path, Base(hash: localHash, bytes: Int64(local.count), modified: CloudFolderDisk.modified(folder, path) ?? now()))
+            try setBase(path, Base(hash: localHash, bytes: Int64(local.count), modified: CloudFolderDisk.modified(roots, path) ?? now()))
             try deleteState().clearMark(at: path)
             return true
         }
         // The same reading of its time as the walk's (so an unchanged file is never looked at again).
-        let modified = CloudFolderDisk.modified(folder, path) ?? before.modified
+        let modified = CloudFolderDisk.modified(roots, path) ?? before.modified
         let known = try base(path)
         let copy = CloudFolderDisk.read(copyRoot, path)
         if case .blocked = copy { return false }
@@ -526,7 +569,7 @@ public actor BackendCloudFolder {
         }
         if copyHash == nil || copyHash == known?.hash {
             guard try mayRecord(Int64(local.count)) else { return false }
-            try CloudFolderDisk.write(copyRoot, path, bytes: local, expecting: copyHash)
+            try CloudFolderDisk.write(copyRoot, path, bytes: local, expecting: copyHash, cloneFrom: cloneSource(folderFile: path))
             try spent(Int64(local.count))
             CloudFolderDisk.setModified(copyRoot, path, modified)
             try setBase(path, mine)
@@ -558,7 +601,7 @@ public actor BackendCloudFolder {
             try keepVersion(itemKey: item, name: Self.name(path), place: Self.place(path), at: arrived.createdAt,
                             device: arrived.originDevice, content: copyBytes, now: t)
             await engine.setNextParents(sourceId: profile.sourceId, relative: path, parents: arrived.parents)
-            try CloudFolderDisk.write(copyRoot, path, bytes: local, expecting: copyHash)
+            try CloudFolderDisk.write(copyRoot, path, bytes: local, expecting: copyHash, cloneFrom: cloneSource(folderFile: path))
             try spent(Int64(local.count))
             CloudFolderDisk.setModified(copyRoot, path, modified)
             try setBase(path, Base(hash: localHash, bytes: Int64(local.count), modified: modified))
@@ -568,9 +611,9 @@ public actor BackendCloudFolder {
         guard try ensureSafetyCopy() else { return false }
         // His own losing edit may exist nowhere else: kept under its own key, never trimmed, for its full 30 days.
         let until = try keepMine(path, at: localAt, content: local, now: t)
-        try CloudFolderDisk.write(folder, path, bytes: copyBytes, expecting: localHash)
-        CloudFolderDisk.setModified(folder, path, arrived.createdAt)
-        try setBase(path, Base(hash: copyHash, bytes: Int64(copyBytes.count), modified: CloudFolderDisk.modified(folder, path) ?? arrived.createdAt))
+        try CloudFolderDisk.write(roots, path, bytes: copyBytes, expecting: localHash, cloneFrom: cloneSource(copyFile: path))
+        CloudFolderDisk.setModified(roots, path, arrived.createdAt)
+        try setBase(path, Base(hash: copyHash, bytes: Int64(copyBytes.count), modified: CloudFolderDisk.modified(roots, path) ?? arrived.createdAt))
         try state().run("INSERT OR REPLACE INTO folder_lines(path,device,kept_until,at) VALUES (?,?,?,?)", [.text(path), .text(arrived.originDevice), .int(until), .int(t)])
         return false
     }
@@ -584,7 +627,7 @@ public actor BackendCloudFolder {
             if walk.files[path] != nil { try db.run("DELETE FROM folder_gone WHERE path=?", [.text(path)]); continue }
             if walk.excludedPaths.contains(path) { try db.run("DELETE FROM folder_gone WHERE path=?", [.text(path)]); continue }
             guard try deleteState().mark(at: path) == nil,
-                  case .absent = CloudFolderDisk.read(folder, path) else { continue }
+                  case .absent = CloudFolderDisk.read(roots, path) else { continue }
             guard let since = try db.first("SELECT since FROM folder_gone WHERE path=?", [.text(path)])?.int(0) else {
                 try db.run("INSERT INTO folder_gone(path,since) VALUES (?,?)", [.text(path), .int(t)])
                 continue
@@ -592,7 +635,7 @@ public actor BackendCloudFolder {
             guard t - since >= CloudFolderFormat.quiet else { continue }
             // Review 15 Nov (MUST 1): only the witness decides here, never an intent left in the table, so a leftover can
             // never turn this by-hand delete into a travelling one.
-            let answer = await witness.who(removed: folder.appendingPathComponent(path),
+            let answer = await witness.who(removed: CloudFolderDisk.url(roots, path) ?? folder.appendingPathComponent(path),
                 lastSeen: Date(timeIntervalSince1970: Double(min(try db.first("SELECT at FROM folder_presence WHERE path=?", [.text(path)])?.int(0) ?? row.int(2), since)) / 1000),
                 seenGoneAt: Date(timeIntervalSince1970: Double(since) / 1000))
             var travelled = false
@@ -623,11 +666,11 @@ public actor BackendCloudFolder {
         for row in try db.rows("SELECT path FROM folder_arrived ORDER BY path LIMIT 2000") {
             let path = row.text(0)
             if try deleteState().mark(at: path) != nil { continue }
-            guard profile.refusal(path) == nil, !CloudFolderDisk.caseClash(folder, path), case .file(let copyBytes) = CloudFolderDisk.read(copyRoot, path) else {
+            guard profile.refusal(path) == nil, !CloudFolderDisk.caseClash(roots, path), case .file(let copyBytes) = CloudFolderDisk.read(copyRoot, path) else {
                 try db.run("DELETE FROM folder_arrived WHERE path=?", [.text(path)]); continue
             }
             // Review 14 Nov (point 8): a name that is a folder here and a file there (or the other way) stays apart, named.
-            if CloudFolderDisk.fileFolderClash(folder, path) { clashes.append(Self.name(path)); continue }
+            if CloudFolderDisk.fileFolderClash(roots, path) { clashes.append(Self.name(path)); continue }
             let copyHash = BackendCloudBrainMemoryHash.bytes(copyBytes)
             if copyHash != (try base(path))?.hash {
                 do { try await arrive(path, copy: copyBytes, copyHash: copyHash, known: try base(path), engine: engine) }
@@ -642,21 +685,21 @@ public actor BackendCloudFolder {
 
     func arrive(_ path: String, copy copyBytes: Data, copyHash: String, known: Base?, engine: BackendCloudBrainFiles) async throws {
         let t = now()
-        switch CloudFolderDisk.read(folder, path) {
+        switch CloudFolderDisk.read(roots, path) {
         case .blocked:
             return
         case .absent:
             // A previously agreed file disappeared here: let the two-look witness decide before any placement.
             if known != nil { return }
-            try CloudFolderDisk.write(folder, path, bytes: copyBytes, expecting: nil)
-            if let at = try await engine.currentVersion(sourceId: profile.sourceId, relative: path)?.createdAt { CloudFolderDisk.setModified(folder, path, at) }
-            try setBase(path, Base(hash: copyHash, bytes: Int64(copyBytes.count), modified: CloudFolderDisk.modified(folder, path) ?? t))
+            try CloudFolderDisk.write(roots, path, bytes: copyBytes, expecting: nil, cloneFrom: cloneSource(copyFile: path))
+            if let at = try await engine.currentVersion(sourceId: profile.sourceId, relative: path)?.createdAt { CloudFolderDisk.setModified(roots, path, at) }
+            try setBase(path, Base(hash: copyHash, bytes: Int64(copyBytes.count), modified: CloudFolderDisk.modified(roots, path) ?? t))
             try state().run("DELETE FROM folder_gone WHERE path=?", [.text(path)])
             try takeFromBin(itemKey(path), now: t)
         case .file(let local):
             let localHash = BackendCloudBrainMemoryHash.bytes(local)
             if localHash == copyHash {
-                try setBase(path, Base(hash: copyHash, bytes: Int64(local.count), modified: CloudFolderDisk.modified(folder, path) ?? t))
+                try setBase(path, Base(hash: copyHash, bytes: Int64(local.count), modified: CloudFolderDisk.modified(roots, path) ?? t))
                 return
             }
             if let known, localHash == known.hash {
@@ -670,13 +713,13 @@ public actor BackendCloudFolder {
                     try keepVersion(itemKey: itemKey(path), name: Self.name(path), place: Self.place(path),
                                     at: known.modified, device: deviceId, content: local, now: t)
                 }
-                try CloudFolderDisk.write(folder, path, bytes: copyBytes, expecting: localHash)
-                if let at = try await engine.currentVersion(sourceId: profile.sourceId, relative: path)?.createdAt { CloudFolderDisk.setModified(folder, path, at) }
-                try setBase(path, Base(hash: copyHash, bytes: Int64(copyBytes.count), modified: CloudFolderDisk.modified(folder, path) ?? t))
+                try CloudFolderDisk.write(roots, path, bytes: copyBytes, expecting: localHash, cloneFrom: cloneSource(copyFile: path))
+                if let at = try await engine.currentVersion(sourceId: profile.sourceId, relative: path)?.createdAt { CloudFolderDisk.setModified(roots, path, at) }
+                try setBase(path, Base(hash: copyHash, bytes: Int64(copyBytes.count), modified: CloudFolderDisk.modified(roots, path) ?? t))
                 return
             }
             // Both changed (or a file of the same name was here before he joined: rule J, his first copy loses and is kept).
-            let modified = CloudFolderDisk.modified(folder, path) ?? t
+            let modified = CloudFolderDisk.modified(roots, path) ?? t
             if try await bothChanged(path, local: local, localHash: localHash, modified: modified, engine: engine) {
                 while try await engine.reconcile(sourceId: profile.sourceId, paths: [path], limit: 16).remaining {}
             }
@@ -709,9 +752,9 @@ public actor BackendCloudFolder {
         for row in try state().rows("SELECT path FROM folder_arrived") {
             let path = row.text(0)
             guard try deleteState().mark(at: path) == nil,
-                  case .absent = CloudFolderDisk.read(folder, path),
+                  case .absent = CloudFolderDisk.read(roots, path),
                   case .file(let bytes) = CloudFolderDisk.read(copyRoot, path) else { continue }
-            try CloudFolderDisk.write(folder, path, bytes: bytes, expecting: nil)
+            try CloudFolderDisk.write(roots, path, bytes: bytes, expecting: nil)
             try setBase(path, Base(hash: BackendCloudBrainMemoryHash.bytes(bytes), bytes: Int64(bytes.count), modified: now()))
         }
         await retryRemovalHeads(engine: engine)
@@ -749,15 +792,15 @@ public actor BackendCloudFolder {
         let item = itemKey(path), t = now()
         do {
             guard let binned = try keeper().bin(itemKey: item), let bytes = keeper().content(kind: profile.keeperKind, sha256: binned.sha256), folderPresent() else { leave(); return false }
-            switch CloudFolderDisk.read(folder, path) {
+            switch CloudFolderDisk.read(roots, path) {
             case .blocked: leave(); return false
-            case .absent: try CloudFolderDisk.write(folder, path, bytes: bytes, expecting: nil)
+            case .absent: try CloudFolderDisk.write(roots, path, bytes: bytes, expecting: nil)
             case .file(let there):
                 let hash = BackendCloudBrainMemoryHash.bytes(there)
                 if hash != binned.sha256 {
                     // The file Put back displaces is his: kept under its own key for its full 30 days.
                     try keepMine(path, at: t, content: there, now: t)
-                    try CloudFolderDisk.write(folder, path, bytes: bytes, expecting: hash)
+                    try CloudFolderDisk.write(roots, path, bytes: bytes, expecting: hash)
                 }
             }
             try deleteState().clearMark(at: path)
@@ -888,10 +931,11 @@ public actor BackendCloudFolder {
         do {
             try? fm.removeItem(at: staging)
             try fm.createDirectory(at: staging, withIntermediateDirectories: true)
-            for path in CloudFolderWalk.run(folder).files.keys {
+            for path in CloudFolderWalk.run(roots, kind: profile).files.keys {
                 let to = staging.appendingPathComponent(path)
                 try fm.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try fm.copyItem(at: folder.appendingPathComponent(path), to: to)
+                guard let from = CloudFolderDisk.url(roots, path) else { continue }
+                try fm.copyItem(at: from, to: to)
             }
             try fm.moveItem(at: staging, to: target)
         } catch {
@@ -935,20 +979,20 @@ public actor BackendCloudFolder {
     public func storeWrite(_ relative: String, bytes: Data, modified: Int64?, expecting: String?) async throws {
         await enter()
         defer { leave() }
-        guard profile.refusal(relative) == nil, Int64(bytes.count) <= profile.maximumFileBytes, !CloudFolderDisk.caseClash(folder, relative) else {
+        guard profile.refusal(relative) == nil, Int64(bytes.count) <= profile.maximumFileBytes, !CloudFolderDisk.caseClash(roots, relative) else {
             throw CloudFailure.unsafeConfiguration
         }
         guard folderPresent(), try control("folderMissing") != "1", try deleteState().mark(at: relative) == nil else { throw CloudFailure.unavailable }
-        if case .absent = CloudFolderDisk.read(folder, relative), try base(relative) != nil { throw CloudFailure.unavailable }
-        try CloudFolderDisk.write(folder, relative, bytes: bytes, expecting: expecting)
-        if let modified { CloudFolderDisk.setModified(folder, relative, modified) }
+        if case .absent = CloudFolderDisk.read(roots, relative), try base(relative) != nil { throw CloudFailure.unavailable }
+        try CloudFolderDisk.write(roots, relative, bytes: bytes, expecting: expecting)
+        if let modified { CloudFolderDisk.setModified(roots, relative, modified) }
         dirty = true
     }
     /// Page remove is explicit Everywhere. Tools pass their AI actor through deleteItems instead.
     public func storeRemove(_ relative: String, expecting: String) async throws {
         let actor = await personActor()
         await enter(); defer { leave() }
-        guard case .file(let bytes) = CloudFolderDisk.read(folder, relative), BackendCloudBrainMemoryHash.bytes(bytes) == expecting else {
+        guard case .file(let bytes) = CloudFolderDisk.read(roots, relative), BackendCloudBrainMemoryHash.bytes(bytes) == expecting else {
             throw CloudFailure.versionChanged
         }
         try await removeItem(relative, intent: actor.intent(place: relative, scope: .everywhere), engine: core())
@@ -1115,7 +1159,7 @@ extension BackendCloudFolder: CloudDomainAdapter {
             if try deleteState().mark(at: item.relative)?.mark == .onlyOnThisMac,
                try await engine.currentVersion(sourceId: profile.sourceId, relative: item.relative)?.version == item.version {
                 // A new put on top of a Cloud removal reunites every device. Preserve this device's differing bytes.
-                if case .file(let local) = CloudFolderDisk.read(folder, item.relative), BackendCloudBrainMemoryHash.bytes(local) != item.hash {
+                if case .file(let local) = CloudFolderDisk.read(roots, item.relative), BackendCloudBrainMemoryHash.bytes(local) != item.hash {
                     try keepMine(item.relative, at: now(), content: local, now: now())
                     try setBase(item.relative, Base(hash: BackendCloudBrainMemoryHash.bytes(local), bytes: Int64(local.count), modified: now()))
                 }
@@ -1164,7 +1208,7 @@ extension BackendCloudFolder: CloudDomainAdapter {
     /// "plan (from MacBook Pro).md" (once: the same bytes already beside it are not written again). True when handled.
     func keptBesideByCapitals(_ item: Incoming, engine: BackendCloudBrainFiles) async throws -> Bool {
         guard try await engine.currentVersion(sourceId: profile.sourceId, relative: item.relative) == nil,
-              CloudFolderDisk.caseClash(copyRoot, item.relative) || CloudFolderDisk.caseClash(folder, item.relative) else { return false }
+              CloudFolderDisk.caseClash(copyRoot, item.relative) || CloudFolderDisk.caseClash(roots, item.relative) else { return false }
         guard let bytes = await engine.retainedBytes(item.hash), folderPresent() else { return true }
         let mac = await macName(item.operation.originDevice.lowercased()) ?? "another device"
         let parent = (item.relative as NSString).deletingLastPathComponent, name = Self.name(item.relative)
@@ -1172,14 +1216,14 @@ extension BackendCloudFolder: CloudDomainAdapter {
             let besideName = CloudFolderFormat.besideName(name, mac: mac, number: number)
             let beside = parent.isEmpty ? besideName : parent + "/" + besideName
             guard profile.refusal(beside) == nil else { return true }
-            switch CloudFolderDisk.read(folder, beside) {
+            switch CloudFolderDisk.read(roots, beside) {
             case .file(let there):
                 if BackendCloudBrainMemoryHash.bytes(there) == item.hash { return true }
                 continue
             case .blocked: continue
             case .absent:
-                if CloudFolderDisk.caseClash(folder, beside) { continue }
-                try CloudFolderDisk.write(folder, beside, bytes: bytes, expecting: nil)
+                if CloudFolderDisk.caseClash(roots, beside) { continue }
+                try CloudFolderDisk.write(roots, beside, bytes: bytes, expecting: nil)
                 dirty = true
                 return true
             }
@@ -1206,7 +1250,9 @@ extension BackendCloudFolder: CloudDeleteOwning {
     }
     public func localMark(path: String) throws -> CloudLocalMark? { try deleteState().mark(at: path)?.mark }
     func rootUnavailable() throws -> Bool {
-        let walk = CloudFolderWalk.run(folder)
+        // Project folders: a whole walk per arrival would be costly; a project not on this Mac simply waits (`locate`).
+        if roots.isMany { return roots.all.isEmpty }
+        let walk = CloudFolderWalk.run(roots, kind: profile)
         let hadFiles = try state().first("SELECT 1 FROM folder_base LIMIT 1") != nil
         return !walk.present || !walk.reliable || (walk.files.isEmpty && hadFiles)
     }
@@ -1282,13 +1328,13 @@ extension BackendCloudFolder: CloudDeleteOwning {
     /// crash past the Bin step leaves an intent, and only such an intent is resumed after a restart.
     /// `wasHere`: his file was in the folder when the act began (false for a removal an AI already made in the folder).
     func removeItem(_ path: String, intent: CloudDeleteIntent, engine: BackendCloudBrainFiles, wasHere: Bool = true) async throws {
-        guard profile.refusal(path) == nil, !CloudFolderDisk.caseClash(folder, path), !CloudFolderDisk.caseClash(copyRoot, path),
+        guard profile.refusal(path) == nil, !CloudFolderDisk.caseClash(roots, path), !CloudFolderDisk.caseClash(copyRoot, path),
               try hasReadCloud(), await everyMacUnderstands() else { throw CloudFailure.unavailable }
         if intent.scope == .cloud, !(await deleteRuleOpen()) { throw NativeRPCError.invalidArguments(CloudDeleteWords.cloudNeedsUpdatedMacs) }
         try CloudFileDeleteRecords.forgetCleared(path, in: state())
         try deleteState().putIntent(intent)
         do {
-            if intent.scope == .everywhere, case .file(let local) = CloudFolderDisk.read(folder, path) {
+            if intent.scope == .everywhere, case .file(let local) = CloudFolderDisk.read(roots, path) {
                 try deleteState().clearMark(at: path)
                 var copyHash: String?
                 if case .file(let copy) = CloudFolderDisk.read(copyRoot, path) { copyHash = BackendCloudBrainMemoryHash.bytes(copy) }
@@ -1297,7 +1343,7 @@ extension BackendCloudFolder: CloudDeleteOwning {
                     if case .file(let copy) = CloudFolderDisk.read(copyRoot, path) {
                         try keepVersion(itemKey: itemKey(path), name: Self.name(path), place: Self.place(path), at: now(), device: deviceId, content: copy, now: now())
                     }
-                    try CloudFolderDisk.write(copyRoot, path, bytes: local, expecting: copyHash)
+                    try CloudFolderDisk.write(copyRoot, path, bytes: local, expecting: copyHash, cloneFrom: cloneSource(folderFile: path))
                 }
                 while try await engine.reconcile(sourceId: profile.sourceId, paths: [path], limit: 4096).remaining {}
             }
@@ -1324,10 +1370,10 @@ extension BackendCloudFolder: CloudDeleteOwning {
             if let binned, try await engine.currentVersion(sourceId: profile.sourceId, relative: path) != nil {
                 let bytes = keeper().content(kind: profile.keeperKind, sha256: binned)
                 if case .absent = CloudFolderDisk.read(copyRoot, path), let bytes { try CloudFolderDisk.write(copyRoot, path, bytes: bytes, expecting: nil) }
-                if scope == .everywhere, restoreLocal, case .absent = CloudFolderDisk.read(folder, path), let bytes {
-                    try CloudFolderDisk.write(folder, path, bytes: bytes, expecting: nil)
+                if scope == .everywhere, restoreLocal, case .absent = CloudFolderDisk.read(roots, path), let bytes {
+                    try CloudFolderDisk.write(roots, path, bytes: bytes, expecting: nil)
                 }
-                if case .file = CloudFolderDisk.read(folder, path), try keeper().bin(itemKey: itemKey(path))?.sha256 == binned {
+                if case .file = CloudFolderDisk.read(roots, path), try keeper().bin(itemKey: itemKey(path))?.sha256 == binned {
                     try takeFromBin(itemKey(path), now: now())
                     try state().run("DELETE FROM file_delete_bin WHERE place=?", [.text(path)])
                 }
@@ -1353,7 +1399,7 @@ extension BackendCloudFolder: CloudDeleteOwning {
                 if let retained { try CloudFolderDisk.write(copyRoot, path, bytes: retained, expecting: nil) }
             }
             guard let bytes = retained, BackendCloudBrainMemoryHash.bytes(bytes) == current.rawHash else { throw CloudFailure.unavailable }
-            let local = CloudFolderDisk.read(folder, path)
+            let local = CloudFolderDisk.read(roots, path)
             if case .blocked = local { throw CloudFailure.unsafeConfiguration }
             if intent.scope == .everywhere, case .file(let data) = local, BackendCloudBrainMemoryHash.bytes(data) != current.rawHash { throw CloudFailure.versionChanged }
             guard try ensureSafetyCopy() else { throw CloudFailure.unavailable }
@@ -1365,7 +1411,7 @@ extension BackendCloudFolder: CloudDeleteOwning {
             try state().run("INSERT OR REPLACE INTO file_delete_binned(place,hash) VALUES (?,?)", [.text(path), .text(current.rawHash)])
             try crashPointForTests?("press:afterBin")
             if intent.scope == .everywhere, case .file(let data) = local {
-                try CloudFolderDisk.remove(folder, path, expecting: BackendCloudBrainMemoryHash.bytes(data))
+                try CloudFolderDisk.remove(roots, path, expecting: BackendCloudBrainMemoryHash.bytes(data))
             }
             // The pump can wake DURING reconcile. Persist attribution first, then bind its exact journal id.
             if modern {
@@ -1391,7 +1437,7 @@ extension BackendCloudFolder: CloudDeleteOwning {
             try await rememberRemovalMetadata(path, intent: intent, engine: engine)
             try setBase(path, nil)
             // Point 9: "Only on this Mac" only where this Mac has the file.
-            if intent.scope == .cloud, case .file = CloudFolderDisk.read(folder, path) {
+            if intent.scope == .cloud, case .file = CloudFolderDisk.read(roots, path) {
                 try deleteState().putMark(.init(place: path, mark: .onlyOnThisMac, at: intent.at))
             } else { try deleteState().clearMark(at: path) }
             try deleteState().clearIntent(at: path)
@@ -1445,13 +1491,13 @@ extension BackendCloudFolder: CloudDeleteOwning {
                 do {
                     if try await engine.currentVersion(sourceId: profile.sourceId, relative: path) == nil {
                         var bytes: Data?, here = false
-                        if case .file(let local) = CloudFolderDisk.read(folder, path) { bytes = local; here = true }
+                        if case .file(let local) = CloudFolderDisk.read(roots, path) { bytes = local; here = true }
                         else if let kept = try keeper().bin(itemKey: itemKey(path)) { bytes = keeper().content(kind: profile.keeperKind, sha256: kept.sha256) }
                         if let bytes {
                             if case .absent = CloudFolderDisk.read(copyRoot, path) { try CloudFolderDisk.write(copyRoot, path, bytes: bytes, expecting: nil) }
                             await engine.setNextParents(sourceId: profile.sourceId, relative: path, parents: BackendCloudBrainFiles.strings(row.text(2)))
                             try setBase(path, Base(hash: BackendCloudBrainMemoryHash.bytes(bytes), bytes: Int64(bytes.count),
-                                                   modified: CloudFolderDisk.modified(folder, path) ?? now()))
+                                                   modified: CloudFolderDisk.modified(roots, path) ?? now()))
                             // In the Cloud, not on this Mac when he has no file here; otherwise simply in sync.
                             if here { try deleteState().clearMark(at: path) }
                             else { try deleteState().putMark(.init(place: path, mark: .notOnThisMac, at: now())) }
@@ -1481,13 +1527,13 @@ extension BackendCloudFolder: CloudDeleteOwning {
             try CloudFileDeleteRecords.setRowError(path, nil, at: now(), in: state())
             try CloudFileDeleteRecords.forgetCleared(path, in: state())
             if to == .cloud {
-                guard case .file(let local) = CloudFolderDisk.read(folder, path) else { throw CloudFailure.unavailable }
+                guard case .file(let local) = CloudFolderDisk.read(roots, path) else { throw CloudFailure.unavailable }
                 // A Cloud-scope removal archived the copy: fresh capture inherits that removal's version.
                 if case .file(let old) = CloudFolderDisk.read(copyRoot, path) {
                     try CloudFolderDisk.remove(copyRoot, path, expecting: BackendCloudBrainMemoryHash.bytes(old))
                 }
-                try CloudFolderDisk.write(copyRoot, path, bytes: local, expecting: nil)
-                try setBase(path, Base(hash: BackendCloudBrainMemoryHash.bytes(local), bytes: Int64(local.count), modified: CloudFolderDisk.modified(folder, path) ?? now()))
+                try CloudFolderDisk.write(copyRoot, path, bytes: local, expecting: nil, cloneFrom: cloneSource(folderFile: path))
+                try setBase(path, Base(hash: BackendCloudBrainMemoryHash.bytes(local), bytes: Int64(local.count), modified: CloudFolderDisk.modified(roots, path) ?? now()))
                 let before = try await engine.currentVersion(sourceId: profile.sourceId, relative: path)?.version
                 while try await engine.reconcile(sourceId: profile.sourceId, paths: [path], limit: 4096).remaining {}
                 if try await engine.currentVersion(sourceId: profile.sourceId, relative: path)?.version == before {
@@ -1496,7 +1542,7 @@ extension BackendCloudFolder: CloudDeleteOwning {
                 try deleteState().clearMark(at: path)
             } else {
                 guard case .file(let bytes) = CloudFolderDisk.read(copyRoot, path) else { throw CloudFailure.unavailable }
-                let local = CloudFolderDisk.read(folder, path)
+                let local = CloudFolderDisk.read(roots, path)
                 var hash: String?
                 if case .blocked = local { throw CloudFailure.unsafeConfiguration }
                 if case .file(let held) = local {
@@ -1504,9 +1550,9 @@ extension BackendCloudFolder: CloudDeleteOwning {
                     try keepMine(path, at: now(), content: held, now: now())
                     hash = BackendCloudBrainMemoryHash.bytes(held)
                 }
-                try CloudFolderDisk.write(folder, path, bytes: bytes, expecting: hash)
+                try CloudFolderDisk.write(roots, path, bytes: bytes, expecting: hash)
                 try deleteState().clearMark(at: path)
-                try setBase(path, Base(hash: BackendCloudBrainMemoryHash.bytes(bytes), bytes: Int64(bytes.count), modified: CloudFolderDisk.modified(folder, path) ?? now()))
+                try setBase(path, Base(hash: BackendCloudBrainMemoryHash.bytes(bytes), bytes: Int64(bytes.count), modified: CloudFolderDisk.modified(roots, path) ?? now()))
             }
             try takeFromBin(itemKey(path), now: now())
             restored.append(item)
@@ -1584,7 +1630,7 @@ extension BackendCloudFolder: CloudDeleteOwning {
         guard head.parents.contains(current.version) else { return }
         let travel: CloudDeleteTravelRemoval
         do { travel = try head.travel } catch { return try dropHead(head, why: "it could not be read") }
-        let local = CloudFolderDisk.read(folder, path)
+        let local = CloudFolderDisk.read(roots, path)
         if case .blocked = local { return }
         var cloudScope = false
         if case .intent(let intent) = travel, intent.scope == .cloud { cloudScope = true }
@@ -1617,7 +1663,7 @@ extension BackendCloudFolder: CloudDeleteOwning {
             try keeper().binPut(kind: profile.keeperKind, itemKey: itemKey(path), name: Self.name(path), place: Self.place(path), path: path,
                 removedAt: head.at, device: head.mac, content: bytes, shown: profile.listed(path), now: now())
             try CloudFileDeleteRecords.rememberBin(binGroup, place: path, in: state())
-            if case .file = local { try CloudFolderDisk.remove(folder, path, expecting: current.rawHash) }
+            if case .file = local { try CloudFolderDisk.remove(roots, path, expecting: current.rawHash) }
             try deleteState().clearMark(at: path)
         }
         // MUST 7: the private copy's removal and the engine's "removed" are one step. The marker below is read before
@@ -1691,7 +1737,7 @@ extension BackendCloudFolder: CloudDeleteOwning {
                 if let undo = try CloudFileDeleteRecords.undoPending(path, in: state()) {
                     await abandonRemoval(path, scope: undo.scope, engine: engine, restoreLocal: undo.restore); continue
                 }
-                if case .blocked = CloudFolderDisk.read(folder, path) { continue }
+                if case .blocked = CloudFolderDisk.read(roots, path) { continue }
                 guard profile.refusal(path) == nil, let binned = try CloudFileDeleteRecords.binned(place: path, in: state()) else {
                     try deleteState().clearIntent(at: path)
                     CloudSyncDiagnostics.shared.info("\(profile.label) delete rule: an unfinished delete of \(Self.name(path)) that never reached the Bin was dropped; nothing was removed")
@@ -1699,7 +1745,7 @@ extension BackendCloudFolder: CloudDeleteOwning {
                 }
                 if let current = try await engine.currentVersion(sourceId: profile.sourceId, relative: path) {
                     var changed = current.rawHash != binned
-                    if intent.scope == .everywhere, case .file(let local) = CloudFolderDisk.read(folder, path), BackendCloudBrainMemoryHash.bytes(local) != binned { changed = true }
+                    if intent.scope == .everywhere, case .file(let local) = CloudFolderDisk.read(roots, path), BackendCloudBrainMemoryHash.bytes(local) != binned { changed = true }
                     if case .file(let copy) = CloudFolderDisk.read(copyRoot, path), BackendCloudBrainMemoryHash.bytes(copy) != binned { changed = true }
                     if changed {
                         await abandonRemoval(path, scope: intent.scope, engine: engine, restoreLocal: false)
@@ -1737,7 +1783,7 @@ extension BackendCloudFolder: CloudDeleteOwning {
         let hasHeld = try exists("folder_held"), hasConfirmed = try exists("folder_confirmed")
         var intended = 0, marked = 0, held = 0, previouslyGone = 0
         let oldBinCount = try keeper().binAll(kind: profile.keeperKind).count
-        let migrationWalk = CloudFolderWalk.run(folder)
+        let migrationWalk = CloudFolderWalk.run(roots, kind: profile)
         let mayMark = migrationWalk.present && migrationWalk.reliable && !migrationWalk.files.isEmpty
         // E1, intended: the old build's Remove press writes `folder_confirmed` (its storeRemove unlinked the file and the
         // next look would have sent it). Sent as Everywhere when the file is still gone and the copy still holds the
@@ -1746,7 +1792,7 @@ extension BackendCloudFolder: CloudDeleteOwning {
             for row in try db.rows("SELECT path FROM folder_confirmed") {
                 let path = row.text(0)
                 do {
-                    if profile.refusal(path) == nil, case .absent = CloudFolderDisk.read(folder, path), let known = try base(path),
+                    if profile.refusal(path) == nil, case .absent = CloudFolderDisk.read(roots, path), let known = try base(path),
                        case .file(let copy) = CloudFolderDisk.read(copyRoot, path), BackendCloudBrainMemoryHash.bytes(copy) == known.hash {
                         let actor = await personActor()
                         try await removeItem(path, intent: actor.intent(place: path, scope: .everywhere), engine: engine, wasHere: false)
@@ -1762,7 +1808,7 @@ extension BackendCloudFolder: CloudDeleteOwning {
         // E1, by hand: every other queued absence is a local mark.
         for row in try db.rows("SELECT path FROM folder_gone") {
             let path = row.text(0)
-            if mayMark, case .absent = CloudFolderDisk.read(folder, path), try deleteState().mark(at: path) == nil {
+            if mayMark, case .absent = CloudFolderDisk.read(roots, path), try deleteState().mark(at: path) == nil {
                 try deleteState().putMark(.init(place: path, mark: .notOnThisMac, at: now())); marked += 1
             }
             try db.run("DELETE FROM folder_gone WHERE path=?", [.text(path)])
@@ -1770,7 +1816,7 @@ extension BackendCloudFolder: CloudDeleteOwning {
         if hasHeld {
             for row in try db.rows("SELECT path,version,parents,created_at,device FROM folder_held") {
                 let path = row.text(0)
-                if case .file(let bytes) = CloudFolderDisk.read(folder, path) {
+                if case .file(let bytes) = CloudFolderDisk.read(roots, path) {
                     var expecting: String?
                     if case .file(let copy) = CloudFolderDisk.read(copyRoot, path) { expecting = BackendCloudBrainMemoryHash.bytes(copy) }
                     try CloudFolderDisk.write(copyRoot, path, bytes: bytes, expecting: expecting)
@@ -1786,11 +1832,11 @@ extension BackendCloudFolder: CloudDeleteOwning {
             try crashPointForTests?("migration:afterHeld")
         }
         // Root guard wins even during migration: an unavailable/empty root creates no inferred marks.
-        let walk = CloudFolderWalk.run(folder)
+        let walk = CloudFolderWalk.run(roots, kind: profile)
         if walk.present, walk.reliable, !walk.files.isEmpty {
             for row in try db.rows("SELECT path FROM folder_base") {
                 let path = row.text(0)
-                if case .absent = CloudFolderDisk.read(folder, path), try deleteState().mark(at: path) == nil,
+                if case .absent = CloudFolderDisk.read(roots, path), try deleteState().mark(at: path) == nil,
                    try deleteState().intent(at: path) == nil {
                     try deleteState().putMark(.init(place: path, mark: .notOnThisMac, at: now())); previouslyGone += 1
                 }

@@ -692,7 +692,7 @@ extension BackendCloudBootFiles: CloudDomainAdapter {
     /// THE ONLY PLACE a file from another device is written into a folder the person owns.
     /// The destination is the place's root plus a path the rules accept, walked without following any link;
     /// a new file is created only where nothing is; an existing one is replaced only if it still holds exactly
-    /// `replacing`. Anything else stops the write and is listed. Nothing is run and no executable bit is set.
+    /// `replacing`. Anything else stops the write and is listed. Nothing is run; a script (`#!`) is written runnable.
     func write(_ place: BackendCloudBootFilesPlace, _ relative: String, bytes: Data, hash: String, replacing: String?, origin: String, how: String,
                replacedAt: Int64? = nil, arrivedAt: Int64? = nil) throws {
         func stopped(_ reason: String) throws {
@@ -703,6 +703,11 @@ extension BackendCloudBootFiles: CloudDomainAdapter {
         guard CloudBootFilesRules.refusal(kind: place.kind, relative: relative) == nil, bytes.count <= CloudBootFilesFormat.maximumFileBytes,
               CloudBootFilesRules.isText(bytes), BackendCloudBrainMemoryHash.bytes(bytes) == hash else {
             try stopped("not-a-boot-file")
+            return
+        }
+        // A setup file that holds a password or key is never written from plain records (the sender holds it back too).
+        if BackendCloudBootFilesDisk.setupHoldsSecret(kind: place.kind, relative: relative, bytes: bytes) {
+            try stopped("holds-secret")
             return
         }
         // The bytes about to be replaced are kept, so "Show previous version" can read them (security review M4).
@@ -770,7 +775,8 @@ extension BackendCloudBootFiles: CloudDomainAdapter {
             guard let item = try find(id), item.canAccept, let place = places[item.sourceId] else { continue }
             let bytes = try await retained(engine, hash: item.hash)
             guard BackendCloudBrainMemoryHash.bytes(bytes) == item.hash, CloudBootFilesRules.refusal(kind: place.kind, relative: item.relative) == nil,
-                  bytes.count <= CloudBootFilesFormat.maximumFileBytes, CloudBootFilesRules.isText(bytes) else { continue }
+                  bytes.count <= CloudBootFilesFormat.maximumFileBytes, CloudBootFilesRules.isText(bytes),
+                  !BackendCloudBootFilesDisk.setupHoldsSecret(kind: place.kind, relative: item.relative, bytes: bytes) else { continue }
             let previous: Data?
             var replaced: String?
             switch BackendCloudBootFilesDisk.read(root: place.root, relative: item.relative) {

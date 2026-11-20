@@ -291,8 +291,16 @@ public actor BackendRemoteHost {
         var pipeline = Pipeline()
         /// 13 Nov (phone speed): this connection already tried a resume hello (one try, right or wrong).
         var resumeTried = false
+        /// 19 Nov free plan: this connection was served a paid kind (a browser, screen or tunnel stream may be open).
+        var usedPaid = false
     }
     private let screenOnly: Bool
+    /// 19 Nov free plan: this computer's own account is free with the paywall on, so another device gets sessions only
+    /// (`BackendRemoteFreePlan`). Read per request from the app's one subscription answer; false while that answer is
+    /// not known, and always false in the session host's sign-in screen helper, which never reads it.
+    private var limitsToSessions: @Sendable () -> Bool = { CloudSubscriptionOffers.shared.limitsRemoteToSessions }
+    /// Tests hand in their own answer.
+    public func setFreePlanCheck(_ check: @escaping @Sendable () -> Bool) { limitsToSessions = check }
 
     public init(trust: BackendRemoteTrustStore, manager: BackendPTYManager, state: NativeStateStore, home: String,
                 hostName: String, appVersion: String, privateRoots: [String], operations: BackendRemoteHostOperations = .init(),
@@ -770,6 +778,12 @@ public actor BackendRemoteHost {
             if viaLink {
                 // §11.4: a link-only client's late candidates (and its end) may come on the link itself.
                 guard row.link.clientOnly, message.type == "link.peer" else { return (Task {}, true) }
+            } else if message.type == "link.proven" {
+                guard row.link.prove, let proofID = message["id"].string,
+                      row.link.token != nil, row.link.proofID == proofID else { return (Task {}, true) }
+                // Like the answer/marker below: record the fact in relay arrival order, before the next marker.
+                row.link.peerProven = true; row.link.proof?.peer = true; live[id] = row
+                return (Task { [weak self] in await self?.linkPeerProven(id, proofID: proofID) }, true)
             } else if message.type == "link.moved" { linkClientMoved(id); return (Task {}, true) }
             else if message.type == "link.peer", message["op"].string == "answer", row.link.token != nil {
                 row.link.answered = true; live[id] = row   // then on to the link lane as before
@@ -941,6 +955,15 @@ public actor BackendRemoteHost {
         }
         // The link's own signalling (stream step 2): part of the connection, like ping, at every access level.
         if message.type == "link.peer" { _ = context; await handleLinkPeer(id, message); return }
+        // 19 Nov free plan (BackendRemoteFreePlan): a free account's devices get this computer's sessions only. Asked
+        // before any other rule, so a paid kind is never half-answered (a Tasks read is not remembered for pushes).
+        let paidKind = BackendRemoteFreePlan.isPaid(message.type, panel: message["panel"].string)
+        if paidKind, limitsToSessions() {
+            await refuseFreePlan(id)
+            return
+        }
+        // Served while paid: should the plan become free, this connection's streams end (`freePlanBegan`).
+        if paidKind { live[id]?.usedPaid = true }
         do { try await trust.requirePhoneAccess(context.deviceID, message: message.type, panel: message["panel"].string) }
         catch { await refuse(id, code: "unauthorized", message: "This device's current host access does not permit that action."); return }
         switch message.type {
@@ -1184,17 +1207,19 @@ public actor BackendRemoteHost {
         let link = linkWanted(id, access: context.phoneAccess)
         let only = row.wire.channelBinding != nil && live[id]?.capabilities.contains(Self.linkOnlyCapability) == true
         let platform = (live[id]?.platform ?? "").lowercased()
-        let relayFirst = link && only && linkTurnOnRelay && ["ios", "ipados", "android"].contains { platform.hasPrefix($0) }
+        let prove = link && live[id]?.capabilities.contains(Self.linkKeepCapability) == true && live[id]?.capabilities.contains(Self.linkProveCapability) == true
+        let relayFirst = prove || link && only && linkTurnOnRelay && ["ios", "ipados", "android"].contains { platform.hasPrefix($0) }
         // link.keep: only with a link, and only when the client claimed it.
         let keep = link && live[id]?.capabilities.contains(Self.linkKeepCapability) == true
         if let at = fields.firstIndex(where: { $0.key == "capabilities" }), link || only {
-            let extra = (link ? [Self.linkCapability] : []) + (only && !relayFirst ? [Self.linkOnlyCapability] : []) + (keep ? [Self.linkKeepCapability] : [])
+            let extra = (link ? [Self.linkCapability] : []) + (only && !relayFirst ? [Self.linkOnlyCapability] : []) + (keep ? [Self.linkKeepCapability] : []) + (prove ? [Self.linkProveCapability] : [])
             fields[at] = .init("capabilities", .array(capabilities(context).map(NativeRPCValue.string) + extra.map(NativeRPCValue.string)))
         }
         // Set the writer's terms before the welcome: dc2 phones take relay data until the Mac's marker.
         let phoneOrWeb = row.wire.channelBinding != nil && (live[id]?.capabilities.contains(Self.linkCapability) == true || Self.linkClientPlatform(live[id]?.platform))
         if link {
-            live[id]?.link.clientOnly = only
+            live[id]?.link.clientOnly = only && !prove
+            live[id]?.link.prove = prove
             live[id]?.link.relayFirst = relayFirst
             live[id]?.link.keep = keep; row.link.path.keeps = keep
             row.link.path.set(relayFirst ? .wire : .link(clientOnly: only))
@@ -1564,6 +1589,7 @@ public actor BackendRemoteHost {
     /// `pushSettleMs` whose control channel holds at most `pushMostQueued` bytes.
     static func pushMayGo(link: BackendRemoteLinkState, now: Double) -> Bool {
         guard link.token != nil else { return true }
+        if link.prove, !link.path.hasMoved { return true }
         if link.open, link.keptOnRelay { return true }
         guard link.open, link.path.hasMoved, now - link.openedAt >= pushSettleMs else { return false }
         // What waits in the link's outbox counts as well as the channel's own queue (the outbox keeps that one low).
@@ -1663,6 +1689,28 @@ public actor BackendRemoteHost {
             return
         }
         try await row.writer.send(text)
+    }
+    /// 19 Nov free plan (Decker, 20 Nov: "when the plan becomes free (a lapse), close any open browser or screen stream
+    /// at the next plan read"): every connection that was served a paid kind ends whole, which ends its browser, screen
+    /// and tunnel streams the way any closed connection does (the features' connection-closed hooks). The device stays
+    /// approved and reconnects at once; its sessions carry on and paid kinds are refused from then on. Returns how many.
+    @discardableResult
+    public func freePlanBegan() async -> Int {
+        let ids = live.filter { $0.value.usedPaid }.map(\.key)
+        if !ids.isEmpty { BackendRemoteRelayClient.note("free plan: \(ids.count) connection(s) with paid streams closed") }
+        for id in ids { await disconnect(id, code: 1001, reason: BackendRemoteFreePlan.words) }
+        return ids.count
+    }
+    /// The free plan's one refusal (`BackendRemoteFreePlan.refusal`), with the request's rid. Its frame is fixed and
+    /// valid; should it ever fail to build, the device still gets a refusal it knows, never silence.
+    private func refuseFreePlan(_ id: UUID) async {
+        guard let frame = try? BackendRemoteFreePlan.refusal() else {
+            BackendRemoteRelayClient.note("free plan: the refusal frame could not be built; sent the plain refusal")
+            await refuse(id, code: BackendRemoteFreePlan.code, message: BackendRemoteFreePlan.words)
+            return
+        }
+        // Like every refusal here: a connection that closed meanwhile has no one left to tell.
+        try? await send(id, frame)
     }
     private func unknown(_ id: UUID, _ session: String) async { await refuse(id, code: "unknown-session", message: BackendRemoteServeSessionPolicy.noSuchSession(session)) }
     private func unavailable(_ id: UUID, _ message: String) async { await refuse(id, code: "unavailable", message: message) }

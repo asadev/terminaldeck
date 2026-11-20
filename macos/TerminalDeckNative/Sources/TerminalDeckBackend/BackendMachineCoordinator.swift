@@ -37,6 +37,10 @@ public actor BackendMachineCoordinator {
     private var reachReaper: Task<Void, Never>?
     private var chatWatches: [String: Set<String>] = [:]
     static let reachIdleMs: Double = 600_000
+    /// 19 Nov free plan (Decker, 20 Nov): a free account lists its other computers' sessions from these links (its Cloud
+    /// rows are refused), so while it is free they are kept instead of being let go after `reachIdleMs`.
+    private var keepReach = false
+    public func setKeepReach(_ keep: Bool) { keepReach = keep }
     public init(store: BackendMachineStore, registry: NativeChannelRegistry, localName: String, relayURL: String,
                 uploadAuthorize: @escaping BackendUploadSend.Authorize, ownPorts: BackendDevOwnPorts, windows: BackendMachineWindowServices? = nil,
                 pairingBlocked: @escaping @Sendable () async -> String? = { nil }, tunnelsDropped: @escaping @Sendable (String) async -> Void = { _ in }) {
@@ -175,6 +179,7 @@ public actor BackendMachineCoordinator {
     }
     private func reapReach() async {
         let now = Date().timeIntervalSince1970 * 1000
+        if keepReach { for id in Array(reachUsed.keys) { reachUsed[id] = now }; return }
         var dropped = false
         for (id, used) in reachUsed where now - used >= Self.reachIdleMs {
             // A live terminal or a watched chat shown here keeps it.

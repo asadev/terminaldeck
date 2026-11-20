@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import SwiftUI
@@ -21,6 +22,29 @@ import TerminalDeckNativeCore
     @ObservationIgnored private var dialing: Set<String> = []
     @ObservationIgnored private var ready = false
     @ObservationIgnored private var epoch = UUID()
+    /// 19 Nov free plan (Decker, 20 Nov: "He started in Windows. He can see and control from Mac"): a free account's
+    /// side panel lists its other computers' sessions from live links (its Cloud rows are refused), so every computer
+    /// that is on is dialled and its link kept while the account is free.
+    @ObservationIgnored private(set) var keepsAll = false
+    @ObservationIgnored private var activeWatch: NSObjectProtocol?
+
+    init() {
+        keepsAll = CloudSubscriptionOffers.shared.limitsRemoteToSessions
+        if keepsAll { wanted.insert("") }
+        CloudSubscriptionOffers.shared.watchRemoteLimit(owner: "reach-live") { limited in
+            Task { @MainActor in NativeReachLive.shared.freePlan(limited) }
+        }
+        // No timer: a computer switched on later is dialled when this app comes to the front again (20 s apart at most).
+        activeWatch = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { NativeReachLive.shared.becameActive() }
+        }
+    }
+    func freePlan(_ limited: Bool) {
+        keepsAll = limited
+        if limited { wanted.insert("") }
+        push()
+    }
+    private func becameActive() { if keepsAll { push() } }
 
     func signedIn(_ guest: BackendReachGuest) {
         epoch = UUID(); asked = [:]; dialing = []
@@ -28,7 +52,7 @@ import TerminalDeckNativeCore
     }
     func signedOut() {
         let old = guest
-        guest = nil; asked = [:]; dialing = []; wanted = []; problem = nil; epoch = UUID(); push()
+        guest = nil; asked = [:]; dialing = []; wanted = keepsAll ? [""] : []; problem = nil; epoch = UUID(); push()
         if let old { Task { await old.forget() } }
     }
     /// Called after the machine coordinator is open, not merely constructed.
@@ -38,10 +62,12 @@ import TerminalDeckNativeCore
 
     private func push() {
         guard let coordinator = NativeRemoteMacs.shared.coordinator else { return }
-        let guest = self.guest, epoch = self.epoch
+        let guest = self.guest, epoch = self.epoch, keep = keepsAll
+        if keep { NativeMachineLinks.shared.start() }
         Task {
             guard epoch == self.epoch else { return }
             await coordinator.setReachGuest(guest)
+            await coordinator.setKeepReach(keep)
             guard epoch == self.epoch, ready, guest != nil else { return }
             for name in wanted { dial(name, coordinator: coordinator) }
         }
@@ -73,6 +99,8 @@ import TerminalDeckNativeCore
             guard epoch == self.epoch, self.guest === guest else { return }
             dialing.remove(name)
             problem = refused ? BackendReachGuest.keyRefusedLine : failure
+            // A free account has no "Runs on" page to show this line: the log keeps it (no names of his, no keys).
+            if keepsAll, let line = problem { NativeCloudAccount.log("reach: other computers not reached: " + line) }
         }
     }
 }

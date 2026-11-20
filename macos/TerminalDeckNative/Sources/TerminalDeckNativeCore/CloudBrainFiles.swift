@@ -7,7 +7,7 @@ public enum CloudBrainFilesFormat {
     public static let inventoryRows = ["I08", "I09", "I20"]
     /// Lane L3 (14 Nov): rows that use the same file engine under a domain of their own (CLOUD-CONTRACTS-1114 section 5):
     /// I23 artifacts, I24 the Cloud folder. Not in `inventoryRows`: those are the `brain/files/*` rows.
-    public static let ownDomainRows: [String: String] = ["I23": "artifacts", "I24": "cloud-folder"]
+    public static let ownDomainRows: [String: String] = ["I23": "artifacts", "I24": "cloud-folder", "I26": "project-folders"]
     /// Every row the file engine may run.
     public static var engineRows: [String] { inventoryRows + ownDomainRows.keys.sorted() }
     public static let partBytes = CloudBrainMemoryFormat.partBytes

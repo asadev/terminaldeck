@@ -31,12 +31,52 @@ struct MacPayTests {
         let status = await f.account.state()
         #expect(status.phase == .signedIn)
         #expect(status.subscription.available)
-        for place in CloudPaidPlace.allCases { #expect(status.subscription.offers(place) == (state == .paid || state == .gift)) }
+        for place in CloudPaidPlace.allCases {
+            #expect(status.subscription.offers(place) == (state == .paid || state == .gift || CloudPaidPlace.freeAccountPlaces.contains(place)))
+        }
         #expect(try await f.identity.existing() != nil)
         let entries = try await BackendCloudAccountTools.registrations(service: f.account, now: 0, signin: { _ in })
         #expect(entries.contains { $0.0.id == "cloud.subscription" })
         #expect(entries.contains { $0.0.id == "cloud.sync" } == (state == .paid || state == .gift))
         if state == .none || state == .lapsed { #expect(await f.transport.stateCalls == 0) }
+        // 19 Nov free plan: every account's sign-in registers this Mac, so its other devices can reach it.
+        #expect(await f.transport.registrations == 1)
+    }
+    @Test func aFreeAccountRegistersThisMacForItsDevicesAndStartsNoCloudSync() async throws {
+        let f = try CloudAccountFixture.make()
+        try await f.server.setSubscription(.init(paywall: .on, state: .none, tier: .free, canBuyStorage: false))
+        _ = try await f.signin()
+        let status = await f.account.state()
+        #expect(status.phase == .signedIn)
+        #expect(status.subscription.limitsRemoteToSessions)
+        #expect(!status.subscription.allowsCloudServices)
+        #expect(await f.transport.registrations == 1, "the device record its phones and computers reach it by")
+        #expect(await f.server.registered != nil)
+        #expect(await f.transport.stateCalls == 0, "no Cloud status read")
+        #expect(await f.outbox.flushes == 0, "no sync engine asked for anything")
+        #expect(!(await f.outbox.paused))
+        #expect(try await f.identity.existing() != nil)
+        // Decker, 20 Nov: the Devices page lists his devices for a free account, read through the device door only.
+        #expect(status.devices.count == 1)
+        #expect(status.subscription.offers(.devices) && status.subscription.offers(.otherComputerSessions))
+        #expect(!status.subscription.offers(.remoteMachineChoices) && !status.subscription.offers(.phoneAndWebReach))
+        // A later status read is the device list again, never the Cloud status, and not more often than the recheck.
+        let calls = await f.transport.deviceCalls
+        try await f.account.refresh()
+        #expect(await f.transport.deviceCalls == calls + 1)
+        #expect(await f.transport.stateCalls == 0)
+        _ = await f.account.state()
+        _ = await f.account.state()
+        #expect(await f.transport.deviceCalls == calls + 1, "no read loop between rechecks")
+    }
+    @Test func paywallOffChangesNothingForAFreeTier() async throws {
+        let f = try CloudAccountFixture.make()
+        try await f.server.setSubscription(.init(paywall: .off, state: .none, tier: .free, canBuyStorage: false))
+        _ = try await f.signin()
+        let status = await f.account.state()
+        #expect(!status.subscription.limitsRemoteToSessions)
+        #expect(status.subscription.allowsCloudServices)
+        #expect(await f.transport.stateCalls >= 1, "Cloud as today")
     }
     @Test func lapseChangesOnlyOffersAndLeavesSyncSignInTrustAndPendingDataAlone() async throws {
         let f = try CloudAccountFixture.make()
