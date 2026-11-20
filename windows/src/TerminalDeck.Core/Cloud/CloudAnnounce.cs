@@ -30,6 +30,16 @@ public sealed class CloudAnnounce
   public static bool Fresh(string? raw, int format, long now) =>
     Parse(raw) is { } v && v.Format >= format && v.At <= now + AheadAllowed && now - v.At <= FreshFor;
 
+  /// The account's computers that the gates wait for, from its device list (lowercased ids): active devices that are
+  /// not removed and that hold the data, i.e. Macs and PCs. Phones and browsers never hold these kinds, so they never
+  /// hold travel back (the Mac's oneRuleAccountMacs / CloudDevice.isViewer: ios, android, web). A device with no platform
+  /// word counts, as before. 20 Nov: Windows counted every device, so a phone or a web sign-in kept project folders,
+  /// the Cloud folder and the other gated kinds from ever travelling.
+  public static IReadOnlyCollection<string> Computers(IEnumerable<CloudDeviceRow> rows) =>
+    rows.Where(d => d.Trust is not { Removed: true } && IsComputer(d.Platform)).Select(d => d.DeviceId.ToLowerInvariant()).ToArray();
+  public static bool IsComputer(string? platform) =>
+    platform?.Trim().ToLowerInvariant() is not ("ios" or "ipados" or "iphone" or "android" or "web" or "browser");
+
   private readonly IDeckMemoryCloudStore memory;
   private readonly Func<string?> deviceId;
   private readonly Func<long?> serviceNow;

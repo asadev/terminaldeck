@@ -4,7 +4,7 @@
     {
       "project": "tests\\TerminalDeck.Core.Tests\\TerminalDeck.Core.Tests.csproj",
       "names": [
-        "TerminalDeck.Core.Tests.Storage.AppDataRootTests"
+        "TerminalDeck.Core.Tests.Cloud.CloudDeleteRuleTests"
       ]
     }
   ]

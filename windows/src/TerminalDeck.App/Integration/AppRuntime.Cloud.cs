@@ -71,10 +71,11 @@ public sealed partial class AppRuntime
   /// The signed-in account's record owners (projects, agents): deletes made in the app go through them so they travel.
   public CloudRecordsForAccount? CloudRecords { get; private set; }
 
-  /// The account's computers for the announcements (lowercased device ids), null while the list is not known.
+  /// The account's computers for the announcements (lowercased device ids; Macs and PCs, never phones or browsers),
+  /// null while the list is not known.
   private IReadOnlyCollection<string>? CloudComputers() =>
     Cloud.Snapshot is { Phase: CloudPhase.SignedIn or CloudPhase.Paused, DeviceRows.Count: > 0 } s
-      ? s.DeviceRows.Where(d => d.Trust is not { Removed: true }).Select(d => d.DeviceId.ToLowerInvariant()).ToArray() : null;
+      ? CloudAnnounce.Computers(s.DeviceRows) : null;
 
   /// At start and every hour: the announcements are renewed when 12 hours old (CloudAnnounce decides), the waiting ones
   /// retried, and once a day the Bin's 30-day sweep runs. With the switch off the announcement half writes nothing.

@@ -263,6 +263,27 @@ public sealed class CloudDeleteRuleTests : IDisposable
   }
 
   [Fact]
+  public void Phones_and_browsers_never_hold_travel_back()
+  {
+    CloudDeviceRow Row(string id, string? platform, bool removed = false) => new(id, "x", false, null, null,
+      removed ? new CloudTrustRow(id, "x", CloudTrustStanding.Trusted, null, null, null, null, true) : null, Platform: platform);
+    string Phone = Guid.NewGuid().ToString(), Android = Guid.NewGuid().ToString(), Web = Guid.NewGuid().ToString(), Gone = Guid.NewGuid().ToString(),
+      Old = Guid.NewGuid().ToString();
+    var computers = CloudAnnounce.Computers([Row(Mac, "windows"), Row(OtherMac, "macos"), Row(Phone, "ios"), Row(Android, "android"), Row(Web, "web"),
+      Row(Gone, "macos", removed: true), Row(Old, null)]);
+    Assert.Equal(new[] { Mac.ToLowerInvariant(), OtherMac, Old.ToLowerInvariant() }, computers);
+    // The two computers announced; the phone, the Android phone and the browser never did: it travels.
+    var account = CloudAnnounce.Computers([Row(Mac, "windows"), Row(OtherMac, "macos"), Row(Phone, "ios"), Row(Android, "android"), Row(Web, "web")]);
+    var memory = new InMemoryDeckMemoryStore(Guid.NewGuid().ToString());
+    var both = new CloudAnnounce(memory, () => Mac, () => Now, () => account, new CloudMemorySlot());
+    Assert.True(both.Announce("projectfolders", 1));
+    Assert.False(both.EveryDeviceUnderstands("projectfolders", 1));
+    new CloudAnnounce(memory, () => OtherMac, () => Now, () => account, new CloudMemorySlot()).Announce("projectfolders", 1);
+    Assert.True(both.EveryDeviceUnderstands("projectfolders", 1));
+    Assert.Empty(both.DevicesWaiting("projectfolders", 1));
+  }
+
+  [Fact]
   public void The_announcement_writer_deduplicates_and_force_renews()
   {
     var memory = new InMemoryDeckMemoryStore(Guid.NewGuid().ToString());
