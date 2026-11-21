@@ -4,7 +4,26 @@
     {
       "project": "tests\\TerminalDeck.Core.Tests\\TerminalDeck.Core.Tests.csproj",
       "names": [
-        "TerminalDeck.Core.Tests.Cloud.CloudDeleteRuleTests"
+        "TerminalDeck.Core.Tests.Cloud.ProjectFoldersDiskTests",
+        "TerminalDeck.Core.Tests.Cloud.ProjectFoldersTravelTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudSyncW3Tests",
+        "TerminalDeck.Core.Tests.Cloud.CloudSyncWiringW3Tests",
+        "TerminalDeck.Core.Tests.Cloud.CloudSecretsSyncEngineTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudKindsJoinTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudFolderTravelTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudFolderSafetyTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudFolderCostTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudFolderOlderBuildTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudFolderReviewFixTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudFolderStatusLineTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudFolderNoEchoTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudFolderHisWorkTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudFolderDeleteRuleTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudArtifactsDeleteRuleTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudArtifactsLimitTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudArtifactsOlderBuildTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudArtifactsSafetyTests",
+        "TerminalDeck.Core.Tests.Cloud.CloudArtifactsTravelTests"
       ]
     }
   ]
