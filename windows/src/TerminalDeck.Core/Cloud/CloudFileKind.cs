@@ -33,6 +33,15 @@ public sealed record CloudFileKind(string InventoryRow, string SourceId, string 
   public long? BytesPerLook { get; init; }
   /// Seconds between the owner's looks (2 for the Cloud folder; longer for a large tree).
   public int LookSeconds { get; init; } = 2;
+  /// Free disk this kind always leaves (21 Nov, the Mac's 0.23.4 rule): below it nothing new is recorded and the rest
+  /// waits in his own folders. Null = none.
+  public long? RecordFloorBytes { get; init; }
+  /// Bytes recorded but not yet handed to the sync; past it, recording waits for the upload, so the private copy never
+  /// runs far ahead of the Cloud. Null = no cap.
+  public long? UnsentCapBytes { get; init; }
+  /// Bytes of file pieces one capture hands to the sync's queue (a large file goes in batches); the sync takes the next
+  /// batch once the queue has gone. Null = the whole journal at once, as before.
+  public long? CaptureBytes { get; init; }
 
   /// The Cloud folder, every value as the Mac's slice 1.
   public static readonly CloudFileKind CloudFolder = new(CloudFolderFormat.InventoryRow, "folder", "cloudFolder", "Cloud folder",
@@ -54,7 +63,10 @@ public sealed record CloudFileKind(string InventoryRow, string SourceId, string 
       "project folders: the safety copy could not be made, so nothing in them is replaced or removed by sync yet. It tries again by itself."))
   {
     PathRule = CloudProjectFoldersRules.Refusal, DailySendBytes = null, ObeysRoomFloor = false, MaximumFiles = 2_000_000,
-    BytesPerLook = 256L * 1_048_576, LookSeconds = 10
+    BytesPerLook = 256L * 1_048_576, LookSeconds = 10,
+    // 21 Nov (Mac 0.23.4 disk fault): never under 5 GB free, at most 256 MB ahead of the upload, 2 MB per hand-over
+    // (the Windows sync queue is one file written whole at every change, so it must stay small).
+    RecordFloorBytes = 5L * 1_073_741_824, UnsentCapBytes = 256L * 1_048_576, CaptureBytes = 2L * 1_048_576
   };
 
   /// His artifacts (row I23): the app's own store of them.
