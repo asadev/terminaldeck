@@ -68,6 +68,8 @@ public actor BackendCloudAccountOutboxFactory: CloudOutboxPort {
     /// The contents page reads; it never builds the sync core: before it exists nothing is known.
     public func contents(limit: Int) async throws -> CloudSyncContents { try await value?.contents(limit: limit) ?? .empty }
     public func refreshCoverage() async throws { try await value?.refreshCoverage() }
+    /// 0.23.4: the queue's size is read only from an engine that exists; before, nothing is queued.
+    public func queuedBytes(domain: String, stopAfter: Int64) async throws -> Int64? { try await value?.queuedBytes(domain: domain, stopAfter: stopAfter) ?? 0 }
     public func trustDevice(deviceId: String, signKey: CloudPublicJWK) async throws -> [CloudImportReceipt] {
         try await resolve().trustDevice(deviceId: deviceId, signKey: signKey)
     }
