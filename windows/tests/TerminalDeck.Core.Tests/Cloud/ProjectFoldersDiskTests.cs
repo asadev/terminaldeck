@@ -86,6 +86,31 @@ public sealed class ProjectFoldersDiskTests
   }
 
   [Fact]
+  public async Task A_held_look_reads_no_waiting_file()
+  {
+    using var f = new CloudFolderFixture();
+    var kind = CloudFileKind.ProjectFolders with { UnsentCapBytes = 100_000, CaptureBytes = null };
+    foreach (var n in new[] { 1, 2, 3, 4 }) Write(f, "notes/file" + n + ".bin", Bytes(60_000, n));
+    long free = 500_000_000_000;
+    var owner = Owner(f, kind, () => free);
+    var reads = 0;
+    owner.AfterReadForTests = _ => reads++;
+    await f.Settle(owner);
+    // The first file is read and recorded; the cap then stops the walk before the others are read.
+    Assert.Equal(1, Rows(owner));
+    Assert.Equal(1, reads);
+    // Later looks while held read nothing, under the cap and under the floor.
+    f.Clock.Advance(10_000);
+    await owner.LookAsync();
+    free = 5L * 1_073_741_824;
+    f.Clock.Advance(10_000);
+    await owner.LookAsync();
+    Assert.Equal(1, reads);
+    Assert.Equal(1, Rows(owner));
+    Assert.Contains(CloudFolderOwner.RecordDiskLowLine, owner.PageLines());
+  }
+
+  [Fact]
   public async Task A_large_file_goes_in_batches_of_the_very_same_records_and_a_crash_repeats_the_batch()
   {
     using var f = new CloudFolderFixture();

@@ -366,6 +366,9 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
       // At most 6 versions of one file a day; then it waits until it has been still an hour.
       var versionsToday = state.DayCount.TryGetValue(path, out var day) && day.Day == today ? day.Count : 0;
       if (versionsToday >= CloudFolderFormat.VersionsPerDay && t - seen.ChangedAt < CloudFolderFormat.StillAfterLimit) { busyFiles++; continue; }
+      // Held by the kind's floor or cap: the walk stops here, by the size it already knows, before any file is read
+      // (a held look must not read and fingerprint every waiting file each time).
+      if (RecordHeld(entry.Bytes)) break;
       bool recorded;
       // A path that is a file on one side and a folder on the other is skipped here, never the look.
       try { recorded = Settle(path, engine); } catch (CloudFailure e) when (e.Code == "unsafe_configuration") { continue; }
@@ -414,14 +417,18 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   /// 200 MB (then one line says so). Sync now does not pass it.
   private bool MayRecord(long bytes)
   {
-    if (roomLow) return false;
-    // The copy and the engine's retained bytes each take the file's size again: under the kind's floor it waits.
-    if (Profile.RecordFloorBytes is { } floor && (freeDisk() ?? long.MaxValue) - 2 * bytes < floor) { SetControl("recordDiskLow", "1"); return false; }
-    // At most the cap ahead of the upload (one file larger than the cap still goes once the queue is empty).
-    if (Profile.UnsentCapBytes is { } ahead && unsentBytes > 0 && unsentBytes + bytes > ahead) return false;
+    if (roomLow || RecordHeld(bytes)) return false;
     if (Profile.DailySendBytes is not { } cap) return true;
     if (DaySent(now()) + bytes > cap) { SetControl("dayFull", "1"); return false; }
     return true;
+  }
+  /// True while the kind's floor or cap holds back `bytes` more. The copy and the engine's retained bytes each take the
+  /// file's size again, so under the floor it waits (one line says so); and it is never more than the cap ahead of the
+  /// upload (one file larger than the cap still goes once the queue is empty).
+  private bool RecordHeld(long bytes)
+  {
+    if (Profile.RecordFloorBytes is { } floor && (freeDisk() ?? long.MaxValue) - 2 * bytes < floor) { SetControl("recordDiskLow", "1"); return true; }
+    return Profile.UnsentCapBytes is { } ahead && unsentBytes > 0 && unsentBytes + bytes > ahead;
   }
   private void Spent(long bytes)
   {
