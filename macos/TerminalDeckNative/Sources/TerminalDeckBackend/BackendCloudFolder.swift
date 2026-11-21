@@ -253,7 +253,7 @@ public actor BackendCloudFolder {
             try await outbox.register(adapter: self)
             let made = try BackendCloudBrainFilesPump(engine: try core(), outbox: CloudFileDeleteOutbox(base: outbox, expand: { [weak self] operations in
                 guard let self else { throw CloudFailure.unavailable }; return try await self.travelOperations(operations)
-            }), subjectHash: subjectHash)
+            }), subjectHash: subjectHash, bound: pumpBound())
             await made.start()
             pump = made
         } catch {
@@ -288,6 +288,15 @@ public actor BackendCloudFolder {
         await running?.stop()
     }
     func nudge() { dirty = true }
+    /// 0.23.4 (faults 1 and 3): project folders hand pieces to the upload queue only while that queue holds less than
+    /// 256 MB of them, the disk has 5 GB free, and every Mac of the account said it understands them. The rest waits
+    /// here (clones of his files) and goes at the owner's next look. Other kinds keep their own caps, as before.
+    func pumpBound() -> BackendCloudBrainFilesPumpBound? {
+        guard profile.inventoryRow == CloudProjectFoldersRules.inventoryRow else { return nil }
+        let disk = freeDisk
+        return .init(domain: profile.domain, freeDisk: disk, gateOpen: { [weak self] in await self?.gateOpen() ?? false })
+    }
+    func gateOpen() async -> Bool { await everyMacUnderstands() }
     /// Kinds that clone (project folders): the file to clone a new copy from, so the private copy takes no extra disk space.
     func cloneSource(folderFile path: String) -> URL? { profile.clonesCopies ? CloudFolderDisk.url(roots, path) : nil }
     func cloneSource(copyFile path: String) -> URL? { profile.clonesCopies ? copyRoot.appendingPathComponent(path) : nil }
@@ -325,6 +334,8 @@ public actor BackendCloudFolder {
     }
 
     func lookIfDue() async {
+        // 0.23.4: a pump held back (queue full, disk low, gate closed) tries again at each look.
+        if let pump { await pump.resumeIfHolding() }
         let t = now()
         let pending = ((try? state().first("SELECT 1 FROM folder_seen s LEFT JOIN folder_base b ON b.path=s.path WHERE b.path IS NULL OR b.bytes<>s.bytes OR b.modified<>s.modified LIMIT 1")) ?? nil) != nil
             || ((try? state().first("SELECT 1 FROM folder_gone LIMIT 1")) ?? nil) != nil

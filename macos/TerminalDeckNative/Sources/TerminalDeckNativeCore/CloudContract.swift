@@ -1643,8 +1643,14 @@ public protocol CloudOutboxPort: Sendable {
     /// Contract addition (13 Nov leftover): an adapter whose own sources changed outside a pull (a folder chosen, a
     /// file accepted) asks for the coverage the Cloud page reads to be taken again from every adapter. Sends nothing.
     func refreshCoverage() async throws
+    /// 0.23.4 (fault 1): bytes of `domain`'s records still waiting on this Mac to go up, counted only until they pass
+    /// `stopAfter` (asking costs a bounded walk, however long the queue is). nil = not known: the project-folders pump then
+    /// holds (it protects the disk), as it does when the measure fails.
+    func queuedBytes(domain: String, stopAfter: Int64) async throws -> Int64?
 }
 public extension CloudOutboxPort {
+    /// Default for outboxes that do not measure their queue: not known.
+    func queuedBytes(domain: String, stopAfter: Int64) async throws -> Int64? { nil }
     /// X3 (13 Nov): sync waits for the account to say whether the person paused it. Not a pause by the person: the
     /// log and the page say "starting up". Implementations without the distinction pause.
     func holdForStartup() async throws { try await setPaused(true) }

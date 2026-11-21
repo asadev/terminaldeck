@@ -525,22 +525,75 @@ private actor BackendCloudBrainFilesChanges {
     }
 }
 
+/// 0.23.4 (fault 1, fault 3): how much of one kind may wait in the outbox, the free-disk floor and the every-Mac gate.
+/// Past any of them the pump hands nothing over; the pieces wait in the engine (APFS clones of his files: no disk) and
+/// go at the next notice or the owner's next look. Numbers and measure are the ones live files obey
+/// (`CloudSyncStaging`: 256 MB staged, 5 GB free on the volume of the sync store).
+public struct BackendCloudBrainFilesPumpBound: Sendable {
+    public let domain: String
+    public let queuedBytes: Int64
+    public let minimumFreeBytes: Int64
+    public let freeDisk: @Sendable () -> Int64?
+    /// The every-Mac gate (`everyMacUnderstands`): records no Mac of the account may be unable to read.
+    public let gateOpen: @Sendable () async -> Bool
+    /// Upper bound of one piece as queued (32 KB as base64 inside its JSON record): the pump's own estimate between reads.
+    static let pieceBytes: Int64 = 48 * 1024
+    public init(domain: String, queuedBytes: Int64 = CloudSyncStaging().maximumStagedBytes, minimumFreeBytes: Int64 = CloudSyncStaging().minimumFreeBytes,
+                freeDisk: @escaping @Sendable () -> Int64?, gateOpen: @escaping @Sendable () async -> Bool) {
+        self.domain = domain; self.queuedBytes = queuedBytes; self.minimumFreeBytes = minimumFreeBytes; self.freeDisk = freeDisk; self.gateOpen = gateOpen
+    }
+}
+
 /// Moves the engine's durable journal into SYNC's durable outbox; no network, scheduler or second data writer.
 public actor BackendCloudBrainFilesPump {
     private let engine: BackendCloudBrainFiles
     private let outbox: any CloudOutboxPort
     private let scope: String
+    private let bound: BackendCloudBrainFilesPumpBound?
     private var task: Task<Void, Never>?
     private var draining = false
-    public init(engine: BackendCloudBrainFiles, outbox: any CloudOutboxPort, subjectHash: String) throws {
+    /// Bytes the pump may still hand over before it reads the queue again (never more than the real room: only sends
+    /// shrink the queue, and this pump is the only producer of its kind). nil = read it at the next handover.
+    private var room: Int64?
+    /// The last handover was held back (queue full, disk low or the gate closed): the owner's look tries again.
+    public private(set) var holding = false
+    public init(engine: BackendCloudBrainFiles, outbox: any CloudOutboxPort, subjectHash: String, bound: BackendCloudBrainFilesPumpBound? = nil) throws {
         guard subjectHash.utf8.count == 64, subjectHash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { throw CloudFailure.invalidRequest }
-        self.engine = engine; self.outbox = outbox; scope = subjectHash
+        self.engine = engine; self.outbox = outbox; scope = subjectHash; self.bound = bound
+    }
+    /// 0.23.4: true when this handover may go; false holds it (nothing is handed over, nothing is lost). Each reason is
+    /// said once in the log when it starts (one line per change, never per look).
+    private var holdReason: String?
+    private func mayHandOver() async -> Bool {
+        let reason = await whyHold()
+        if reason != holdReason, let bound {
+            CloudSyncDiagnostics.shared.info(bound.domain + ": " + (reason.map { "waiting to hand files to the upload queue: " + $0 } ?? "handing files to the upload queue again"))
+        }
+        holdReason = reason
+        return reason == nil
+    }
+    private func whyHold() async -> String? {
+        guard let bound else { return nil }
+        // An unknown free space never holds (as for live files: `CloudSyncStaging.freeBytes`).
+        if let free = bound.freeDisk(), free < bound.minimumFreeBytes { return "this Mac has less than 5 GB free" }
+        // The gate is closed also while anything it needs is unknown (signed out, the device list not read).
+        guard await bound.gateOpen() else { return "a Mac of this account has not said it understands these records yet" }
+        if let left = room, left > 0 { return nil }
+        // A queue that cannot be measured holds (fail closed: the disk is what this protects).
+        let queued: Int64?
+        do { queued = try await outbox.queuedBytes(domain: bound.domain, stopAfter: bound.queuedBytes) }
+        catch { room = nil; return "the upload queue could not be measured (" + CloudSyncDiagnostics.kind(error) + ")" }
+        guard let queued else { room = nil; return "the upload queue could not be measured" }
+        room = bound.queuedBytes - queued
+        return (room ?? 0) > 0 ? nil : "256 MB already wait in the upload queue"
     }
     /// Advances the source cursor only after every returned operation has a durable LocalReceipt.
     @discardableResult public func drainOnce(limit: Int = 16) async throws -> Int {
         guard !draining else { throw CloudFailure.unavailable }
         draining = true; defer { draining = false }
         guard (1...128).contains(limit) else { throw CloudFailure.invalidRequest }
+        guard await mayHandOver() else { holding = true; room = nil; return 0 }
+        holding = false
         var cursor = try await engine.savedLocalCursor(scope: scope), operations: [CloudOperation] = []
         while operations.count < limit, let change = try await engine.localChange(after: cursor) {
             operations.append(change.operation); cursor = change.cursor
@@ -549,7 +602,15 @@ public actor BackendCloudBrainFilesPump {
         let receipt = try await outbox.enqueue(operations, files: [])
         guard Set(receipt.operationIds) == Set(operations.map(\.opId)) else { throw CloudFailure.checksumMismatch }
         try await engine.saveLocalCursor(cursor, scope: scope)
+        if let left = room { room = left - Int64(operations.count) * BackendCloudBrainFilesPumpBound.pieceBytes }
         return operations.count
+    }
+    /// 0.23.4: the owner's look (every 10 s for project folders) carries on a held pump; nothing when not holding.
+    public func resumeIfHolding() async {
+        guard holding, !draining else { return }
+        do { while try await drainOnce() > 0 { try Task.checkCancellation(); await Task.yield() } }
+        catch is CancellationError {}
+        catch { _ = CloudSyncDiagnostics.shared.report((bound?.domain ?? "files") + ": handing files to the upload queue", error) }
     }
     public func start() {
         guard task == nil else { return }
