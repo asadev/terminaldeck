@@ -622,6 +622,7 @@ struct CloudFileDeleteOutbox: CloudOutboxPort {
     func serviceTime() -> Int64? { base.serviceTime() }
     func refreshCoverage() async throws { try await base.refreshCoverage() }
     func retryParked(domains: Set<String>) async throws { try await base.retryParked(domains: domains) }
+    func queuedBytes(domain: String, stopAfter: Int64) async throws -> Int64? { try await base.queuedBytes(domain: domain, stopAfter: stopAfter) }
 }
 
 extension CloudFileDeleteRecords {

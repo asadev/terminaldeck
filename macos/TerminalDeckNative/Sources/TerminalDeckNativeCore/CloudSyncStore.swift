@@ -36,6 +36,9 @@ public final class CloudSyncStore: @unchecked Sendable {
       try execute("PRAGMA checkpoint_fullfsync=ON")
       try execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value BLOB NOT NULL)")
       try execute("CREATE TABLE IF NOT EXISTS outbox (opId TEXT PRIMARY KEY, domain TEXT NOT NULL, entityId TEXT NOT NULL, parents BLOB NOT NULL, payloadRef BLOB NOT NULL, state TEXT NOT NULL)")
+      // 0.23.4 (additive): only the records still waiting to go up, by kind. Counting or measuring the queue then
+      // reads the waiting rows only, never every record this Mac ever sent (the outbox keeps those as history).
+      try execute("CREATE INDEX IF NOT EXISTS outbox_queued_domain ON outbox(domain) WHERE state='queued'")
       try execute("CREATE TABLE IF NOT EXISTS applied (segmentId TEXT PRIMARY KEY, seq TEXT NOT NULL UNIQUE, digest TEXT NOT NULL)")
       try execute("CREATE TABLE IF NOT EXISTS checkpoint_applied (checkpointId TEXT PRIMARY KEY,seq TEXT NOT NULL,digest TEXT NOT NULL)")
       try execute("CREATE TABLE IF NOT EXISTS entity_heads (domain TEXT NOT NULL, entityId TEXT NOT NULL, revision TEXT NOT NULL, PRIMARY KEY(domain,entityId,revision))")
@@ -283,7 +286,9 @@ public final class CloudSyncStore: @unchecked Sendable {
       // Round 6 S7e: the full record arriving over its released skeleton (an adapter's setup page after an
       // account reset) puts the content back, so this Mac can build an inventory from it again.
       let stub = try CloudSyncCanonical.encode(Self.skeleton(op))
-      if stub != bytes, try !rows("SELECT opId FROM records WHERE opId=? AND bytes=?", [Data(op.opId.utf8), stub]).isEmpty {
+      // 0.23.4: a piece released when the Cloud acknowledged it is not filled again when the feed brings it back
+      // (that would write each piece twice); nothing builds an inventory from these rows in this version.
+      if stub != bytes, !Self.releasedOnAcknowledge.contains(op.domain), try !rows("SELECT opId FROM records WHERE opId=? AND bytes=?", [Data(op.opId.utf8), stub]).isEmpty {
         try execute("UPDATE records SET bytes=? WHERE opId=?", [bytes, Data(op.opId.utf8)])
         try execute("DELETE FROM record_stubs WHERE opId=?", [Data(op.opId.utf8)])
       }
@@ -322,9 +327,30 @@ public final class CloudSyncStore: @unchecked Sendable {
       // Mac-next 2: setup pages discard this receipt; counting and summing the whole queue for each of thousands
       // of pages made the first saved copy quadratic.
       if snapshotPage != nil { return .init(operationIds: operations.map(\.opId), queued: 0, bytes: 0, savedAt: CloudSyncBytes.now()) }
-      return .init(operationIds: operations.map(\.opId), queued: try queuedCount(),
-        bytes: (Int64(String(decoding: try rows("SELECT coalesce(sum(length(r.bytes)),0) FROM outbox o JOIN records r ON r.opId=o.opId WHERE o.state='queued'")[0][0], as: UTF8.self)) ?? 0) + files.reduce(Int64(0)) { $0 + $1.bytes }, savedAt: CloudSyncBytes.now())
+      // 0.23.4 (fault 2): the same shortcut for every handover. Summing the bytes of the WHOLE queue at each call
+      // read every waiting record (7 GB on the Mac mini) for each 16 project-folder pieces: 111 % CPU and a crawl.
+      // `bytes` is now what THIS call queued (nobody reads the old total); `queued` is a count over the waiting
+      // rows' own index.
+      var mine = files.reduce(Int64(0)) { $0 + $1.bytes }
+      for op in operations {
+        mine += Int64(String(decoding: try rows("SELECT length(bytes) FROM records WHERE opId=?", [Data(op.opId.utf8)]).first?[0] ?? Data(), as: UTF8.self)) ?? 0
+      }
+      return .init(operationIds: operations.map(\.opId), queued: try queuedCount(), bytes: mine, savedAt: CloudSyncBytes.now())
     }
+  }
+  /// 0.23.4 (fault 1): bytes of `domain`'s records waiting to go up (every kind when nil), counted in pages only until
+  /// they pass `stopAfter`: asking costs a bounded walk of the waiting rows, however long the queue is.
+  func queuedBytes(domain: String?, stopAfter: Int64) throws -> Int64 {
+    var total: Int64 = 0, after: Int64 = 0
+    let scope = domain == nil ? "" : " AND o.domain=?"
+    while total <= stopAfter {
+      let page = try rows("SELECT o.rowid,length(r.bytes) FROM outbox o JOIN records r ON r.opId=o.opId WHERE o.state='queued'" + scope +
+        " AND o.rowid>CAST(? AS INTEGER) ORDER BY o.rowid LIMIT 512", (domain.map { [Data($0.utf8)] } ?? []) + [Data(String(after).utf8)])
+      for row in page { total += Int64(String(decoding: row[1], as: UTF8.self)) ?? 0 }
+      guard page.count == 512, let last = page.last, let next = Int64(String(decoding: last[0], as: UTF8.self)) else { break }
+      after = next
+    }
+    return total
   }
   /// `sendable` leaves out records handed over with a file that is not on this Mac: they stay queued (and are
   /// reported) until the file arrives, instead of failing every send of the queue behind them.
@@ -395,6 +421,13 @@ public final class CloudSyncStore: @unchecked Sendable {
         try execute("UPDATE outbox SET state='acknowledged' WHERE opId=?", [Data(id.utf8)])
         try recordReceipt(id, seq: receipt.seq, committedAt: receipt.receipt.committedAt)
       }
+      // 0.23.4 (fault 4a): the engine acknowledges only after reading the committed pack back from the Cloud and
+      // comparing it byte for byte (CloudSyncEngine flushQueue). Pieces of files that are kept on this Mac by their
+      // own engine leave their content here at once instead of waiting for the feed to bring them back.
+      // Never stops the acknowledgement: a release that fails is rolled back alone, said once in the log, and the
+      // content stays until the feed's read-back releases it as before.
+      do { try releaseAcknowledgedPack(segment, ids: ids) }
+      catch { _ = CloudSyncDiagnostics.shared.report("space: releasing a sent pack's content", error) }
     }
   }
   func stage<T: Encodable>(_ id: String, _ journal: T) throws {

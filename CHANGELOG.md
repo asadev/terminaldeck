@@ -10,6 +10,10 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.23.4] — 2026-11-21
+
+- Fixes the disk filling up and high CPU while project folders upload.
+
 ## [0.23.3] — 2026-11-20
 
 - A project's AI setup (skills, rule files, agents and guards) is kept the same for Claude, Codex and Gemini, and travels with the project to your other Macs.

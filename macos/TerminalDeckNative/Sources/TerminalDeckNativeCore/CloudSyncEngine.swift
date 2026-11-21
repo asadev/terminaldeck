@@ -216,6 +216,9 @@ public actor CloudSyncEngine: CloudOutboxPort {
     try store.dropReceiptedBytes(except: keepBytes)
     try store.stripSettledSegments()
     try store.stubSettledRecords()
+    // 0.23.4 (fault 4a): once, the project-folder pieces an earlier build left with their content after the Cloud
+    // acknowledged them. Never stops a fetch or a send: a failure is said once and tried again after the next step.
+    do { try store.releaseAcknowledgedBacklog() } catch { _ = CloudSyncDiagnostics.shared.report("space: releasing sent project-folder pieces", error) }
   }
   /// A finished setup's staging rows (the cut and any verified-inventory staging) are no longer needed.
   private func dropSetupStaging(_ cut: String) throws {
@@ -459,6 +462,8 @@ public actor CloudSyncEngine: CloudOutboxPort {
       }
       // The timer is armed BEFORE this step counts as ended: there is no moment with queued records and neither.
       if failed { armRetryNow() }
+      // 0.23.4 (fault 4c): a quiet moment (the step went well, no other step running) may give space back to the disk.
+      else { await compactIfDue() }
       sendTask = nil
       if !failed { scheduleSend() }
       scheduleWake()
@@ -466,6 +471,53 @@ public actor CloudSyncEngine: CloudOutboxPort {
   }
   /// Feed pages (of 128 packs) the scheduler reads before it lets this Mac's own sends go (it then reads on).
   static let scheduledFeedPages = 2
+  /// 0.23.4 (fault 4c): `sync.sqlite` is rewritten without its empty pages only when they are worth it (at least 1 GB
+  /// and half the file), the upload queue is down to the staging bound (what waited to go up has gone, so the space
+  /// came free), the disk has twice the live data and the 5 GB floor besides, and no compaction ran in the last 7 days
+  /// (in practice: once, after a backlog like the Mac mini's 7 GB of project folders went up).
+  var compactMinimumFreeBytes: Int64 = 1 << 30
+  /// Tests compact a small store.
+  func setCompactMinimumFreeBytes(_ bytes: Int64) { compactMinimumFreeBytes = bytes }
+  static let compactGapMilliseconds: Int64 = 7 * 86_400_000
+  /// Returns true when the file was compacted.
+  @discardableResult
+  func compactIfDue() async -> Bool {
+    // Quiet = no step running and none waiting for the engine. Sends asked for meanwhile wait the minute it takes
+    // (the pump keeps asking while project folders go up, which would otherwise never leave a moment).
+    guard !busy, busyWaiters.isEmpty else { return false }
+    guard let space = try? store.fileSpace(), space.free >= compactMinimumFreeBytes, space.free * 2 >= space.file else { return false }
+    if let at = (try? store.value("compactedAt") as Int64?).flatMap({ $0 }), CloudSyncBytes.now() - at < Self.compactGapMilliseconds { return false }
+    // The rewrite needs about twice the live data (a temporary copy and the log) on top of the 5 GB floor (Decker, 21 Nov).
+    let needed = 2 * (space.file - space.free) + staging.minimumFreeBytes
+    guard let disk = staging.freeBytes(store.root), disk >= needed else {
+      stateLine("compact:disk", "space: \(Self.gigabytes(space.free)) of sync.sqlite is empty; it is given back when the disk has \(Self.gigabytes(needed)) free")
+      return false
+    }
+    guard let queued = try? store.queuedBytes(domain: nil, stopAfter: staging.maximumStagedBytes), queued <= staging.maximumStagedBytes else { return false }
+    busy = true
+    defer { endBusy() }
+    // Said BEFORE it starts, so an app closed meanwhile leaves the reason in the log (SQLite keeps the old file whole).
+    CloudSyncDiagnostics.shared.info("space: giving \(Self.gigabytes(space.free)) of empty space in sync.sqlite back to the disk")
+    let root = store.root, started = Date()
+    let result = await Task.detached(priority: .background) { Result { try CloudSyncStore.compact(root: root) } }.value
+    let seconds = Int(Date().timeIntervalSince(started).rounded())
+    switch result {
+    case .success:
+      let after = (try? store.fileSpace())?.file ?? space.file
+      try? store.set("compactedAt", CloudSyncBytes.now())
+      CloudSyncDiagnostics.shared.info("space: sync.sqlite went from \(Self.gigabytes(space.file)) to \(Self.gigabytes(after)) in \(seconds) s")
+      return true
+    case .failure(let error):
+      // Not marked as done: the next quiet moment tries again. Nothing was lost (SQLite keeps the old file until done).
+      _ = CloudSyncDiagnostics.shared.report("space", error)
+      return false
+    }
+  }
+  static func gigabytes(_ bytes: Int64) -> String { String(format: "%.2f GB", Double(bytes) / 1_000_000_000) }
+  /// 0.23.4 (fault 1): see `CloudOutboxPort.queuedBytes`.
+  public func queuedBytes(domain: String, stopAfter: Int64) async throws -> Int64? {
+    try store.queuedBytes(domain: domain, stopAfter: stopAfter)
+  }
   /// X2: seconds a download slice runs before this Mac's own waiting work (its records, its first copy) goes.
   static let scheduledSlice: TimeInterval = 10
   private var wakeTask: Task<Void, Never>?
@@ -1337,6 +1389,14 @@ public actor CloudSyncEngine: CloudOutboxPort {
   private func applyJudged(_ entry: CloudChangeEntry, _ descriptor: CloudSegmentDescriptor, signer: String, late: Bool, cursorKey: String) async throws -> [CloudImportReceipt] {
     // A position read again (release, check again) that was applied earlier: nothing is downloaded.
     if cursorKey == "none", try store.applied(id: descriptor.segmentId, seq: entry.seq, digest: descriptor.sha256) { return [] }
+    // 0.23.4 (fault 4a): this Mac's own pack whose sealed copy left at its acknowledgement is settled without a download.
+    // A failure here falls through to the ordinary path (download and apply), said once in the log.
+    if signer.lowercased() == deviceId.lowercased() {
+      do {
+        if try store.settleOwnReleasedPack(seq: entry.seq, segmentId: descriptor.segmentId, sha256: descriptor.sha256,
+                                           committedAt: entry.createdAt, cursorKey: cursorKey) { return [] }
+      } catch { _ = CloudSyncDiagnostics.shared.report("fetch: settling this Mac's own sent pack without a download", error) }
+    }
     // N2: a trusted pack of a kind this Mac does not take now (memory off here, or a kind this build does not
     // know) WAITS: nothing is downloaded, it is kept by position and applied as a late arrival once every kind it
     // names is taken here. It is never refused or passed over, and it stops nothing: the position moves on and
