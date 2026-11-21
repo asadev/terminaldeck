@@ -25,6 +25,10 @@ public interface ICloudSyncAdapter
   /// Called once a pack's records were applied and before the engine records them as applied: the owner makes what it
   /// wrote durable here (once per pack, not once per record). A crash before it applies the pack again.
   Task SettleAsync(CancellationToken ct) => Task.CompletedTask;
+  /// Batched kinds (project folders): bytes of records one capture hands over, and whether more waits to be handed.
+  /// The engine takes the next batch in the same round once this kind's queue is under it. Null = not batched.
+  long? CaptureBytes => null;
+  bool MoreToCapture => false;
   /// The engine read the whole feed (a pull ended without a failure). An owner that holds its first copy back until it
   /// has taken in what the devices it trusts already saved (the Mac's rule, hand-back 4) answers true the first time;
   /// the engine then captures and sends again in the same round.
@@ -109,7 +113,16 @@ public sealed partial class CloudSyncEngine
       lastFailure = null;
       if (!client.Backoff.MaySend) return State();
       if (!await StepAsync("capture", () => CaptureAsync(ct), ct)) return State();
-      await StepAsync("send", () => FlushAsync(ct), ct);
+      var sent = await StepAsync("send", () => FlushAsync(ct), ct);
+      // 21 Nov: batched kinds (project folders) go batch by batch in this round while their queue empties; the feed is
+      // read every 32 batches, so other devices' changes never wait for a long first upload.
+      for (var batch = 1; sent && client.Backoff.MaySend && MoreBatches(); batch++)
+      {
+        if (batch % 32 == 0) await StepAsync("fetch", () => PullAsync(ct), ct);
+        var added = 0;
+        if (!await StepAsync("capture", async () => added = await CaptureAsync(ct), ct) || added == 0) break;
+        sent = await StepAsync("send", () => FlushAsync(ct), ct);
+      }
       if (client.Backoff.MaySend && await StepAsync("fetch", () => PullAsync(ct), ct))
       {
         var ready = false;
@@ -153,20 +166,26 @@ public sealed partial class CloudSyncEngine
 
   // ---- Capture ----
 
-  public async Task CaptureAsync(CancellationToken ct)
+  /// Every owner's new records into the queue; answers how many were added. A batched kind whose queue still holds a
+  /// batch is not asked (21 Nov: its records wait in its own journal, not in this one file).
+  public async Task<int> CaptureAsync(CancellationToken ct)
   {
+    var added = 0;
     foreach (var owner in owners.Concat(secretOwners))
     {
+      if (owner.CaptureBytes is { } cap && store.QueuedBytes(owner.Domains) >= cap) continue;
       var capture = await owner.CaptureAsync(client.ServiceNow, ct);
       if (capture.Operations.Count > 0)
       {
         if (capture.Operations.Any(o => !owner.Domains.Contains(o.Domain) || o.OriginDevice != deviceId)) throw new CloudFailure("invalid_request");
         if (secretOwners.Contains(owner)) CheckSecretRecords(capture.Operations);
-        store.Enqueue(capture.Operations);
+        added += store.Enqueue(capture.Operations);
       }
       capture.Commit();
     }
+    return added;
   }
+  private bool MoreBatches() => owners.Any(o => o.CaptureBytes is { } cap && o.MoreToCapture && store.QueuedBytes(o.Domains) < cap);
 
   // ---- Send ----
 
@@ -338,6 +357,10 @@ public sealed partial class CloudSyncEngine
     }
     if (descriptor.Purpose != "brain" || descriptor.Domains.Count == 0 || descriptor.KeyEpoch <= 0 || descriptor.Bytes is <= 0 or > CloudFeedClient.MaximumSegmentBytes
       || descriptor.OpCount is < 1 or > MaximumPackOps || descriptor.Format != CloudPackFormat.Name) throw new CloudFailure("unsupported_format");
+    // This PC's own pack, acknowledged at this very position: every record in it is this PC's own and was marked
+    // applied when it was queued, so there is nothing to download or apply (its sealed bytes were let go).
+    if (store.Segment(descriptor.SegmentId) is { ReceiptSeq: { } ownSeq, Ciphertext.Length: 0 } released && ownSeq == entry.Seq
+      && released.Descriptor.Sha256 == descriptor.Sha256 && released.OpIds.All(store.IsApplied)) return;
     var bytes = await PackBytesAsync(entry, descriptor, ct);
     if (bytes.LongLength != descriptor.Bytes || CloudBytes.Sha256Hex(bytes) != descriptor.Sha256) throw new CloudFailure("checksum_mismatch");
     CloudContentEnvelope envelope;
@@ -374,7 +397,7 @@ public sealed partial class CloudSyncEngine
   /// A pack this PC sent and the service acknowledged at this very position is not downloaded again.
   private async Task<byte[]> PackBytesAsync(CloudFeedEntry entry, CloudSegmentDescriptor descriptor, CancellationToken ct)
   {
-    if (store.Segment(descriptor.SegmentId) is { ReceiptSeq: { } seq } own && seq == entry.Seq && own.Descriptor.Sha256 == descriptor.Sha256) return own.Ciphertext;
+    if (store.Segment(descriptor.SegmentId) is { ReceiptSeq: { } seq } own && seq == entry.Seq && own.Descriptor.Sha256 == descriptor.Sha256 && own.Ciphertext.Length > 0) return own.Ciphertext;
     if (!links.TryGetValue(entry.Seq, out var link) || link.GetUrl is null || link.SegmentId != descriptor.SegmentId) link = await RenewAsync(entry, descriptor, ct);
     try { return await client.DownloadAsync(link.GetUrl!, CloudFeedClient.MaximumSegmentBytes, ct); }
     catch (CloudFailure expired) when (expired.Code == "read_expired")

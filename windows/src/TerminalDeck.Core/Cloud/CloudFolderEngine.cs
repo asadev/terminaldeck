@@ -49,6 +49,8 @@ public sealed class CloudFolderEngine
     public long SweptRowid { get; set; }
     /// The journal position every record up to which was handed to the sync engine (the Mac's pump cursor).
     public long Cursor { get; set; }
+    /// Records of the first row after `Cursor` already handed over (a large file goes in batches).
+    public int CursorPart { get; set; }
     public Dictionary<string, FileRow> Files { get; set; } = [];
     public List<JournalRow> Journal { get; set; } = [];
     public Dictionary<string, Resource> Resources { get; set; } = [];
@@ -269,7 +271,11 @@ public sealed class CloudFolderEngine
 
   public IReadOnlyList<JournalRow> JournalAfter(long seq) => state.Journal.Where(j => j.Seq > seq).OrderBy(j => j.Seq).ToArray();
   public long Cursor { get => state.Cursor; set => state.Cursor = value; }
+  public int CursorPart { get => state.CursorPart; set => state.CursorPart = value; }
   public long LastSeq => state.Journal.Count == 0 ? 0 : state.Journal[^1].Seq;
+  /// Bytes recorded and not yet handed to the sync (read once per look, never per hand-over).
+  public long UnsentBytes() =>
+    Math.Max(0, state.Journal.Where(j => j.Seq > state.Cursor).Sum(j => j.RawBytes) - (long)state.CursorPart * CloudMemoryFormat.PartBytes);
 
   /// Every record of one journal row, deterministic: the same row always gives the same records.
   public IReadOnlyList<CloudOperation> Operations(JournalRow r)
@@ -292,15 +298,54 @@ public sealed class CloudFolderEngine
     for (var index = 0; index < count; index++)
     {
       var offset = index * CloudMemoryFormat.PartBytes;
-      var slice = data.AsSpan(offset, Math.Min(CloudMemoryFormat.PartBytes, data.Length - offset));
-      var payload = new CloudMemoryPart(r.StoreId, row, r.Key, r.Version, r.RawHash, data.Length, index, count, r.Parents, Convert.ToBase64String(slice)).ToJson();
-      var suffix = "\n" + index.ToString(CultureInfo.InvariantCulture);
-      var opId = CloudMemoryFormat.OperationId(r.Version + suffix);
-      operations.Add(new CloudOperation(1, opId, deviceId, domain, CloudMemoryFormat.Uuid(r.StoreId + "\n" + r.Key + suffix), opId,
-        r.Parents.Select(p => CloudMemoryFormat.OperationId(p + suffix)).ToArray(), "put", null, null, new CloudSourceReference(source, r.Key, offset, r.RawHash),
-        r.CreatedAt, payload, CloudOperation.PayloadHashOf(payload)));
+      operations.Add(PartOperation(r, source, data.Length, index, count, data.AsSpan(offset, Math.Min(CloudMemoryFormat.PartBytes, data.Length - offset))));
     }
     return operations;
+  }
+  private CloudOperation PartOperation(JournalRow r, string source, int length, int index, int count, ReadOnlySpan<byte> slice)
+  {
+    var offset = index * CloudMemoryFormat.PartBytes;
+    var payload = new CloudMemoryPart(r.StoreId, row, r.Key, r.Version, r.RawHash, length, index, count, r.Parents, Convert.ToBase64String(slice)).ToJson();
+    var suffix = "\n" + index.ToString(CultureInfo.InvariantCulture);
+    var opId = CloudMemoryFormat.OperationId(r.Version + suffix);
+    return new CloudOperation(1, opId, deviceId, domain, CloudMemoryFormat.Uuid(r.StoreId + "\n" + r.Key + suffix), opId,
+      r.Parents.Select(p => CloudMemoryFormat.OperationId(p + suffix)).ToArray(), "put", null, null, new CloudSourceReference(source, r.Key, offset, r.RawHash),
+      r.CreatedAt, payload, CloudOperation.PayloadHashOf(payload));
+  }
+
+  /// Records `from` to `from + count` of one row, the very records `Operations(r)` makes, reading only their bytes: a
+  /// large file is handed over in batches without being read whole for each batch. The whole file's fingerprint is
+  /// checked when its first record is made (streamed, never held in memory).
+  public IReadOnlyList<CloudOperation> Operations(JournalRow r, int from, int count)
+  {
+    if (r.Kind == "archive") return from == 0 && count > 0 ? Operations(r) : [];
+    var total = CloudMemoryFormat.PartCount(r.RawBytes);
+    if (from < 0 || count <= 0 || from >= total) return [];
+    count = Math.Min(count, total - from);
+    if (!IsHash(r.RawHash) || r.RawBytes > int.MaxValue) throw new CloudFailure("checksum_mismatch");
+    var source = "files/" + row + "/" + sourceId;
+    var length = (int)r.RawBytes;
+    try
+    {
+      using var file = new FileStream(Retained(r.RawHash), FileMode.Open, FileAccess.Read, FileShare.Read);
+      if (file.Length != r.RawBytes) throw new CloudFailure("checksum_mismatch");
+      if (from == 0)
+      {
+        if (Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(file)) != r.RawHash) throw new CloudFailure("checksum_mismatch");
+      }
+      var operations = new List<CloudOperation>(count);
+      var buffer = new byte[CloudMemoryFormat.PartBytes];
+      for (var index = from; index < from + count; index++)
+      {
+        var offset = (long)index * CloudMemoryFormat.PartBytes;
+        var size = (int)Math.Min(CloudMemoryFormat.PartBytes, length - offset);
+        file.Position = offset;
+        file.ReadExactly(buffer, 0, size);
+        operations.Add(PartOperation(r, source, length, index, total, buffer.AsSpan(0, size)));
+      }
+      return operations;
+    }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { throw new CloudFailure("checksum_mismatch"); }
   }
 
   // ---- Arrivals ----

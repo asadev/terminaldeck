@@ -154,6 +154,11 @@ public sealed class CloudSyncStore : ICloudSyncMetadata
   }
   public IReadOnlyList<CloudOutboxRow> Outbox { get { lock (gate) return outbox.ToArray(); } }
   public int QueuedCount { get { lock (gate) return outbox.Count(r => r.State is CloudOutboxState.Queued or CloudOutboxState.Sealed); } }
+  /// Bytes of these kinds' records still in the queue (queued, sealed or parked), from memory: read once per capture.
+  public long QueuedBytes(IReadOnlyCollection<string> domains)
+  {
+    lock (gate) return outbox.Where(r => r.State is not CloudOutboxState.Sent and not CloudOutboxState.Retired && domains.Contains(r.Domain)).Sum(r => (long)r.Bytes.Length);
+  }
   /// Queued records ready to seal, in queue order (parked ones whose wait has passed come back first).
   public IReadOnlyList<CloudOutboxRow> Pending(long now) { lock (gate) return outbox.Where(r => r.State == CloudOutboxState.Queued || r.State == CloudOutboxState.Parked && r.ParkedUntil <= now && r.ParkedUntil > 0).ToArray(); }
   public void MarkAlone(IEnumerable<string> opIds) { var ids = opIds.ToHashSet(); Change(() => outbox = outbox.Select(r => ids.Contains(r.OpId) ? r with { Alone = true } : r).ToList()); }
@@ -192,13 +197,14 @@ public sealed class CloudSyncStore : ICloudSyncMetadata
   }
   public CloudSealedSegment? Segment(string segmentId) { lock (gate) return segments.FirstOrDefault(s => s.Descriptor.SegmentId == segmentId); }
   public void MarkSentOnce(string segmentId) => Change(() => segments = segments.Select(s => s.Descriptor.SegmentId == segmentId ? s with { SentOnce = true } : s).ToList());
-  /// The service's receipt for a pack: its records leave the queue. Older acknowledged packs keep only what the pull
-  /// needs to recognise them (it does not download this PC's own packs again).
+  /// The service's receipt for a pack: its records leave the queue and a memory pack's sealed bytes are let go (21 Nov:
+  /// they were kept for the newest 64 packs and written again at every change; saved-password packs keep theirs). The newest 64 acknowledged packs keep only what
+  /// the pull needs to recognise them: it does not download this PC's own packs again.
   public void Acknowledge(string segmentId, ulong seq) => Change(() =>
   {
     var segment = segments.FirstOrDefault(s => s.Descriptor.SegmentId == segmentId) ?? throw new CloudFailure("invalid_request");
     var ids = segment.OpIds.ToHashSet(StringComparer.Ordinal);
-    segments = segments.Select(s => s == segment ? s with { ReceiptSeq = seq } : s).ToList();
+    segments = segments.Select(s => s == segment ? s with { ReceiptSeq = seq, Ciphertext = s.Descriptor.StorageClass == "brain" ? [] : s.Ciphertext } : s).ToList();
     outbox = outbox.Where(r => !ids.Contains(r.OpId)).ToList();
     // Keep the newest 64 acknowledged packs for the pull's own-pack shortcut; older ones are forgotten.
     var acknowledged = segments.Where(s => s.ReceiptSeq is not null).ToList();

@@ -28,6 +28,8 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   public const string EngineRefusal = "Refused: the record does not match its own description.";
   public const string NotCarried = "Refused: this file does not travel in the Cloud folder.";
   public const string DiskLowRefusal = "Waiting: this PC has less than 2 GB free. It is tried again later.";
+  /// 21 Nov (Mac 0.23.4 disk fault): a kind with a floor of its own (project folders: 5 GB) records nothing new under it.
+  public const string RecordDiskLowLine = "This PC has less than 5 GB free, so new and changed files wait here until there is more room.";
 
   public CloudFileKind Profile { get; }
   /// His folder on this PC (for artifacts: the app's own store of them; for project folders: unused, see `Roots`).
@@ -57,6 +59,10 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   private readonly CloudFileSlot slot;
   private readonly OwnerState state;
   private bool dirty = true;
+  /// Bytes recorded and not yet handed to the sync (read once per look, then counted up; see CloudFileKind.UnsentCapBytes).
+  private long unsentBytes;
+  /// More of this PC's journal waits to be handed over (the sync takes the next batch in the same round).
+  private volatile bool more;
   private long lastFullLook;
   private bool hurry;
   private FileSystemWatcher? watcher;
@@ -321,6 +327,8 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     roomLow = Profile.ObeysRoomFloor && roomLeft() is { } left && left < CloudFolderFormat.RoomFloor;
     SetControl("roomLow", roomLow ? "1" : null);
     _ = DaySent(t);
+    unsentBytes = Profile.UnsentCapBytes is null ? 0 : engine.UnsentBytes();
+    SetControl("recordDiskLow", null);
     var today = t / CloudFolderFormat.Day;
     var busyFiles = 0;
     // Paced (project folders): at most `BytesPerLook` recorded per look; the rest goes in the next looks.
@@ -384,6 +392,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     await Removals(walk, engine, t);
     engine.ReconcileAll();
     PlaceArrivals(engine);
+    more = engine.LastSeq > engine.Cursor;
     if (engine.LastSeq != journalBefore) Changed?.Invoke();
   }
 
@@ -406,12 +415,17 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   private bool MayRecord(long bytes)
   {
     if (roomLow) return false;
+    // The copy and the engine's retained bytes each take the file's size again: under the kind's floor it waits.
+    if (Profile.RecordFloorBytes is { } floor && (freeDisk() ?? long.MaxValue) - 2 * bytes < floor) { SetControl("recordDiskLow", "1"); return false; }
+    // At most the cap ahead of the upload (one file larger than the cap still goes once the queue is empty).
+    if (Profile.UnsentCapBytes is { } ahead && unsentBytes > 0 && unsentBytes + bytes > ahead) return false;
     if (Profile.DailySendBytes is not { } cap) return true;
     if (DaySent(now()) + bytes > cap) { SetControl("dayFull", "1"); return false; }
     return true;
   }
   private void Spent(long bytes)
   {
+    unsentBytes += bytes;
     if (dayBudget is not null) { _ = DaySent(now()); dayBudget.Add(bytes, now() / CloudFolderFormat.Day); return; }
     SetControl("daySent", (DaySent(now()) + bytes).ToString(CultureInfo.InvariantCulture));
   }
@@ -811,6 +825,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
     if (Control("dayFull") == "1" && Control("day") == (now() / CloudFolderFormat.Day).ToString(CultureInfo.InvariantCulture)) lines.Add(words.DayFull);
     if (int.TryParse(Control("busyFiles"), out var busyCount) && busyCount > 0) lines.Add(words.Busy(busyCount));
     if (Control("diskLow") == "1") lines.Add(words.DiskLow);
+    if (Control("recordDiskLow") == "1") lines.Add(RecordDiskLowLine);
     if (int.TryParse(Control("tooLarge"), out var largeCount) && largeCount > 0) lines.Add(words.TooLarge(largeCount));
     if (Names("secretNames") is { Count: > 0 } secret) lines.Add(words.Secret(secret));
     if (Names("spellingNames") is { Count: > 0 } spelling) lines.Add(words.Spelling(spelling));
@@ -950,33 +965,61 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   /// This PC's journal since the last committed capture, each removal preceded by its about-record (or withdrawn).
   public async Task<CloudCapture> CaptureAsync(Func<long> stampNow, CancellationToken ct)
   {
-    await LookIfDueAsync();
+    // A batch that follows another in the same round does not look again (the owner's timer keeps looking).
+    if (!more || Profile.CaptureBytes is null) await LookIfDueAsync();
     await Enter();
     try
     {
       var engine = Core();
       var operations = new List<CloudOperation>();
       var reached = engine.Cursor;
+      var reachedPart = engine.CursorPart;
+      // Batched kinds (project folders): at most `CaptureBytes` of file pieces per capture; a large file goes over
+      // several captures, its place kept by `CursorPart`.
+      var budget = Profile.CaptureBytes;
+      long taken = 0;
+      var skip = engine.CursorPart;
       foreach (var row in engine.JournalAfter(engine.Cursor))
       {
         ct.ThrowIfCancellationRequested();
         IReadOnlyList<CloudOperation> records;
-        try { records = TravelOperations(engine.Operations(row)); }
+        var whole = true;
+        try
+        {
+          if (budget is { } cap && row.Kind != "archive")
+          {
+            var total = CloudMemoryFormat.PartCount(row.RawBytes);
+            var room = (int)Math.Clamp((cap - taken + CloudMemoryFormat.PartBytes - 1) / CloudMemoryFormat.PartBytes, 1, total);
+            records = engine.Operations(row, skip, room);
+            whole = skip + records.Count >= total;
+          }
+          else records = TravelOperations(skip > 0 ? engine.Operations(row).Skip(skip).ToArray() : engine.Operations(row));
+        }
         catch (CloudFailure failure) when (failure.Code is "unavailable" or "checksum_mismatch") { break; }
         operations.AddRange(records);
-        reached = row.Seq;
-        if (operations.Count >= 1024) break;
+        taken += records.Count * (long)CloudMemoryFormat.PartBytes;
+        if (!whole) { reachedPart = skip + records.Count; break; }
+        reached = row.Seq; reachedPart = 0; skip = 0;
+        if (operations.Count >= 1024 || budget is { } limit && taken >= limit) break;
       }
       Save();
       return new CloudCapture(operations, () =>
       {
         busy.Wait();
-        try { engine.Cursor = Math.Max(engine.Cursor, reached); Save(); }
+        try
+        {
+          if (reached > engine.Cursor || reached == engine.Cursor && reachedPart > engine.CursorPart) { engine.Cursor = reached; engine.CursorPart = reachedPart; }
+          more = engine.LastSeq > engine.Cursor;
+          Save();
+        }
         finally { busy.Release(); }
       });
     }
     finally { Leave(); }
   }
+  /// More of this PC's journal waits to be handed over.
+  public bool MoreToCapture => more;
+  public long? CaptureBytes => Profile.CaptureBytes;
 
   /// Refusals before anything is staged: another domain, an unreadable record, a key that is not `file/<source>/<path>`,
   /// a path this kind never carries, a file over the limit.
