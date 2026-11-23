@@ -10,6 +10,10 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.23.5] — 2026-11-23
+
+- Brings CPU use back down while project folders upload.
+
 ## [0.23.4] — 2026-11-21
 
 - Fixes the disk filling up and high CPU while project folders upload.
