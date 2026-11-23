@@ -10,6 +10,10 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.23.6] — 2026-11-23
+
+- Your other data no longer waits behind project folders; API keys reach your Cloud; lower CPU.
+
 ## [0.23.5] — 2026-11-23
 
 - Brings CPU use back down while project folders upload.

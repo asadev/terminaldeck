@@ -107,6 +107,10 @@ public actor BackendCloudFolder {
     private var hurry = false
 
     static let sourceId = "folder"
+    /// 0.23.6: the shortest time between two whole looks at project folders (see `lookIfDue`).
+    static let manyRootsLookGap: Int64 = 60_000
+    /// 0.23.6: a file's "seen at" in the look, keeping the newer time when the file was recorded meanwhile.
+    static let presenceUpsert = "INSERT INTO folder_presence(path,at) VALUES (?,?) ON CONFLICT(path) DO UPDATE SET at=max(at,excluded.at)"
     /// The keeper's kind for this folder's versions and Bin (`BackendCloudContents.Kind.cloudFolder`).
     public static let kind = "cloudFolder"
     public static let engineRefusal = "Refused: the record does not match its own description."
@@ -345,6 +349,10 @@ public actor BackendCloudFolder {
             do { if try await sweepDaily() { try setControl("sweptAt", String(t)) } } catch { _ = CloudSyncDiagnostics.shared.report(profile.label, error) }
         }
         guard dirty || pending || t - lastFullLook >= 300_000 else { return }
+        // 0.23.6 (CPU): project folders (on the Mac mini 4 trees, 71,443 files) are walked whole at most once a minute.
+        // A file being written keeps a look due every 10 s, and each look reads every file's details. "Sync now" still
+        // looks at once; a change noted meanwhile stays noted for the next look.
+        if roots.isMany, !hurry, lastFullLook > 0, t >= lastFullLook, t - lastFullLook < Self.manyRootsLookGap { return }
         dirty = false
         lastFullLook = t
         do { try await look() } catch { _ = CloudSyncDiagnostics.shared.report(profile.label, error) }
@@ -401,10 +409,22 @@ public actor BackendCloudFolder {
         var busy = 0
         // Paced (project folders): at most `bytesPerLook` recorded per look; the rest goes in the next looks.
         var recordedBytes: Int64 = 0
+        // 0.23.6 (CPU, disk): every file's "seen at" is written in ONE transaction per look. One write per file, each its
+        // own disk-synced transaction (this database uses journal_mode=DELETE, synchronous=FULL), was 71,443 synced
+        // writes per look on the Mac mini, every 10 s while a file in his project folders changed.
+        var present: [String] = []
+        func notePresence() {
+            guard !present.isEmpty else { return }
+            let seen = present
+            present = []
+            do { try db.transaction { for path in seen { try db.run(Self.presenceUpsert, [.text(path), .int(t)]) } } }
+            catch { _ = CloudSyncDiagnostics.shared.report(profile.label + ": noting the files seen", error) }
+        }
+        defer { notePresence() }
         for path in walk.files.keys.sorted() {
             if let pace = profile.bytesPerLook, recordedBytes >= pace { dirty = true; break }
             guard let entry = walk.files[path] else { continue }
-            try db.run("INSERT OR REPLACE INTO folder_presence(path,at) VALUES (?,?)", [.text(path), .int(t)])
+            present.append(path)
             let mark = try deleteState().mark(at: path)
             if mark?.mark == .onlyOnThisMac { continue }
             if mark != nil {
@@ -450,6 +470,7 @@ public actor BackendCloudFolder {
                 try db.run("UPDATE folder_seen SET sent_at=?,streak=? WHERE path=?", [.int(t), .int(Int64(next)), .text(path)])
             }
         }
+        notePresence()
         try setControl("busyFiles", busy > 0 ? String(busy) : nil)
         try db.run("DELETE FROM folder_day WHERE day<?", [.int(today)])
         // Rows of files that stayed still for an hour are dropped (the gap starts afresh).
