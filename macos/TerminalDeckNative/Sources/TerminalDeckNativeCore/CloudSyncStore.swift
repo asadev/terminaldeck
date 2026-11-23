@@ -39,6 +39,9 @@ public final class CloudSyncStore: @unchecked Sendable {
       // 0.23.4 (additive): only the records still waiting to go up, by kind. Counting or measuring the queue then
       // reads the waiting rows only, never every record this Mac ever sent (the outbox keeps those as history).
       try execute("CREATE INDEX IF NOT EXISTS outbox_queued_domain ON outbox(domain) WHERE state='queued'")
+      // 0.23.4 CPU (23 Nov, additive): the send loop asks, for each record it may send, whether an earlier edit of the
+      // same record is parked; without this the question walked every earlier row of the outbox, once per record.
+      try execute("CREATE INDEX IF NOT EXISTS outbox_parked_entity ON outbox(domain,entityId) WHERE state='parked'")
       try execute("CREATE TABLE IF NOT EXISTS applied (segmentId TEXT PRIMARY KEY, seq TEXT NOT NULL UNIQUE, digest TEXT NOT NULL)")
       try execute("CREATE TABLE IF NOT EXISTS checkpoint_applied (checkpointId TEXT PRIMARY KEY,seq TEXT NOT NULL,digest TEXT NOT NULL)")
       try execute("CREATE TABLE IF NOT EXISTS entity_heads (domain TEXT NOT NULL, entityId TEXT NOT NULL, revision TEXT NOT NULL, PRIMARY KEY(domain,entityId,revision))")
@@ -52,6 +55,9 @@ public final class CloudSyncStore: @unchecked Sendable {
       try execute("CREATE TABLE IF NOT EXISTS operation_projects (opId TEXT PRIMARY KEY,projectId TEXT)")
       try execute("CREATE TABLE IF NOT EXISTS segment_bindings (segmentId TEXT PRIMARY KEY, deviceId TEXT NOT NULL, retired INTEGER NOT NULL DEFAULT 0)")
       try execute("CREATE TABLE IF NOT EXISTS segment_ops (segmentId TEXT NOT NULL, opId TEXT NOT NULL, PRIMARY KEY(segmentId,opId))")
+      // 0.23.4 CPU (23 Nov, additive): "is this record already in a pack of another device?" by record, not a scan of
+      // every pack's list for every record the send loop looks at.
+      try execute("CREATE INDEX IF NOT EXISTS segment_ops_op ON segment_ops(opId)")
       try execute("CREATE TABLE IF NOT EXISTS verified_ops (opId TEXT PRIMARY KEY)")
       try execute("CREATE TABLE IF NOT EXISTS segments (segmentId TEXT PRIMARY KEY, bytes BLOB NOT NULL, operationIds BLOB NOT NULL, receipt BLOB)")
       try execute("CREATE TABLE IF NOT EXISTS prepare_journal (segmentId TEXT PRIMARY KEY, bytes BLOB NOT NULL)")
@@ -355,6 +361,14 @@ public final class CloudSyncStore: @unchecked Sendable {
   /// `sendable` leaves out records handed over with a file that is not on this Mac: they stay queued (and are
   /// reported) until the file arrives, instead of failing every send of the queue behind them.
   func pending(limit: Int? = nil, domains: Set<String>? = nil, deviceId: String? = nil, sendable: Bool = false) throws -> [CloudOperation] {
+    let query = try pendingQuery(limit: limit, domains: domains, deviceId: deviceId, sendable: sendable)
+    return try rows(query.sql, query.args).map { try JSONDecoder().decode(CloudOperation.self, from: $0[0]) }
+  }
+  /// The send loop's read of the queue, in queue order. 0.23.4 CPU (23 Nov): `NOT INDEXED` keeps it a walk of the outbox
+  /// in row order that stops after `limit` rows. The waiting-rows index (`outbox_queued_domain`) otherwise led SQLite to
+  /// take EVERY waiting record of the named kinds (208,000 on the Mac mini), ask the parked and pack questions for each,
+  /// and sort them all with their content (9 GB) to return 256: about 35-50 minutes of CPU per pack of 5 pieces.
+  func pendingQuery(limit: Int? = nil, domains: Set<String>? = nil, deviceId: String? = nil, sendable: Bool = false) throws -> (sql: String, args: [Data]) {
     if let limit, !(1...256).contains(limit) { throw CloudFailure.invalidRequest }
     let names = domains?.sorted()
     let predicate = (names.map { " AND outbox.domain IN (" + $0.map { _ in "?" }.joined(separator: ",") + ")" } ?? "") +
@@ -364,7 +378,7 @@ public final class CloudSyncStore: @unchecked Sendable {
         " AND NOT EXISTS (SELECT 1 FROM outbox p WHERE p.state='parked' AND p.domain=outbox.domain AND p.entityId=outbox.entityId AND p.rowid<outbox.rowid AND NOT EXISTS (SELECT 1 FROM parked_sends ps WHERE ps.opId=p.opId AND ps.permanent=1))" : "")
     let ownership = deviceId == nil ? "" : " AND NOT EXISTS (SELECT 1 FROM segment_ops so LEFT JOIN segment_bindings sb ON so.segmentId=sb.segmentId WHERE so.opId=outbox.opId AND coalesce(sb.retired,0)=0 AND (sb.deviceId IS NULL OR sb.deviceId!=?))"
     // The queue names records; their content is the single copy in `records` (round 5 item B).
-    return try rows("SELECT r.bytes FROM outbox JOIN records r ON r.opId=outbox.opId WHERE outbox.state='queued'" + predicate + ownership + " ORDER BY outbox.rowid" + (limit.map { " LIMIT \($0)" } ?? ""), (names ?? []).map { Data($0.utf8) } + (deviceId.map { [Data($0.utf8)] } ?? [])).map { try JSONDecoder().decode(CloudOperation.self, from: $0[0]) }
+    return ("SELECT r.bytes FROM outbox NOT INDEXED JOIN records r ON r.opId=outbox.opId WHERE outbox.state='queued'" + predicate + ownership + " ORDER BY outbox.rowid" + (limit.map { " LIMIT \($0)" } ?? ""), (names ?? []).map { Data($0.utf8) } + (deviceId.map { [Data($0.utf8)] } ?? []))
   }
   func saveSegment(_ segment: CloudSegment, operationIds: [String], deviceId: String? = nil) throws {
     try transaction {

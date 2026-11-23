@@ -67,6 +67,26 @@ final class CloudSyncGiveBack0234Tests: XCTestCase, @unchecked Sendable {
     XCTAssertTrue(plan.contains { String(decoding: $0.last ?? Data(), as: UTF8.self).contains("outbox_queued_domain") })
   }
 
+  /// 0.23.4 CPU (23 Nov): the send loop's queue read walks the outbox in row order and stops at its limit; its parked and
+  /// pack checks are index lookups. Before, the waiting-rows index made SQLite take, check and sort every waiting record
+  /// (with its content) for each pack: about 35-50 minutes of CPU per pack on the Mac mini.
+  func testTheSendLoopReadsTheQueueInRowOrderWithIndexedChecks() throws {
+    let store = try makeStore(try scratch())
+    let first = try op(domain: pieces, size: 2_000), second = try op(domain: pieces, size: 2_000), third = try op(domain: "memory", size: 2_000)
+    _ = try store.enqueue([first]); _ = try store.enqueue([second]); _ = try store.enqueue([third])
+    try store.execute("UPDATE outbox SET state='acknowledged' WHERE opId=?", [Data(first.opId.utf8)])
+    let query = try store.pendingQuery(limit: 256, domains: [pieces, "memory"], deviceId: device, sendable: true)
+    let plan = try store.rows("EXPLAIN QUERY PLAN " + query.sql, query.args).map { String(decoding: $0.last ?? Data(), as: UTF8.self) }
+    XCTAssertTrue(plan.contains { $0.hasPrefix("SCAN outbox") }, plan.joined(separator: " | "))
+    XCTAssertFalse(plan.contains { $0.contains("TEMP B-TREE") }, "no sort of every waiting record: " + plan.joined(separator: " | "))
+    XCTAssertTrue(plan.contains { $0.contains("outbox_parked_entity") }, plan.joined(separator: " | "))
+    XCTAssertTrue(plan.contains { $0.contains("segment_ops_op") }, plan.joined(separator: " | "))
+    XCTAssertFalse(plan.contains { $0.hasPrefix("SCAN so") }, plan.joined(separator: " | "))
+    // Same answer as before: waiting records in queue order, up to the limit.
+    XCTAssertEqual(try store.pending(limit: 1, domains: [pieces, "memory"], deviceId: device, sendable: true).map(\.opId), [second.opId])
+    XCTAssertEqual(try store.pending(limit: 256, domains: [pieces, "memory"], deviceId: device, sendable: true).map(\.opId), [second.opId, third.opId])
+  }
+
   /// Fault 4a: acknowledged project-folder pieces and their sealed pack leave their content at once (other kinds keep
   /// theirs until read back), and the feed's read-back of such an own pack settles without a download.
   func testAcknowledgedPiecesReleaseAtOnceAndTheReadBackDownloadsNothing() async throws {
