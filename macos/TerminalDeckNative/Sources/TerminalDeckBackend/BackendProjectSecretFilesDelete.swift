@@ -532,8 +532,21 @@ public actor BackendProjectSecretFilesSavedDeleteOwner: CloudSecretsLogicalStore
     public func binNotice() -> String? { keeper.notice }
     // Store/CLI refusals can contain echoed input. Only fixed errors cross this owner's page/tool boundary.
     private func rawCapture() async throws -> [CloudSecretRecord] {
-        do { return try await store.capture() } catch { throw CloudFailure.unavailable }
+        do {
+            let records = try await store.capture()
+            lastCaptureCause = nil
+            return records
+        } catch {
+            // 0.23.6 (silent-failure hunt): the refusal that kept API keys out of Cloud for 8 days was said only as "not
+            // available just now". Its kind is written once per change (fixed words: a failure case or an error type and
+            // code, never its text); the page still gets the fixed error.
+            let cause = CloudSecretsLog.cause(error)
+            if cause != lastCaptureCause { CloudSyncDiagnostics.shared.info("saved passwords: reading " + sourceId + " failed: " + cause) }
+            lastCaptureCause = cause
+            throw CloudFailure.unavailable
+        }
     }
+    private var lastCaptureCause: String?
     private func rawMerge(_ record: CloudSecretRecord) async throws -> CloudApplyStatus {
         do { return try await store.merge(record) } catch { throw CloudFailure.unavailable }
     }

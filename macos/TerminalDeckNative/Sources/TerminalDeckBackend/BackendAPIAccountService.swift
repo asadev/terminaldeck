@@ -32,6 +32,9 @@ public actor BackendAPIAccountService {
     private let authorize: @Sendable (NativeRPCContext) throws -> Void
     private let inUse: @Sendable (String) async -> BackendAccountUse
     private var mutating = Set<String>()
+    /// 0.23.6: see `cloudContextNow()`. nil = the fixed engine context (no session host).
+    private var cloudCaller: (@Sendable () throws -> NativeRPCContext)?
+    public func useCloudCaller(_ caller: @escaping @Sendable () throws -> NativeRPCContext) { cloudCaller = caller }
     public init(configuration: BackendAccountConfiguration, access: BackendAPIAccountAccess,
                 authorizeMutation: @escaping @Sendable (NativeRPCContext) throws -> Void,
                 inUse: @escaping @Sendable (String) async -> BackendAccountUse = { _ in BackendAccountUse(sessions: [], starting: true) }) {
@@ -188,8 +191,14 @@ enum BackendAPIAccountDeletion {
 /// Nothing here returns, logs or throws a key; refusals are fixed words.
 extension BackendAPIAccountService: BackendCloudKeysAPIOwner {
     private static let cloudContext = NativeRPCContext(caller: .internalEngine, ownerID: "cloud-keys-travel")
+    /// 0.23.6 (Asad, 23 Nov: "Not in your Cloud yet from this Mac: API keys"): the context the saved-passwords engine
+    /// reads and writes API accounts with. With the session host, every account call is checked by the app's authority,
+    /// which takes only the app's own window context or an AI call's ticket (`BackendCompositionAuthority.ticket`):
+    /// `.internalEngine` was refused there at every look since 15 Nov, so no API key ever reached Cloud from any Mac.
+    /// The app sets its own local context here (the same one its own "save key" uses); tests keep the fixed one.
+    func cloudContextNow() throws -> NativeRPCContext { try cloudCaller?() ?? Self.cloudContext }
     public func cloudAccounts() async throws -> [BackendCloudKeysAPIAccount] {
-        try await access.list(Self.cloudContext).compactMap { profile in
+        try await access.list(try cloudContextNow()).compactMap { profile in
             guard BackendAPIAccountRecord.isAPIAccountID(profile.id), BackendAccountSignInStorage.ownsFolder(profile, configuration: configuration),
                   let record = try? BackendAPIAccountRecord.read(profile), record.appName == configuration.appName else { return nil }
             return BackendCloudKeysAPIAccount(record: record, name: profile.name)
@@ -212,7 +221,7 @@ extension BackendAPIAccountService: BackendCloudKeysAPIOwner {
         guard BackendAPIAccountRecord.isAPIAccountID(accountID), let kind = BackendAPIAccountRecord.Kind(rawValue: value.kind), kind.provider == value.provider,
               kind != .compatibleLocal, mutating.insert(accountID).inserted else { throw CloudFailure.invalidRequest }
         defer { mutating.remove(accountID) }
-        let context = Self.cloudContext
+        let context = try cloudContextNow()
         guard try await access.find(accountID, context) == nil else { throw CloudFailure.versionChanged }
         let home = configuration.accountLoginsRoot.appendingPathComponent("api-" + UUID().uuidString.lowercased())
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -245,7 +254,7 @@ extension BackendAPIAccountService: BackendCloudKeysAPIOwner {
         let insideAppRemove = BackendAPIAccountDeletion.appRemoving == accountID
         if !insideAppRemove { guard mutating.insert(accountID).inserted else { return false } }
         defer { if !insideAppRemove { mutating.remove(accountID) } }
-        let context = Self.cloudContext
+        let context = try cloudContextNow()
         guard let profile = try await access.find(accountID, context) else { return true }
         guard BackendAccountSignInStorage.ownsFolder(profile, configuration: configuration),
               let record = try BackendAPIAccountRecord.read(profile), record.appName == configuration.appName else { return false }
@@ -263,7 +272,7 @@ extension BackendAPIAccountService: BackendCloudKeysAPIOwner {
     public func cloudReplaceKey(accountID: String, key: String, expectingKey: String) async throws -> Bool {
         guard mutating.insert(accountID).inserted else { return false }
         defer { mutating.remove(accountID) }
-        let context = Self.cloudContext
+        let context = try cloudContextNow()
         guard let profile = try await access.find(accountID, context), BackendAccountSignInStorage.ownsFolder(profile, configuration: configuration),
               var record = try BackendAPIAccountRecord.read(profile), record.appName == configuration.appName, record.requiresKey else { return false }
         guard try BackendAPIAccountKeychain.cloudRead(record) == expectingKey else { return false }

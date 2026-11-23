@@ -197,7 +197,9 @@ final class NativeCompositionINT2HOSTManaged {
             executor: dependencies.authCommands, sessionsUsing: { id in manager.list().filter { $0.exitCode == nil && $0.profileId == id }.map(\.title) },
             authorizeMetadata: { try authority.authorizeMetadata($0) }, authorizeMutation: { try authority.authorizeMutation($0) })
         self.appSignIn = appSignIn
-        // Keys travel (15 Nov): API accounts' keys ride saved passwords through this one service.
+        // Keys travel (15 Nov): API accounts' keys ride saved passwords through this one service. 0.23.6: with the app's
+        // own local context, which the account authority accepts (the engine's own context was refused at every look).
+        await appSignIn.apiAccounts.useCloudCaller { try authority.localContext() }
         NativeCloudKeysOwners.apiAccounts = appSignIn.apiAccounts
         NativeAPIAccounts.shared.configure { id, key in
             try await appSignIn.apiAccounts.storeNativeKey(id: id, key: key, context: authority.localContext())

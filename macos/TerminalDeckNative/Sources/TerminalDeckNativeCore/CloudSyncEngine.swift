@@ -215,7 +215,14 @@ public actor CloudSyncEngine: CloudOutboxPort {
     store.removeHandoffs()
     try store.dropReceiptedBytes(except: keepBytes)
     try store.stripSettledSegments()
-    try store.stubSettledRecords()
+    // 0.23.6 (CPU): this walk reads every record of the store (296,530 on the Mac mini, 10 GB: 48 s, read-only on his
+    // data). Sends now end every minute to let the fetch run (`sendSliceMilliseconds`), so while records still wait to
+    // go up it runs at most every 30 minutes; with nothing waiting it runs after every step, as before.
+    let now = CloudSyncBytes.now()
+    if try store.queuedCount() == 0 || now - lastSettledWalk >= Self.settledWalkGapMilliseconds {
+      try store.stubSettledRecords()
+      lastSettledWalk = now
+    }
     // 0.23.4 (fault 4a): once, the project-folder pieces an earlier build left with their content after the Cloud
     // acknowledged them. Never stops a fetch or a send: a failure is said once and tried again after the next step.
     do { try store.releaseAcknowledgedBacklog() } catch { _ = CloudSyncDiagnostics.shared.report("space: releasing sent project-folder pieces", error) }
@@ -337,7 +344,23 @@ public actor CloudSyncEngine: CloudOutboxPort {
   /// on saved-password sources. They never change `complete`, so memory readiness is unaffected.
   private func reportedCoverage() throws -> [CloudCoverage] {
     let notes = try unattributedNotes()
-    return try allCoverage().map { try reported($0, notes: notes) }
+    // 0.23.6 (CPU): the queue facts are read once per report, not once per source (25 sources on the Mac mini).
+    let facts = try queueFacts()
+    return try allCoverage().map { try reported($0, notes: notes, facts: facts) }
+  }
+  /// 0.23.6 (CPU, Mac mini 23 Nov): what holds queued or parked records back, per source. Read for each of the 25
+  /// sources at every progress read (every 2 s while anything waits), the held-for-files walk alone took 1.0 s each
+  /// over 201,528 waiting rows: 25 s of work every 27 s, on the sync core, which the sends then waited for.
+  struct QueueFacts {
+    var behindParked: [String: Int] = [:]
+    var parked: [String: (count: Int, reason: String)] = [:]
+    var parkedSends: [String: (count: Int, reason: String)] = [:]
+    var held: [String: Int] = [:]
+    var missing: [String: Int] = [:]
+  }
+  func queueFacts() throws -> QueueFacts {
+    QueueFacts(behindParked: try waitingBehindParkedSends(), parked: try parkedBySource(), parkedSends: try sendParkedBySource(),
+               held: try heldForFiles(), missing: try missingSetupFiles())
   }
   private func unattributedNotes() throws -> [String: Int] {
     var totals: [String: Int] = [:]
@@ -346,10 +369,13 @@ public actor CloudSyncEngine: CloudOutboxPort {
     }
     return totals
   }
+  static let heldForFilesQuery = "SELECT DISTINCT r.bytes FROM outbox_files f CROSS JOIN outbox ON outbox.opId=f.opId CROSS JOIN records r ON r.opId=outbox.opId WHERE outbox.state='queued' AND NOT EXISTS (SELECT 1 FROM objects o WHERE o.blobId=f.blobId)"
   /// Queued records held back because a file they were handed with is not on this Mac, per source.
   private func heldForFiles() throws -> [String: Int] {
     var totals: [String: Int] = [:]
-    for row in try store.rows("SELECT DISTINCT r.bytes FROM outbox JOIN records r ON r.opId=outbox.opId JOIN outbox_files f ON f.opId=outbox.opId WHERE outbox.state='queued' AND NOT EXISTS (SELECT 1 FROM objects o WHERE o.blobId=f.blobId)") {
+    // 0.23.6 (CPU): from the file links first (CROSS JOIN keeps that order). Led by the waiting rows, SQLite read the
+    // record of every one of them (201,528) to find none with a file: 1.0 s per call.
+    for row in try store.rows(Self.heldForFilesQuery) {
       totals[try JSONDecoder().decode(CloudOperation.self, from: row[0]).source.sourceId, default: 0] += 1
     }
     return totals
@@ -362,7 +388,8 @@ public actor CloudSyncEngine: CloudOutboxPort {
     }
     return totals
   }
-  private func reported(_ coverage: CloudCoverage, notes: [String: Int]) throws -> CloudCoverage {
+  private func reported(_ coverage: CloudCoverage, notes: [String: Int], facts known: QueueFacts? = nil) throws -> CloudCoverage {
+    let facts = try known ?? queueFacts()
     let domain: String? = try store.value("coverage-domain:" + coverage.sourceId)
     var reasons = coverage.blockedReasons
     var complete = coverage.complete
@@ -372,23 +399,23 @@ public actor CloudSyncEngine: CloudOutboxPort {
     if let skew: String = try store.value("clockSkew") { reasons.append(skew); complete = false }
     if let blocked: String = try store.value("publishBlocked") { reasons.append(blocked); complete = false }
     if let stopped: String = try store.value("sendStopped"), let domain, brainDomains.contains(domain) || secretsDomains.contains(domain) { reasons.append(stopped); complete = false }
-    if let waiting = try waitingBehindParkedSends()[coverage.sourceId], waiting > 0 {
+    if let waiting = facts.behindParked[coverage.sourceId], waiting > 0 {
       reasons.append("\(waiting) edits wait behind an earlier edit of the same record that could not be sent.")
       complete = false
     }
-    if let parked = try parkedBySource()[coverage.sourceId], parked.count > 0 {
+    if let parked = facts.parked[coverage.sourceId], parked.count > 0 {
       reasons.append("\(parked.count) records could not be applied on this Mac and are kept for retry: \(parked.reason)")
       complete = false
     }
-    if let parkedSends = try sendParkedBySource()[coverage.sourceId], parkedSends.count > 0 {
+    if let parkedSends = facts.parkedSends[coverage.sourceId], parkedSends.count > 0 {
       reasons.append("\(parkedSends.count) edits could not be sent and are kept here: \(parkedSends.reason)")
       complete = false
     }
-    if let held = try heldForFiles()[coverage.sourceId], held > 0 {
+    if let held = facts.held[coverage.sourceId], held > 0 {
       reasons.append("\(held) records wait for a file that is not on this Mac; they send once it is handed over.")
       complete = false
     }
-    if let missing = try missingSetupFiles()[coverage.sourceId], missing > 0 {
+    if let missing = facts.missing[coverage.sourceId], missing > 0 {
       reasons.append("\(missing) files named by records are not on this Mac, so setup cannot finish; hand them over or start setup again.")
       complete = false
     }
@@ -810,18 +837,58 @@ public actor CloudSyncEngine: CloudOutboxPort {
   }
   /// Kinds every other record may name: sent first (G).
   static let sentFirstDomains: Set<String> = ["projects", "agents"]
+  /// 0.23.6 (Asad, 23 Nov: "why its not syncing properly from this mac"): pieces of his project folders go up LAST.
+  /// 0.23.3 queued 211,000 of them (9 GB) before his newer memory notes, chats, settings, tasks and saved passwords,
+  /// and the queue goes in row order, so those waited days behind them. Everything else is sent first, every pack.
+  static let sentLastDomains: Set<String> = [CloudBrainFilesFormat.domain("I26")]
+  /// 0.23.6 (CPU): a project-folder piece is ~41 KB as queued, so a sealed pack holds about 5. Reading 256 of them for
+  /// each pack decoded 10.6 MB of JSON to send 5; 16 are read first and the full 256 only when they are small.
+  static let sentLastFirstRead = 16
+  /// 0.23.6: one send step ends after a minute while more waits (it is asked again at once), so the fetch of his other
+  /// devices' changes and every other Cloud step get their turn. Before, ONE step ran until the whole backlog was sent:
+  /// the Mac mini fetched nothing from 20 Nov 04:32 on and "Sync now" said "busy with another Cloud step".
+  static let sendSliceMilliseconds: Int64 = 60_000
+  var sendSlice = CloudSyncEngine.sendSliceMilliseconds
+  /// Tests end a send step after one pack.
+  func setSendSlice(_ milliseconds: Int64) { sendSlice = milliseconds }
+  /// 0.23.6: the whole-store walk of `stubSettledRecords` while records still wait to go up.
+  static let settledWalkGapMilliseconds: Int64 = 30 * 60_000
+  private var lastSettledWalk: Int64 = 0
   private var sentRecords = 0, sentPacks = 0
+  /// 0.23.6: the last send step ended by its slice (more waits); the next one continues its log lines and counts.
+  private var sendSliceEnded = false
+  private var sendingSince = Date()
   private func flushOwned() async throws -> [CloudReceipt] {
     // Sending paused after three refusals in a row: wait for the timed retry (pulls go on).
     if ((try store.value("sendStoppedUntil") as Int64?) ?? 0) > CloudSyncBytes.now() { return [] }
-    // C: one line when sending starts and one when it ends (numbers only).
-    let queued = try store.queuedCount(), since = Date()
-    sentRecords = 0; sentPacks = 0
-    if queued > 0 { stateLine("sending", "sending started: \(queued) records queued") }
+    // C: one line when sending starts and one when it ends (numbers only); a step that goes on after its slice is
+    // the same sending (0.23.6), so it writes no new pair of lines.
+    let continuing = sendSliceEnded
+    sendSliceEnded = false
+    let queued = try store.queuedCount()
+    if !continuing { sentRecords = 0; sentPacks = 0; sendingSince = Date() }
+    if queued > 0, !continuing { stateLine("sending", "sending started: \(queued) records queued") }
     defer {
-      if sentPacks > 0 { stateLine("sent", "sending finished: \(sentRecords) records in \(sentPacks) packs, \(Int(Date().timeIntervalSince(since).rounded())) s") }
+      if sentPacks > 0, !sendSliceEnded { stateLine("sent", "sending finished: \(sentRecords) records in \(sentPacks) packs, \(Int(Date().timeIntervalSince(sendingSince).rounded())) s") }
     }
     return try await flushQueue()
+  }
+  /// 0.23.6: the queue read of one pack: projects and agents, then everything else of his, then project folders.
+  func nextPending(_ sendableDomains: Set<String>) throws -> [CloudOperation] {
+    let firstKinds = sendableDomains.intersection(Self.sentFirstDomains)
+    if !firstKinds.isEmpty {
+      let first = try store.pending(limit: 256, domains: firstKinds, deviceId: deviceId, sendable: true)
+      if !first.isEmpty { return first }
+    }
+    let lastKinds = sendableDomains.intersection(Self.sentLastDomains)
+    guard !lastKinds.isEmpty else { return try store.pending(limit: 256, domains: sendableDomains, deviceId: deviceId, sendable: true) }
+    let others = try store.pending(limit: 256, domains: sendableDomains.subtracting(lastKinds), deviceId: deviceId, sendable: true)
+    if !others.isEmpty { return others }
+    let few = try store.pending(limit: Self.sentLastFirstRead, domains: lastKinds, deviceId: deviceId, sendable: true)
+    guard few.count == Self.sentLastFirstRead else { return few }
+    // Small pieces (small files): read on so a pack is filled as before.
+    let plain = try few.reduce(0) { $0 + (try CloudSyncCanonical.encode($1).count) }
+    return plain >= 2 * Self.packSealedBytes ? few : try store.pending(limit: 256, domains: lastKinds, deviceId: deviceId, sendable: true)
   }
   private func flushQueue() async throws -> [CloudReceipt] {
     try await reconcileDeviceAttempts()
@@ -835,6 +902,7 @@ public actor CloudSyncEngine: CloudOutboxPort {
     if let state = await secretsContent?.state(storageClass: .secrets), state.available { try await retireOlderEpochProtected(currentEpoch: state.epoch) }
     var receipts: [CloudReceipt] = []
     var protectedWait = try protectedPaced()
+    let sliceStarted = CloudSyncBytes.now()
     while true {
       let protectedState = await secretsContent?.state(storageClass: .secrets)
       let allowSecrets = protectedState?.available == true && !protectedWait
@@ -922,14 +990,18 @@ public actor CloudSyncEngine: CloudOutboxPort {
         if segment.descriptor.storageClass == .secrets { try protectedSucceeded() }
         try store.set("headSeq", receipt.headSeq)
         receipts.append(receipt)
+        // 0.23.6: a minute of sending is one step; the rest is asked for again at once, after a fetch.
+        if CloudSyncBytes.now() - sliceStarted >= sendSlice, try store.queuedCount() > 0 {
+          sendSliceEnded = true; sendRequested = true; pullRequested = true
+          return receipts
+        }
         continue
       }
       let sendableDomains = (allowSecrets ? brainDomains.union(secretsDomains) : brainDomains).union([Self.coverageDomain])
       // G (13 Nov): projects and agents go up before anything else queued (memory names them): a joining Mac then
       // knows a project before its memory arrives, instead of keeping tens of thousands of rows waiting for it.
-      let firstKinds = sendableDomains.intersection(Self.sentFirstDomains)
-      var pending = firstKinds.isEmpty ? [] : try store.pending(limit: 256, domains: firstKinds, deviceId: deviceId, sendable: true)
-      if pending.isEmpty { pending = try store.pending(limit: 256, domains: sendableDomains, deviceId: deviceId, sendable: true) }
+      // 0.23.6: project-folder pieces after everything else (`nextPending`).
+      let pending = try nextPending(sendableDomains)
       if pending.isEmpty {
         guard !protectedWait, allowSecrets else { return receipts }
         // Setup files whose protected upload was refused go up even when no protected pack is queued.
@@ -2207,6 +2279,8 @@ public actor CloudSyncEngine: CloudOutboxPort {
   /// Queued edits held behind an edit of the same record that is parked on the send side (round 5 S1).
   private func waitingBehindParkedSends() throws -> [String: Int] {
     var totals: [String: Int] = [:]
+    // 0.23.6 (CPU): nothing parked on the send side (the usual case) holds nothing back; no walk of the waiting rows.
+    guard try !store.rows("SELECT 1 FROM outbox WHERE state='parked' LIMIT 1").isEmpty else { return totals }
     for row in try store.rows("SELECT r.bytes FROM outbox o JOIN records r ON r.opId=o.opId WHERE o.state='queued' AND EXISTS (SELECT 1 FROM outbox p WHERE p.state='parked' AND p.domain=o.domain AND p.entityId=o.entityId AND p.rowid<o.rowid AND NOT EXISTS (SELECT 1 FROM parked_sends ps WHERE ps.opId=p.opId AND ps.permanent=1))") {
       totals[try JSONDecoder().decode(CloudOperation.self, from: row[0]).source.sourceId, default: 0] += 1
     }
